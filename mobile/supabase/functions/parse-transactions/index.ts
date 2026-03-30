@@ -1,6 +1,6 @@
 // ============================================================
-// SmartPesos — Edge Function: process-screenshot
-// Usa Groq Llama 4 Vision para extraer gastos de un screenshot
+// SmartPesos — Edge Function: parse-transactions
+// Parsea texto copiado de MP/Ualá/Brubank con Groq (texto)
 // ============================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -29,9 +29,9 @@ serve(async (req) => {
       });
     }
 
-    const { image_base64, image_type } = await req.json();
-    if (!image_base64) {
-      return new Response(JSON.stringify({ error: 'Imagen requerida' }), {
+    const { text } = await req.json();
+    if (!text || text.trim().length < 5) {
+      return new Response(JSON.stringify({ error: 'Texto vacío o muy corto' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -41,24 +41,26 @@ serve(async (req) => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
     const currentYear = new Date().getFullYear();
 
-    const mimeType = image_type ?? 'image/jpeg';
-    const imageUrl = `data:${mimeType};base64,${image_base64}`;
+    const prompt = `Sos un asistente que extrae gastos de texto copiado de apps de billetera virtual argentina (Mercado Pago, Ualá, Brubank, Naranja X, etc).
 
-    const prompt = `Analizá este screenshot de una app financiera argentina (Mercado Pago, Ualá, Brubank, Naranja X, resumen bancario, etc).
+El usuario pegó este texto:
+---
+${text}
+---
 
-Extraé TODOS los movimientos donde se gastó o pagó dinero. Ignorá ingresos (transferencias recibidas, sueldos, recargas recibidas).
+Extraé TODOS los movimientos donde se gastó dinero (pagos, compras, transferencias enviadas). Ignorá ingresos (transferencias recibidas, sueldos, recargas recibidas).
 
 Para cada gasto devolvé:
-- description: nombre del comercio, persona o servicio (limpio)
-- amount: número positivo sin símbolos (ej: "$ 14.000" → 14000, "$1.900,50" → 1900.5)
-- date: formato YYYY-MM-DD. "hoy" = ${today}, "ayer" = ${yesterday}, "26 mar" = ${currentYear}-03-26, "26/03" = ${currentYear}-03-26
-- classification: "necessary" (supermercado, farmacia, transporte, servicios, alquiler), "disposable" (restaurant, bar, ropa, delivery, entretenimiento), "investable" (ahorro, FCI, cripto)
-- category: una de: groceries, food_dining, transport, health, entertainment, clothing, education, home, technology, subscriptions, travel, other
+- description: nombre del comercio, persona o servicio (limpio, sin caracteres raros)
+- amount: número positivo sin símbolos (ej: "$ 14.000" → 14000, "1.900,50" → 1900.50)
+- date: formato YYYY-MM-DD. "hoy" = ${today}, "ayer" = ${yesterday}, "26 mar" o "26/03" = ${currentYear}-03-26
+- classification: "necessary" (supermercado, farmacia, transporte, servicios, alquiler), "disposable" (restaurant, bar, ropa, entretenimiento, delivery), "investable" (transferencia a ahorro, FCI, cripto)
+- category: una de estas: groceries, food_dining, transport, health, entertainment, clothing, education, home, technology, subscriptions, travel, other
 
-Respondé SOLO con JSON válido, sin texto antes ni después:
+Respondé SOLO con este JSON, sin texto antes ni después:
 {"expenses":[{"description":"Nombre","amount":1000,"date":"${today}","classification":"necessary","category":"other"}]}
 
-Si no hay gastos visibles: {"expenses":[]}`;
+Si no encontrás ningún gasto: {"expenses":[]}`;
 
     const groqResponse = await fetch(GROQ_API_URL, {
       method: 'POST',
@@ -67,22 +69,8 @@ Si no hay gastos visibles: {"expenses":[]}`;
         'Authorization': `Bearer ${groqApiKey}`,
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: { url: imageUrl },
-              },
-              {
-                type: 'text',
-                text: prompt,
-              },
-            ],
-          },
-        ],
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
         max_tokens: 2000,
         temperature: 0.1,
       }),
@@ -92,10 +80,9 @@ Si no hay gastos visibles: {"expenses":[]}`;
     const content = groqData.choices?.[0]?.message?.content;
 
     if (!content) {
-      return new Response(JSON.stringify({
-        expenses: [],
-        debug: `Sin respuesta del modelo. Error: ${JSON.stringify(groqData.error ?? groqData)}`,
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ expenses: [], debug: JSON.stringify(groqData.error) }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
@@ -113,7 +100,7 @@ Si no hay gastos visibles: {"expenses":[]}`;
     });
 
   } catch (error) {
-    console.error('[process-screenshot] Error:', error);
+    console.error('[parse-transactions] Error:', error);
     return new Response(
       JSON.stringify({ error: String(error), expenses: [] }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
