@@ -1,10 +1,9 @@
 // ============================================================
 // SmartPesos — Edge Function: process-screenshot
-// Usa Groq Vision para extraer gastos de un screenshot
+// Usa Groq Llama 4 Vision para extraer gastos de un screenshot
 // ============================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -30,55 +29,36 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-
-    const { image_base64, image_type, user_id } = await req.json();
-    if (!image_base64 || !user_id) {
-      return new Response(JSON.stringify({ error: 'Parámetros incompletos' }), {
+    const { image_base64, image_type } = await req.json();
+    if (!image_base64) {
+      return new Response(JSON.stringify({ error: 'Imagen requerida' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Subir imagen a Supabase Storage para obtener URL pública
-    const ext = image_type?.includes('png') ? 'png' : 'jpg';
-    const filename = `${user_id}/${Date.now()}.${ext}`;
-    const imageBytes = Uint8Array.from(atob(image_base64), c => c.charCodeAt(0));
-
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from('expense-receipts')
-      .upload(filename, imageBytes, { contentType: image_type ?? 'image/jpeg', upsert: true });
-
-    if (uploadError) throw new Error(`Upload error: ${uploadError.message}`);
-
-    // Obtener URL firmada (válida por 5 minutos)
-    const { data: signedData, error: signedError } = await supabaseAdmin.storage
-      .from('expense-receipts')
-      .createSignedUrl(filename, 300);
-
-    if (signedError || !signedData?.signedUrl) throw new Error('No se pudo obtener URL firmada');
-
-    const imageUrl = signedData.signedUrl;
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const currentYear = new Date().getFullYear();
 
-    const prompt = `Analizá este screenshot de una billetera virtual o banco argentino (Mercado Pago, Ualá, Brubank, etc).
+    const mimeType = image_type ?? 'image/jpeg';
+    const imageUrl = `data:${mimeType};base64,${image_base64}`;
 
-Extraé TODOS los movimientos de dinero visibles. Cada fila con un monto es un movimiento.
+    const prompt = `Analizá este screenshot de una app financiera argentina (Mercado Pago, Ualá, Brubank, Naranja X, resumen bancario, etc).
 
-Para CADA movimiento encontrado devolvé:
-- description: nombre del comercio o persona (ej: "Campus", "Ignacio Sojo", "Netflix")
-- amount: monto positivo sin símbolos ni puntos de miles (ej: $14.000 → 14000, $1.000 → 1000)
-- date: en formato YYYY-MM-DD. "hoy" = ${today}, "ayer" = ${yesterday}. Si dice "26 de marzo" = ${new Date().getFullYear()}-03-26
-- classification: "necessary" (super, farmacia, transporte, servicios), "disposable" (restaurante, ropa, entretenimiento), "investable" (transferencia a ahorro, inversión)
-- category: groceries, food_dining, transport, health, entertainment, clothing, education, home, technology, subscriptions, travel, other
+Extraé TODOS los movimientos donde se gastó o pagó dinero. Ignorá ingresos (transferencias recibidas, sueldos, recargas recibidas).
 
-Respondé SOLO con JSON, sin texto adicional:
-{"expenses":[{"description":"Campus","amount":14000,"date":"${today}","classification":"disposable","category":"other"}]}
+Para cada gasto devolvé:
+- description: nombre del comercio, persona o servicio (limpio)
+- amount: número positivo sin símbolos (ej: "$ 14.000" → 14000, "$1.900,50" → 1900.5)
+- date: formato YYYY-MM-DD. "hoy" = ${today}, "ayer" = ${yesterday}, "26 mar" = ${currentYear}-03-26, "26/03" = ${currentYear}-03-26
+- classification: "necessary" (supermercado, farmacia, transporte, servicios, alquiler), "disposable" (restaurant, bar, ropa, delivery, entretenimiento), "investable" (ahorro, FCI, cripto)
+- category: una de: groceries, food_dining, transport, health, entertainment, clothing, education, home, technology, subscriptions, travel, other
 
-Si no hay movimientos: {"expenses":[]}`;
+Respondé SOLO con JSON válido, sin texto antes ni después:
+{"expenses":[{"description":"Nombre","amount":1000,"date":"${today}","classification":"necessary","category":"other"}]}
+
+Si no hay gastos visibles: {"expenses":[]}`;
 
     const groqResponse = await fetch(GROQ_API_URL, {
       method: 'POST',
@@ -87,13 +67,19 @@ Si no hay movimientos: {"expenses":[]}`;
         'Authorization': `Bearer ${groqApiKey}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.2-90b-vision-preview',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [
           {
             role: 'user',
             content: [
-              { type: 'image_url', image_url: { url: imageUrl } },
-              { type: 'text', text: prompt },
+              {
+                type: 'image_url',
+                image_url: { url: imageUrl },
+              },
+              {
+                type: 'text',
+                text: prompt,
+              },
             ],
           },
         ],
@@ -105,12 +91,10 @@ Si no hay movimientos: {"expenses":[]}`;
     const groqData = await groqResponse.json();
     const content = groqData.choices?.[0]?.message?.content;
 
-    console.log('[process-screenshot] Response:', JSON.stringify(groqData));
-
     if (!content) {
       return new Response(JSON.stringify({
         expenses: [],
-        debug: `Sin contenido del modelo. finish_reason: ${groqData.choices?.[0]?.finish_reason}, error: ${JSON.stringify(groqData.error)}`,
+        debug: `Sin respuesta del modelo. Error: ${JSON.stringify(groqData.error ?? groqData)}`,
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
@@ -124,10 +108,6 @@ Si no hay movimientos: {"expenses":[]}`;
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
-
-    // Limpiar imagen temporal
-    await supabaseAdmin.storage.from('expense-receipts').remove([filename]);
-
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

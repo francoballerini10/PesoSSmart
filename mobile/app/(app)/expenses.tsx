@@ -90,20 +90,16 @@ export default function ExpensesScreen() {
       Alert.alert('Permiso necesario', 'Necesitamos acceso a tus fotos para importar el screenshot.');
       return;
     }
-
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       base64: true,
-      quality: 0.5,
+      quality: 0.7,
       allowsEditing: false,
     });
-
     if (result.canceled || !result.assets[0]?.base64) return;
 
-    const { base64, mimeType } = result.assets[0];
     setIsProcessing(true);
     setShowScreenshotModal(true);
-
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(
@@ -115,18 +111,16 @@ export default function ExpensesScreen() {
             'Authorization': `Bearer ${session?.access_token}`,
           },
           body: JSON.stringify({
-            image_base64: base64,
-            image_type: mimeType ?? 'image/jpeg',
-            user_id: session?.user?.id,
+            image_base64: result.assets[0].base64,
+            image_type: result.assets[0].mimeType ?? 'image/jpeg',
           }),
         }
       );
-
       const data = await response.json();
       if (data.expenses && data.expenses.length > 0) {
         setExtractedExpenses(data.expenses.map((e: Omit<ExtractedExpense, 'selected'>) => ({ ...e, selected: true })));
       } else {
-        Alert.alert('Sin resultados', `Debug: ${data.debug ?? data.error ?? 'respuesta vacía'}`);
+        Alert.alert('Sin resultados', 'No se detectaron gastos en la imagen. Probá con otra captura más clara.');
         setShowScreenshotModal(false);
       }
     } catch {
@@ -368,7 +362,7 @@ export default function ExpensesScreen() {
             <View style={styles.processingContainer}>
               <ActivityIndicator size="large" color={colors.neon} />
               <Text variant="body" color={colors.text.secondary} style={{ marginTop: spacing[4] }}>
-                Analizando imagen...
+                Analizando imagen con IA...
               </Text>
             </View>
           ) : (
