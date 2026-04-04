@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/authStore';
 import { colors } from '@/theme';
 import { LoadingScreen } from '@/components/ui';
 import { requestNotificationPermission } from '@/lib/notifications';
+import { onSessionExpired } from '@/lib/supabase';
 import {
   useFonts,
   BebasNeue_400Regular,
@@ -43,6 +44,14 @@ export default function RootLayout() {
     initialize()
       .catch(() => {})
       .finally(() => setAuthReady(true));
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSessionExpired(() => {
+      console.warn('[Auth] Sesión expirada — redirigiendo al login');
+      router.replace('/(auth)/login');
+    });
+    return unsub;
   }, []);
 
   const isReady = (fontsLoaded || !!fontError) && authReady;
