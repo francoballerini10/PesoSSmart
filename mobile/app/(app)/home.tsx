@@ -30,6 +30,8 @@ export default function HomeScreen() {
     fetchSubscriptionsAndProjection,
     projectedBalance,
     estimatedIncome,
+    lastMonthTotal,
+    avgLast3Months,
     subscriptions,
     isLoading,
   } = useExpensesStore();
@@ -119,6 +121,102 @@ export default function HomeScreen() {
             </View>
           </View>
         </Card>
+
+        {/* Contexto comparativo */}
+        {(lastMonthTotal !== null || avgLast3Months !== null) && totalThisMonth > 0 && (
+          <View style={styles.contextRow}>
+            {lastMonthTotal !== null && (() => {
+              const diff    = totalThisMonth - lastMonthTotal;
+              const pct     = lastMonthTotal > 0 ? Math.round(Math.abs(diff) / lastMonthTotal * 100) : 0;
+              const up      = diff > 0;
+              const neutral = Math.abs(diff) < lastMonthTotal * 0.03; // <3% = sin cambio
+              return (
+                <View style={styles.contextItem}>
+                  <Text variant="caption" color={colors.text.tertiary}>VS MES ANTERIOR</Text>
+                  <View style={styles.contextValueRow}>
+                    {!neutral && (
+                      <Ionicons
+                        name={up ? 'trending-up' : 'trending-down'}
+                        size={14}
+                        color={up ? colors.red : colors.neon}
+                      />
+                    )}
+                    <Text
+                      variant="labelMd"
+                      color={neutral ? colors.text.secondary : up ? colors.red : colors.neon}
+                    >
+                      {neutral ? 'Sin cambios' : `${up ? '+' : '-'}${pct}%`}
+                    </Text>
+                  </View>
+                  <Text variant="caption" color={colors.text.tertiary}>
+                    {formatCurrency(lastMonthTotal)}
+                  </Text>
+                </View>
+              );
+            })()}
+
+            {lastMonthTotal !== null && avgLast3Months !== null && (
+              <View style={styles.contextDivider} />
+            )}
+
+            {avgLast3Months !== null && (() => {
+              const diff    = totalThisMonth - avgLast3Months;
+              const pct     = avgLast3Months > 0 ? Math.round(Math.abs(diff) / avgLast3Months * 100) : 0;
+              const up      = diff > 0;
+              const neutral = Math.abs(diff) < avgLast3Months * 0.03;
+              return (
+                <View style={styles.contextItem}>
+                  <Text variant="caption" color={colors.text.tertiary}>VS PROMEDIO 3M</Text>
+                  <View style={styles.contextValueRow}>
+                    {!neutral && (
+                      <Ionicons
+                        name={up ? 'trending-up' : 'trending-down'}
+                        size={14}
+                        color={up ? colors.red : colors.neon}
+                      />
+                    )}
+                    <Text
+                      variant="labelMd"
+                      color={neutral ? colors.text.secondary : up ? colors.red : colors.neon}
+                    >
+                      {neutral ? 'Sin cambios' : `${up ? '+' : '-'}${pct}%`}
+                    </Text>
+                  </View>
+                  <Text variant="caption" color={colors.text.tertiary}>
+                    prom. {formatCurrency(avgLast3Months)}
+                  </Text>
+                </View>
+              );
+            })()}
+
+            {estimatedIncome !== null && estimatedIncome > 0 && (() => {
+              const pct     = Math.round(totalThisMonth / estimatedIncome * 100);
+              const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+              const dayOfMonth  = new Date().getDate();
+              const expectedPct = Math.round(dayOfMonth / daysInMonth * 100);
+              const onTrack     = pct <= expectedPct + 5;
+              return (
+                <>
+                  <View style={styles.contextDivider} />
+                  <View style={styles.contextItem}>
+                    <Text variant="caption" color={colors.text.tertiary}>DEL INGRESO</Text>
+                    <View style={styles.contextValueRow}>
+                      <Text
+                        variant="labelMd"
+                        color={onTrack ? colors.neon : colors.red}
+                      >
+                        {pct}%
+                      </Text>
+                    </View>
+                    <Text variant="caption" color={colors.text.tertiary}>
+                      {onTrack ? 'en ritmo' : 'acelerado'}
+                    </Text>
+                  </View>
+                </>
+              );
+            })()}
+          </View>
+        )}
 
         {/* Termómetro del mes */}
         <Card variant="default" style={styles.thermometerCard}>
@@ -445,6 +543,28 @@ const styles = StyleSheet.create({
   },
   thermometerCard: {
     padding: spacing[5],
+  },
+  contextRow: {
+    flexDirection:    'row',
+    backgroundColor:  colors.bg.card,
+    borderWidth:      1,
+    borderColor:      colors.border.default,
+    paddingVertical:  spacing[4],
+  },
+  contextItem: {
+    flex:       1,
+    alignItems: 'center',
+    gap:        spacing[1],
+  },
+  contextValueRow: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           spacing[1],
+  },
+  contextDivider: {
+    width:           1,
+    backgroundColor: colors.border.subtle,
+    marginVertical:  spacing[1],
   },
   simulatorPromo: {
     padding: spacing[5],

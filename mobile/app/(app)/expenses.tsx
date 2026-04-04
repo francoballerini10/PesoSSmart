@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { useDolarRates, fetchDolarRateNow, DOLAR_LABELS, type DolarType } from '@/hooks/useDolarRates';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -25,6 +26,7 @@ import type { DetectedSubscription } from '@/store/expensesStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/utils/format';
 import type { PaymentMethod, Expense } from '@/types';
+import { PendingTransactions } from '@/components/PendingTransactions';
 
 type ExtractedExpense = {
   description: string;
@@ -75,11 +77,19 @@ export default function ExpensesScreen() {
     subscriptions,
   } = useExpensesStore();
 
+  const { rates, labels: dolarLabels } = useDolarRates();
+  // dolarLabels viene del hook pero también exportamos DOLAR_LABELS directamente
+
   const [showSubscriptions, setShowSubscriptions] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedPayment, setSelectedPayment] = useState<PaymentMethod>('cash');
+
+  // Multi-moneda
+  const [currency,      setCurrency]      = useState<'ARS' | 'USD'>('ARS');
+  const [dolarType,     setDolarType]     = useState<DolarType>('blue');
+
   const [showScreenshotModal, setShowScreenshotModal] = useState(false);
   const [extractedExpenses, setExtractedExpenses] = useState<ExtractedExpense[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -184,29 +194,104 @@ export default function ExpensesScreen() {
     },
   });
 
+  const [pendingTxs, setPendingTxs] = useState<any[]>([]);
+
   useEffect(() => {
     if (user?.id) {
       fetchExpenses(user.id);
       fetchCategories();
       fetchSubscriptionsAndProjection(user.id);
+      pollGmail();
     }
   }, [user?.id, filter]);
+
+  const pollGmail = async () => {
+    const { data: { session: cachedSession } } = await supabase.auth.getSession();
+    const token = cachedSession?.access_token;
+    console.log('[pollGmail] token:', token ? 'ok' : 'null', '| expires_at:', cachedSession?.expires_at);
+    if (!token) return;
+
+    const status = await pollGmailWithToken(token);
+
+    // Si el JWT venció, forzar refresh y reintentar una sola vez
+    if (status === 401) {
+      console.log('[pollGmail] JWT rechazado, forzando refreshSession...');
+      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError || !refreshed.session) {
+        // Sesión completamente muerta — no reintentar
+        console.log('[pollGmail] Sesión inválida, no se puede refrescar:', refreshError?.message);
+        return;
+      }
+      console.log('[pollGmail] Sesión refrescada OK, reintentando...');
+      // No pasamos el resultado — si falla de nuevo, se loguea y termina
+      await pollGmailWithToken(refreshed.session.access_token);
+    }
+  };
+
+  const pollGmailWithToken = async (token: string): Promise<number | undefined> => {
+    try {
+      const res = await fetch(
+        `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/gmail-poll`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      console.log('[pollGmail] status:', res.status);
+      if (!res.ok) {
+        const errBody = await res.text();
+        console.log('[pollGmail] error body:', errBody);
+        return res.status;
+      }
+      const data = await res.json();
+      console.log('[pollGmail] gmail_connected:', data?.gmail_connected, '| new_found:', data?.new_found, '| pending:', data?.pending?.length ?? 0);
+      if (data?.pending?.length > 0) setPendingTxs(data.pending);
+    } catch (e) {
+      console.log('[pollGmail] fetch error:', e);
+    }
+  };
 
   const onSubmit = async (data: ExpenseFormData) => {
     if (!user?.id) return;
     try {
+      const rawAmount = parseFloat(data.amount.replace(',', '.'));
+
+      let finalAmount = rawAmount;
+      let notesWithFx = data.notes || null;
+
+      if (currency === 'USD') {
+        let rate: number;
+        try {
+          // Fetch fresco en el momento exacto de guardar
+          rate = await fetchDolarRateNow(dolarType);
+        } catch {
+          Alert.alert(
+            'Sin cotización',
+            'No se pudo obtener la cotización del dólar en este momento. Verificá tu conexión e intentá de nuevo.',
+          );
+          return;
+        }
+        finalAmount = Math.round(rawAmount * rate);
+        const fxNote = `USD ${rawAmount.toLocaleString('es-AR')} × $${rate.toLocaleString('es-AR')} (${DOLAR_LABELS[dolarType]})`;
+        notesWithFx = data.notes ? `${data.notes} | ${fxNote}` : fxNote;
+      }
+
       await addExpense(user.id, {
-        description: data.description,
-        amount: parseFloat(data.amount.replace(',', '.')),
-        date: data.date,
+        description:    data.description,
+        amount:         finalAmount,
+        date:           data.date,
         payment_method: selectedPayment,
-        category_id: selectedCategory ?? undefined,
-        notes: data.notes || null,
-        is_recurring: false,
+        category_id:    selectedCategory ?? undefined,
+        notes:          notesWithFx,
+        is_recurring:   false,
       });
       reset();
       setShowAddModal(false);
       setSelectedCategory(null);
+      setCurrency('ARS');
     } catch {
       Alert.alert('Error', 'No se pudo guardar el gasto. Intentá de nuevo.');
     }
@@ -252,6 +337,19 @@ export default function ExpensesScreen() {
           <Text variant="labelMd" color={colors.neon}>{formatCurrency(totalNecessary)}</Text>
         </View>
       </View>
+
+      {/* Transacciones detectadas en Gmail */}
+      {pendingTxs.length > 0 && (
+        <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[4] }}>
+          <PendingTransactions
+            transactions={pendingTxs}
+            onConfirmed={() => {
+              pollGmail();
+              fetchExpenses(user!.id);
+            }}
+          />
+        </View>
+      )}
 
       {/* Filtros de clasificación */}
       <ScrollView
@@ -470,21 +568,95 @@ export default function ExpensesScreen() {
                 )}
               />
 
+              {/* Selector de moneda */}
+              <View>
+                <Text variant="label" color={colors.text.secondary} style={styles.inputLabel}>
+                  MONEDA
+                </Text>
+                <View style={styles.currencyRow}>
+                  {(['ARS', 'USD'] as const).map((c) => (
+                    <TouchableOpacity
+                      key={c}
+                      style={[styles.currencyChip, currency === c && styles.currencyChipActive]}
+                      onPress={() => setCurrency(c)}
+                    >
+                      <Text
+                        variant="label"
+                        color={currency === c ? colors.neon : colors.text.secondary}
+                      >
+                        {c}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Selector de tipo de dólar */}
+                {currency === 'USD' && (
+                  <View style={styles.dolarRow}>
+                    {(['oficial', 'blue', 'mep'] as DolarType[]).map((t) => {
+                      const rate = rates[t];
+                      return (
+                        <TouchableOpacity
+                          key={t}
+                          style={[styles.dolarChip, dolarType === t && styles.dolarChipActive]}
+                          onPress={() => setDolarType(t)}
+                        >
+                          <Text
+                            variant="caption"
+                            color={dolarType === t ? colors.black : colors.text.secondary}
+                          >
+                            {dolarLabels[t]}
+                          </Text>
+                          <Text
+                            variant="caption"
+                            color={dolarType === t ? colors.black : colors.text.tertiary}
+                          >
+                            {rate ? `$${rate.toLocaleString('es-AR')}` : '...'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+
               <Controller
                 control={control}
                 name="amount"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <Input
-                    label="MONTO (ARS)"
-                    placeholder="0"
-                    value={value}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                    error={errors.amount?.message}
-                    keyboardType="decimal-pad"
-                    leftIcon={<Text variant="body" color={colors.text.secondary}>$</Text>}
-                  />
-                )}
+                render={({ field: { onChange, onBlur, value } }) => {
+                  const raw  = parseFloat(value.replace(',', '.'));
+                  const rate = rates[dolarType];
+                  const ars  = currency === 'USD' && rate && !isNaN(raw)
+                    ? Math.round(raw * rate)
+                    : null;
+
+                  return (
+                    <View>
+                      <Input
+                        label={currency === 'USD' ? 'MONTO (USD)' : 'MONTO (ARS)'}
+                        placeholder="0"
+                        value={value}
+                        onChangeText={onChange}
+                        onBlur={onBlur}
+                        error={errors.amount?.message}
+                        keyboardType="decimal-pad"
+                        leftIcon={
+                          <Text variant="body" color={colors.text.secondary}>
+                            {currency === 'USD' ? 'U$D' : '$'}
+                          </Text>
+                        }
+                      />
+                      {ars !== null && (
+                        <View style={styles.fxPreview}>
+                          <Ionicons name="swap-horizontal" size={12} color={colors.text.tertiary} />
+                          <Text variant="caption" color={colors.text.tertiary}>
+                            = ${ars.toLocaleString('es-AR')} ARS al {dolarLabels[dolarType]}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                }}
               />
 
               {/* Categorías */}
@@ -808,5 +980,45 @@ const styles = StyleSheet.create({
   paymentChipActive: {
     borderColor: colors.neon,
     backgroundColor: colors.neon,
+  },
+
+  // Multi-moneda
+  currencyRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+  },
+  currencyChip: {
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[2],
+    borderWidth: 1,
+    borderColor: colors.border.default,
+  },
+  currencyChipActive: {
+    borderColor: colors.neon,
+    backgroundColor: colors.neon + '15',
+  },
+  dolarRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    marginTop: spacing[3],
+  },
+  dolarChip: {
+    flex: 1,
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingVertical: spacing[3],
+    borderWidth: 1,
+    borderColor: colors.border.default,
+  },
+  dolarChipActive: {
+    borderColor: colors.neon,
+    backgroundColor: colors.neon,
+  },
+  fxPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    marginTop: spacing[1],
+    paddingHorizontal: spacing[1],
   },
 });

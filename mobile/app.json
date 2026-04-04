@@ -26,7 +26,10 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.pesossmart.app",
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"]
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -39,7 +42,8 @@
         {
           "photosPermission": "Necesitamos acceso a tus fotos para subir tickets de compra."
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "scheme": "pesossmart",
     "experiments": {

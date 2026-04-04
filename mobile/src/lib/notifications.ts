@@ -9,17 +9,26 @@ Notifications.setNotificationHandler({
 });
 
 export async function requestNotificationPermission(): Promise<boolean> {
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  if (existing === 'granted') return true;
-  const { status } = await Notifications.requestPermissionsAsync();
-  return status === 'granted';
+  try {
+    const { status: existing } = await Notifications.getPermissionsAsync();
+    if (existing === 'granted') return true;
+    const { status } = await Notifications.requestPermissionsAsync();
+    return status === 'granted';
+  } catch {
+    // No disponible en Expo Go
+    return false;
+  }
 }
 
 export async function sendLocalNotification(title: string, body: string) {
-  await Notifications.scheduleNotificationAsync({
-    content: { title, body, sound: true },
-    trigger: null,
-  });
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: { title, body, sound: true },
+      trigger: null,
+    });
+  } catch {
+    // No disponible en Expo Go — ignorar silenciosamente
+  }
 }
 
 export async function scheduleBudgetAlert(
@@ -27,36 +36,40 @@ export async function scheduleBudgetAlert(
   remainingAmount: number,
   daysLeftInMonth: number
 ) {
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  try {
+    await Notifications.cancelAllScheduledNotificationsAsync();
 
-  if (spentPct >= 1) {
-    await sendLocalNotification(
-      '⚠️ Te pasaste del presupuesto',
-      `Gastaste más de tu ingreso estimado este mes. Revisá tus gastos en SmartPesos.`
-    );
-    return;
-  }
+    if (spentPct >= 1) {
+      await sendLocalNotification(
+        '⚠️ Te pasaste del presupuesto',
+        `Gastaste más de tu ingreso estimado este mes. Revisá tus gastos en SmartPesos.`
+      );
+      return;
+    }
 
-  if (spentPct >= 0.8) {
-    await sendLocalNotification(
-      '🟡 Casi al límite del mes',
-      `Usaste el ${Math.round(spentPct * 100)}% de tu presupuesto y quedan ${daysLeftInMonth} días.`
-    );
-    return;
-  }
+    if (spentPct >= 0.8) {
+      await sendLocalNotification(
+        '🟡 Casi al límite del mes',
+        `Usaste el ${Math.round(spentPct * 100)}% de tu presupuesto y quedan ${daysLeftInMonth} días.`
+      );
+      return;
+    }
 
-  if (spentPct >= 0.6) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: '📊 Revisá tus gastos',
-        body: `Vas en el ${Math.round(spentPct * 100)}% del mes. Te quedan ${formatCurrencySimple(remainingAmount)}.`,
-        sound: true,
-      },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: tomorrow },
-    });
+    if (spentPct >= 0.6) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '📊 Revisá tus gastos',
+          body: `Vas en el ${Math.round(spentPct * 100)}% del mes. Te quedan ${formatCurrencySimple(remainingAmount)}.`,
+          sound: true,
+        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: tomorrow },
+      });
+    }
+  } catch {
+    // No disponible en Expo Go — ignorar silenciosamente
   }
 }
 

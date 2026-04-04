@@ -43,6 +43,8 @@ interface ExpensesState {
   subscriptions: DetectedSubscription[];
   projectedBalance: number | null;
   estimatedIncome: number | null;
+  lastMonthTotal: number | null;
+  avgLast3Months: number | null;
 
   // Actions
   fetchExpenses: (userId: string) => Promise<void>;
@@ -56,15 +58,17 @@ interface ExpensesState {
   fetchSubscriptionsAndProjection: (userId: string) => Promise<void>;
 }
 
-const currentDate = new Date();
+function currentMonthFilter() {
+  const d = new Date();
+  return { month: d.getMonth() + 1, year: d.getFullYear() };
+}
 
 export const useExpensesStore = create<ExpensesState>((set, get) => ({
   expenses: [],
   categories: [],
   selectedExpense: null,
   filter: {
-    month: currentDate.getMonth() + 1,
-    year: currentDate.getFullYear(),
+    ...currentMonthFilter(),
     category_id: null,
     classification: null,
     search: '',
@@ -79,14 +83,24 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
   subscriptions: [],
   projectedBalance: null,
   estimatedIncome: null,
+  lastMonthTotal: null,
+  avgLast3Months: null,
 
   fetchExpenses: async (userId) => {
+    // Sincronizar el filtro al mes actual si no hay filtro manual activo
     const { filter } = get();
+    const now = currentMonthFilter();
+    const isDefaultFilter = filter.month === null || filter.year === null;
+    const isStaleMonth = filter.month !== now.month || filter.year !== now.year;
+    // Solo auto-corregir si el filtro es el "por defecto" congelado
+    if (isStaleMonth && isDefaultFilter) {
+      set((s) => ({ filter: { ...s.filter, ...now } }));
+    }
     set({ isLoading: true, error: null });
     try {
       let query = supabase
         .from('expenses')
-        .select('*, category:expense_categories(*), receipt:expense_receipts(*)')
+        .select('*, category:expense_categories(*)')
         .eq('user_id', userId)
         .is('deleted_at', null)
         .order('date', { ascending: false });
@@ -300,6 +314,17 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         ? estimatedIncome - projectedExpenses
         : null;
 
+      // Mes anterior y promedio 3 meses para contexto comparativo
+      const now = new Date();
+      const thisMonthKey = now.toISOString().substring(0, 7);
+      const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonthKey  = lastMonthDate.toISOString().substring(0, 7);
+
+      const lastMonthTotal = monthlyTotals[lastMonthKey] ?? null;
+      const avgLast3Months = months.length > 0
+        ? Math.round(months.reduce((a, b) => a + b, 0) / months.length)
+        : null;
+
       // Notificar suscripciones nuevas (que no estaban antes)
       const prev = get().subscriptions;
       const prevDescriptions = new Set(prev.map(s => s.description.toLowerCase()));
@@ -309,7 +334,7 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         }
       }
 
-      set({ subscriptions: detected, projectedBalance, estimatedIncome });
+      set({ subscriptions: detected, projectedBalance, estimatedIncome, lastMonthTotal, avgLast3Months });
     } catch {
       // Silencioso — no es crítico
     }

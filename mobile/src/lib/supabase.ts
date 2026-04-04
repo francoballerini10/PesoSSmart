@@ -10,6 +10,70 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('[Supabase] Faltan variables de entorno. Revisá el archivo .env en mobile/');
 }
 
+// ── Callbacks para cuando la sesión muere definitivamente ─────────────────
+type SessionExpiredCallback = () => void;
+const _sessionExpiredListeners: SessionExpiredCallback[] = [];
+
+export function onSessionExpired(cb: SessionExpiredCallback) {
+  _sessionExpiredListeners.push(cb);
+  return () => {
+    const idx = _sessionExpiredListeners.indexOf(cb);
+    if (idx !== -1) _sessionExpiredListeners.splice(idx, 1);
+  };
+}
+
+function notifySessionExpired() {
+  _sessionExpiredListeners.forEach((cb) => cb());
+}
+
+// ── Fetch wrapper con interceptor de 401 ─────────────────────────────────
+let _isRefreshing = false;
+
+const fetchWithAuthRetry: typeof fetch = async (input, init) => {
+  const res = await fetch(input, init);
+
+  // Solo interceptar 401 de las Edge Functions de Supabase
+  if (
+    res.status === 401 &&
+    typeof input === 'string' &&
+    input.includes('/functions/v1/')
+  ) {
+    if (_isRefreshing) {
+      // Ya hay un refresh en curso — devolver el 401 original
+      return res;
+    }
+
+    _isRefreshing = true;
+    console.log('[Auth] 401 detectado, refrescando sesión...');
+
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+
+      if (error || !data.session) {
+        console.warn('[Auth] refreshSession falló — sesión expirada definitivamente');
+        notifySessionExpired();
+        return res;
+      }
+
+      console.log('[Auth] Sesión refrescada OK, reintentando request...');
+
+      // Reintentar con el token nuevo
+      const newInit: RequestInit = {
+        ...init,
+        headers: {
+          ...(init?.headers ?? {}),
+          Authorization: `Bearer ${data.session.access_token}`,
+        },
+      };
+      return fetch(input, newInit);
+    } finally {
+      _isRefreshing = false;
+    }
+  }
+
+  return res;
+};
+
 export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: AsyncStorage,
@@ -18,6 +82,7 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
   global: {
+    fetch: fetchWithAuthRetry,
     headers: {
       'x-app-name': 'pesossmart-mobile',
       'x-app-version': '1.0.0',

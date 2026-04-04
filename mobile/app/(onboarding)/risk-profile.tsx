@@ -111,7 +111,7 @@ export default function RiskProfileScreen() {
       await saveRiskProfile(user.id);
       await completeOnboarding(user.id);
       await updateAuthProfile({ onboarding_completed: true });
-      router.replace('/(app)/home');
+      router.replace('/(onboarding)/gmail-connect');
     } catch {
       // error en store
     }

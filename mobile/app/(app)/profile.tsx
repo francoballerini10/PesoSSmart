@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -11,6 +11,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import { Linking } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { Ionicons } from '@expo/vector-icons';
 import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
@@ -18,6 +20,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { colors, spacing, layout } from '@/theme';
 import { Text, Card, Button, Input } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
+import { supabase } from '@/lib/supabase';
 
 const editSchema = z.object({
   full_name: z.string().min(1, 'Ingresá tu nombre.').max(80),
@@ -55,8 +58,79 @@ function MenuItem({ icon, label, description, onPress, color = colors.text.secon
 }
 
 export default function ProfileScreen() {
-  const { profile, signOut, updateProfile, isLoading } = useAuthStore();
+  const { profile, user, signOut, updateProfile, isLoading } = useAuthStore();
   const [showEditModal, setShowEditModal] = useState(false);
+  const [gmailEmail, setGmailEmail] = useState<string | null>(null);
+  const [gmailLoading, setGmailLoading] = useState(false);
+  // Detectar deep link de retorno de Gmail OAuth
+  useEffect(() => {
+    const handleURL = ({ url }: { url: string }) => {
+      if (!url.includes('gmail-connected')) return;
+      const match = url.match(/email=([^&]+)/);
+      const hasError = url.includes('error=');
+      if (match) {
+        const email = decodeURIComponent(match[1]);
+        setGmailEmail(email);
+        Alert.alert('Gmail conectado', `Tu cuenta ${email} quedó vinculada. Ahora detectamos gastos automáticamente.`);
+      } else if (hasError) {
+        Alert.alert('Error', 'No se pudo conectar Gmail. Intentá de nuevo.');
+      }
+    };
+
+    const sub = Linking.addEventListener('url', handleURL);
+    return () => sub.remove();
+  }, []);
+
+  // Cargar estado de Gmail al entrar
+  useEffect(() => {
+    if (!user?.id) return;
+    supabase.from('gmail_connections').select('gmail_email').eq('user_id', user.id).single()
+      .then(({ data }) => { if (data) setGmailEmail(data.gmail_email); });
+  }, [user?.id]);
+
+  const connectGmail = async () => {
+    if (!user?.id) return;
+    setGmailLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const res = await fetch(`${supabaseUrl}/functions/v1/gmail-auth?action=url&user_id=${user.id}`);
+      const json = await res.json();
+      if (!json.url) throw new Error('No se pudo obtener URL');
+
+      // openAuthSessionAsync cierra el browser automáticamente cuando detecta el deep link
+      const result = await WebBrowser.openAuthSessionAsync(json.url, 'pesossmart://gmail-connected');
+
+      if (result.type === 'success' && result.url) {
+        const match = result.url.match(/email=([^&]+)/);
+        const hasError = result.url.includes('error=');
+        if (match) {
+          const email = decodeURIComponent(match[1]);
+          setGmailEmail(email);
+          Alert.alert('Gmail conectado', `Tu cuenta ${email} quedó vinculada. Ahora detectamos gastos automáticamente.`);
+        } else if (hasError) {
+          Alert.alert('Error', 'No se pudo conectar Gmail. Intentá de nuevo.');
+        }
+      }
+    } catch {
+      Alert.alert('Error', 'No se pudo iniciar la conexión con Gmail.');
+    } finally {
+      setGmailLoading(false);
+    }
+  };
+
+  const disconnectGmail = () => {
+    Alert.alert('Desconectar Gmail', '¿Querés dejar de detectar gastos desde tu email?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Desconectar',
+        style: 'destructive',
+        onPress: async () => {
+          await supabase.functions.invoke('gmail-auth', { method: 'DELETE' } as any);
+          setGmailEmail(null);
+        },
+      },
+    ]);
+  };
 
   const { control, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<EditFormData>({
     resolver: zodResolver(editSchema),
@@ -205,6 +279,28 @@ export default function ProfileScreen() {
               description="Tu tolerancia a la volatilidad"
               onPress={() => router.push('/(onboarding)/risk-profile')}
             />
+          </Card>
+        </View>
+
+        {/* Integraciones */}
+        <View style={styles.section}>
+          <Text variant="label" color={colors.text.secondary} style={styles.sectionTitle}>INTEGRACIONES</Text>
+          <Card style={styles.menuCard}>
+            <TouchableOpacity style={styles.menuItem} onPress={gmailEmail ? disconnectGmail : connectGmail} disabled={gmailLoading}>
+              <View style={styles.menuIcon}>
+                <Ionicons name="mail-outline" size={20} color={gmailEmail ? colors.neon : colors.text.secondary} />
+              </View>
+              <View style={styles.menuText}>
+                <Text variant="bodySmall" color={colors.text.primary}>Gmail</Text>
+                <Text variant="caption" color={gmailEmail ? colors.neon : colors.text.secondary}>
+                  {gmailLoading ? 'Conectando...' : gmailEmail ? `Conectado: ${gmailEmail}` : 'Detectar gastos desde emails bancarios'}
+                </Text>
+              </View>
+              {gmailEmail
+                ? <Ionicons name="checkmark-circle" size={20} color={colors.neon} />
+                : <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+              }
+            </TouchableOpacity>
           </Card>
         </View>
 
