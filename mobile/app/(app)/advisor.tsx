@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,9 +17,10 @@ import { colors, spacing, layout, textVariants } from '@/theme';
 import { Text } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
 import { useExpensesStore } from '@/store/expensesStore';
+import { usePlanStore } from '@/store/planStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, router } from 'expo-router';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -107,6 +109,16 @@ function buildQuickActions(ctx: ClientContext): string[] {
 export default function AdvisorScreen() {
   const { user, profile }  = useAuthStore();
   const { totalThisMonth, totalNecessary, totalDisposable, totalInvestable, estimatedIncome } = useExpensesStore();
+  const {
+    canSendMessage,
+    remainingMessages,
+    incrementUsage,
+    load: loadPlan,
+    effectivePlan,
+    msgCount,
+    msgLimit,
+    isLoading: planLoading,
+  } = usePlanStore();
   const { initialContext } = useLocalSearchParams<{ initialContext?: string }>();
 
   const [messages,      setMessages]      = useState<ChatMessage[]>([]);
@@ -124,6 +136,11 @@ export default function AdvisorScreen() {
 
   // Quick actions contextuales
   const quickActions = useMemo(() => buildQuickActions(clientContext), [clientContext]);
+
+  // Cargar plan al montar
+  useEffect(() => {
+    if (user?.id) loadPlan(user.id);
+  }, [user?.id]);
 
   // Generar bienvenida automática al montar
   useEffect(() => {
@@ -162,6 +179,20 @@ export default function AdvisorScreen() {
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !user?.id || isThinking) return;
 
+    // Verificar límite de mensajes
+    if (!canSendMessage()) {
+      const planName = effectivePlan === 'free' ? 'Gratis' : effectivePlan === 'pro' ? 'Pro' : 'Premium';
+      Alert.alert(
+        'Límite de mensajes alcanzado',
+        `Agotaste tus ${msgLimit} mensajes del plan ${planName}. Actualizá tu plan para seguir chateando con el asesor.`,
+        [
+          { text: 'Ahora no', style: 'cancel' },
+          { text: 'Ver planes', onPress: () => router.push('/(app)/plans') },
+        ],
+      );
+      return;
+    }
+
     const userMsg: ChatMessage = {
       id:         `user-${Date.now()}`,
       role:       'user',
@@ -188,7 +219,22 @@ export default function AdvisorScreen() {
       });
 
       if (error) {
-        const ctx  = (error as any)?.context;
+        const ctx    = (error as any)?.context as Response | undefined;
+        const status = ctx?.status;
+        if (status === 429) {
+          // Backend confirmó límite — mostrar paywall y salir limpio
+          Alert.alert(
+            'Límite de mensajes alcanzado',
+            `Agotaste los mensajes de tu plan este mes. Actualizá para seguir con el asesor.`,
+            [
+              { text: 'Ahora no', style: 'cancel' },
+              { text: 'Ver planes', onPress: () => router.push('/(app)/plans') },
+            ],
+          );
+          // Revertir el mensaje del usuario (no hubo respuesta real)
+          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+          return;
+        }
         const body = ctx ? await ctx.text?.() : null;
         throw new Error(body ?? error.message);
       }
@@ -200,6 +246,8 @@ export default function AdvisorScreen() {
         content:    data.message,
         created_at: new Date().toISOString(),
       }]);
+      // Contabilizar el mensaje enviado
+      incrementUsage(user.id);
     } catch {
       setMessages((prev) => [...prev, {
         id:         `err-${Date.now()}`,
@@ -338,27 +386,45 @@ export default function AdvisorScreen() {
             ))}
           </ScrollView>
 
+          {/* Contador de mensajes — solo planes con límite y después de cargar */}
+          {msgLimit !== null && !planLoading && (
+            <View style={styles.usageRow}>
+              {canSendMessage() ? (
+                <Text variant="caption" color={colors.text.tertiary}>
+                  {remainingMessages()} mensaje{remainingMessages() !== 1 ? 's' : ''} restante{remainingMessages() !== 1 ? 's' : ''}
+                </Text>
+              ) : (
+                <TouchableOpacity onPress={() => router.push('/(app)/plans')} style={styles.limitReached}>
+                  <Ionicons name="lock-closed" size={12} color={colors.red} />
+                  <Text variant="caption" color={colors.red}>Límite alcanzado · </Text>
+                  <Text variant="caption" color={colors.primary} style={{ textDecorationLine: 'underline' }}>Ver planes</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
           <View style={styles.inputRow}>
             <TextInput
               style={styles.textInput}
               value={input}
               onChangeText={setInput}
-              placeholder="Preguntame lo que quieras..."
+              placeholder={canSendMessage() ? 'Preguntame lo que quieras...' : 'Límite de mensajes alcanzado'}
               placeholderTextColor={colors.text.tertiary}
               multiline
               maxLength={500}
               selectionColor={colors.neon}
               onSubmitEditing={() => sendMessage(input)}
+              editable={canSendMessage()}
             />
             <TouchableOpacity
-              style={[styles.sendBtn, (!input.trim() || isThinking) && styles.sendBtnDisabled]}
+              style={[styles.sendBtn, (!input.trim() || isThinking || !canSendMessage()) && styles.sendBtnDisabled]}
               onPress={() => sendMessage(input)}
-              disabled={!input.trim() || isThinking}
+              disabled={!input.trim() || isThinking || !canSendMessage()}
             >
               <Ionicons
                 name="send"
                 size={18}
-                color={!input.trim() || isThinking ? colors.text.tertiary : colors.black}
+                color={!input.trim() || isThinking || !canSendMessage() ? colors.text.tertiary : colors.black}
               />
             </TouchableOpacity>
           </View>
@@ -443,6 +509,13 @@ const styles = StyleSheet.create({
   inputContainer: { borderTopWidth: 1, borderTopColor: colors.border.subtle, backgroundColor: colors.bg.secondary },
 
   actionsRow: { paddingHorizontal: layout.screenPadding, paddingVertical: spacing[2], gap: spacing[2] },
+  usageRow: {
+    paddingHorizontal: layout.screenPadding,
+    paddingBottom: spacing[1],
+  },
+  limitReached: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+  },
   actionChip: {
     paddingHorizontal: spacing[3], paddingVertical: spacing[2],
     borderWidth: 1, borderColor: colors.neon + '44',

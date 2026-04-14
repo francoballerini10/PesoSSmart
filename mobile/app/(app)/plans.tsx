@@ -75,7 +75,7 @@ function PlanCard({
   onSelect: (id: PlanId) => void;
 }) {
   const plan      = PLANS[planId];
-  const isCurrent = planId === currentPlan && !isTrialActive;
+  const isCurrent = planId === currentPlan;
   const isSelected= planId === currentPlan;
 
   return (
@@ -134,7 +134,9 @@ function PlanCard({
         {/* CTA */}
         {isCurrent ? (
           <View style={[cardStyles.ctaInactive]}>
-            <Text variant="label" color={colors.text.tertiary}>PLAN ACTUAL</Text>
+            <Text variant="label" color={colors.text.tertiary}>
+              {isTrialActive && planId === 'premium' ? 'TRIAL ACTIVO' : 'PLAN ACTUAL'}
+            </Text>
           </View>
         ) : planId === 'free' ? null : (
           <TouchableOpacity
