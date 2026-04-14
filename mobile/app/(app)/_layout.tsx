@@ -3,7 +3,6 @@ import { Tabs } from 'expo-router';
 import { View, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, layout } from '@/theme';
-import { Text } from '@/components/ui';
 
 type TabIconProps = {
   name: keyof typeof Ionicons.glyphMap;
@@ -83,6 +82,7 @@ export default function AppLayout() {
       <Tabs.Screen name="advisor"       options={{ href: null }} />
       <Tabs.Screen name="grupo-familia" options={{ href: null }} />
       <Tabs.Screen name="plans"         options={{ href: null }} />
+      <Tabs.Screen name="simulator"     options={{ href: null }} />
     </Tabs>
   );
 }
