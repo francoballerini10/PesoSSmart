@@ -148,6 +148,73 @@ const detStyles = StyleSheet.create({
   barFill:   { height: '100%', borderRadius: 3 },
 });
 
+// ─── MonthSelector ────────────────────────────────────────────────────────────
+
+function buildMonthList(): { month: number; year: number; label: string }[] {
+  const result = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    result.push({
+      month: d.getMonth() + 1,
+      year:  d.getFullYear(),
+      label: d.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' })
+               .replace('.', '').replace(' ', " '"),
+    });
+  }
+  return result;
+}
+
+const MONTH_LIST = buildMonthList();
+
+function MonthSelector({
+  selected,
+  onSelect,
+}: {
+  selected: { month: number; year: number };
+  onSelect: (month: number, year: number) => void;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={msStyles.row}
+      style={msStyles.container}
+    >
+      {MONTH_LIST.map((m) => {
+        const isActive = m.month === selected.month && m.year === selected.year;
+        return (
+          <TouchableOpacity
+            key={`${m.year}-${m.month}`}
+            style={[msStyles.chip, isActive && msStyles.chipActive]}
+            onPress={() => onSelect(m.month, m.year)}
+          >
+            <Text
+              variant="label"
+              style={{ fontSize: 10, color: isActive ? colors.black : colors.text.secondary }}
+            >
+              {m.label.toUpperCase()}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+const msStyles = StyleSheet.create({
+  container: { marginHorizontal: -layout.screenPadding },
+  row:       { paddingHorizontal: layout.screenPadding, gap: spacing[2], paddingVertical: spacing[2] },
+  chip:      {
+    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+    borderRadius: 20, borderWidth: 1, borderColor: colors.border.default,
+    backgroundColor: colors.bg.card,
+  },
+  chipActive: {
+    backgroundColor: colors.primary, borderColor: colors.primary,
+  },
+});
+
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ExpensesScreen() {
@@ -560,7 +627,7 @@ export default function ExpensesScreen() {
           <View style={styles.gmailExpiredBanner}>
             <Ionicons name="mail-unread-outline" size={16} color={colors.yellow} />
             <View style={{ flex: 1 }}>
-              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
                 Gmail desconectado
               </Text>
               <Text variant="caption" color={colors.text.secondary}>
@@ -670,6 +737,12 @@ export default function ExpensesScreen() {
             }
           </TouchableOpacity>
         </View>
+
+        {/* Selector de mes */}
+        <MonthSelector
+          selected={{ month: filter.month ?? new Date().getMonth() + 1, year: filter.year ?? new Date().getFullYear() }}
+          onSelect={(m, y) => setFilter({ month: m, year: y })}
+        />
 
         {/* Segmented control */}
         <View style={styles.segTrack}>

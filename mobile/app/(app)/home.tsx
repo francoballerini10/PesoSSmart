@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   ScrollView,
@@ -7,19 +7,615 @@ import {
   RefreshControl,
   Modal,
   ActivityIndicator,
+  Dimensions,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, layout } from '@/theme';
-import { Text, Card, PressableCard, AmountDisplay, Badge, MonthlyThermometer } from '@/components/ui';
+import { Text, Card, PressableCard, AmountDisplay, Badge } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
 import { useExpensesStore } from '@/store/expensesStore';
-import { useGoalsStore } from '@/store/goalsStore';
+import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
+import type { Expense } from '@/types';
 import { GoalsSection } from '@/components/GoalsSection';
 import { scheduleBudgetAlert } from '@/lib/notifications';
 import { getGreeting, formatCurrency } from '@/utils/format';
+
+// ─── Tipos ────────────────────────────────────────────────────────────────────
+
+type MonthStatus = 'good' | 'tight' | 'over';
+
+interface StatusConfig {
+  color:  string;
+  bg:     string;
+  border: string;
+  label:  string;
+  icon:   string;
+}
+
+const STATUS_CONFIG: Record<MonthStatus, StatusConfig> = {
+  good:  { color: colors.neon,    bg: colors.neon + '10',    border: colors.neon + '40',    label: 'Buen mes',      icon: 'trending-up'   },
+  tight: { color: colors.yellow,  bg: colors.yellow + '10',  border: colors.yellow + '40',  label: 'Mes ajustado',  icon: 'alert-circle'  },
+  over:  { color: colors.red,     bg: colors.red + '10',     border: colors.red + '40',     label: 'Te pasaste',    icon: 'trending-down' },
+};
+
+function computeStatus(
+  totalThisMonth: number,
+  totalDisposable: number,
+  estimatedIncome: number | null,
+): MonthStatus {
+  if (!estimatedIncome || estimatedIncome <= 0) {
+    const dispPct = totalThisMonth > 0 ? totalDisposable / totalThisMonth : 0;
+    return dispPct > 0.25 ? 'tight' : 'good';
+  }
+  const incomePct = totalThisMonth / estimatedIncome;
+  const dispPct   = totalThisMonth > 0 ? totalDisposable / totalThisMonth : 0;
+  if (incomePct > 1)    return 'over';
+  if (incomePct > 0.85 || dispPct > 0.20) return 'tight';
+  return 'good';
+}
+
+function buildInsight(
+  status: MonthStatus,
+  totalThisMonth: number,
+  totalDisposable: number,
+  estimatedIncome: number | null,
+): string {
+  const recoverable = Math.round(totalDisposable * 0.5);
+  if (status === 'over' && estimatedIncome) {
+    return `Superaste el ingreso por ${formatCurrency(totalThisMonth - estimatedIncome)}. Enfocate en recortar primero.`;
+  }
+  if (status === 'tight' && estimatedIncome) {
+    const pct = Math.round((totalThisMonth / estimatedIncome) * 100);
+    return `Usaste el ${pct}% del ingreso. Poco margen — revisá los prescindibles.`;
+  }
+  if (status === 'good' && recoverable > 0) {
+    return `Mes positivo. Podrías destinar ~${formatCurrency(recoverable)} a inversión este mes.`;
+  }
+  return 'Tu mes viene bien. Seguí así.';
+}
+
+// ─── MonthHeroCard ────────────────────────────────────────────────────────────
+
+function MonthHeroCard({
+  totalThisMonth,
+  totalNecessary,
+  totalDisposable,
+  totalInvestable,
+  estimatedIncome,
+  onEditIncome,
+}: {
+  totalThisMonth:  number;
+  totalNecessary:  number;
+  totalDisposable: number;
+  totalInvestable: number;
+  estimatedIncome: number | null;
+  onEditIncome:    () => void;
+}) {
+  const status  = computeStatus(totalThisMonth, totalDisposable, estimatedIncome);
+  const cfg     = STATUS_CONFIG[status];
+  const insight = buildInsight(status, totalThisMonth, totalDisposable, estimatedIncome);
+
+  const incomePct  = estimatedIncome && estimatedIncome > 0
+    ? Math.min(totalThisMonth / estimatedIncome, 1)
+    : null;
+
+  const now        = new Date();
+  const monthLabel = now.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' })
+                        .toUpperCase();
+
+  return (
+    <View style={[heroStyles.card, { borderColor: cfg.border, backgroundColor: cfg.bg }]}>
+      {/* Top row: mes + ingreso */}
+      <View style={heroStyles.topRow}>
+        <Text variant="label" style={{ fontSize: 10, color: colors.text.tertiary }}>
+          {monthLabel}
+        </Text>
+        <TouchableOpacity style={heroStyles.incomeChip} onPress={onEditIncome}>
+          <Ionicons
+            name={estimatedIncome ? 'pencil-outline' : 'add-outline'}
+            size={11}
+            color={estimatedIncome ? colors.text.tertiary : colors.neon}
+          />
+          <Text variant="caption" color={estimatedIncome ? colors.text.tertiary : colors.neon}>
+            {estimatedIncome ? `Ingreso: ${formatCurrency(estimatedIncome)}` : 'Cargar ingreso'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Status badge */}
+      <View style={heroStyles.statusRow}>
+        <View style={[heroStyles.badge, { backgroundColor: cfg.color + '20', borderColor: cfg.color + '50' }]}>
+          <Ionicons name={cfg.icon as any} size={12} color={cfg.color} />
+          <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 11, color: cfg.color }}>
+            {cfg.label.toUpperCase()}
+          </Text>
+        </View>
+      </View>
+
+      {/* Número protagonista */}
+      <View style={heroStyles.amountBlock}>
+        <Text variant="label" color={colors.text.secondary}>GASTASTE ESTE MES</Text>
+        <AmountDisplay amount={totalThisMonth} size="xl" />
+      </View>
+
+      {/* Progress bar vs ingreso */}
+      {incomePct !== null && (
+        <View style={heroStyles.progressBlock}>
+          <View style={heroStyles.progressTrack}>
+            <View style={[heroStyles.progressFill, { width: `${incomePct * 100}%`, backgroundColor: cfg.color }]} />
+            {/* Marcador del día del mes */}
+            {(() => {
+              const dayPct = now.getDate() / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+              return (
+                <View style={[heroStyles.dayMarker, { left: `${dayPct * 100}%` }]} />
+              );
+            })()}
+          </View>
+          <View style={heroStyles.progressLabels}>
+            <Text variant="caption" color={colors.text.tertiary}>
+              {Math.round(incomePct * 100)}% del ingreso
+            </Text>
+            <Text variant="caption" color={colors.text.tertiary}>
+              {estimatedIncome ? formatCurrency(Math.max(estimatedIncome - totalThisMonth, 0)) + ' disponible' : ''}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* KPI row */}
+      {totalThisMonth > 0 && (
+        <View style={heroStyles.kpiRow}>
+          <View style={heroStyles.kpiItem}>
+            <View style={[heroStyles.kpiDot, { backgroundColor: colors.accent }]} />
+            <View>
+              <Text variant="caption" color={colors.text.tertiary}>Necesario</Text>
+              <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(totalNecessary)}</Text>
+            </View>
+          </View>
+          <View style={heroStyles.kpiDivider} />
+          <View style={heroStyles.kpiItem}>
+            <View style={[heroStyles.kpiDot, { backgroundColor: colors.red }]} />
+            <View>
+              <Text variant="caption" color={colors.text.tertiary}>Prescindible</Text>
+              <Text variant="labelMd" color={colors.red}>{formatCurrency(totalDisposable)}</Text>
+            </View>
+          </View>
+          <View style={heroStyles.kpiDivider} />
+          <View style={heroStyles.kpiItem}>
+            <View style={[heroStyles.kpiDot, { backgroundColor: colors.neon }]} />
+            <View>
+              <Text variant="caption" color={colors.text.tertiary}>Invertible</Text>
+              <Text variant="labelMd" color={colors.neon}>{formatCurrency(totalInvestable)}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Insight line */}
+      <View style={[heroStyles.insightRow, { borderTopColor: cfg.border }]}>
+        <Ionicons name="bulb-outline" size={13} color={cfg.color} />
+        <Text variant="caption" color={colors.text.secondary} style={{ flex: 1, lineHeight: 18 }}>
+          {insight}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+const heroStyles = StyleSheet.create({
+  card: {
+    borderWidth: 1, borderRadius: 16,
+    padding: spacing[5], gap: spacing[4], overflow: 'hidden',
+  },
+  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  incomeChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: spacing[2], paddingVertical: 3,
+    borderRadius: 20, borderWidth: 1, borderColor: colors.border.default,
+    backgroundColor: colors.bg.secondary,
+  },
+  statusRow: { flexDirection: 'row' },
+  badge: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+    paddingHorizontal: spacing[3], paddingVertical: spacing[1],
+    borderRadius: 20, borderWidth: 1,
+  },
+  amountBlock: { gap: spacing[1] },
+  progressBlock: { gap: spacing[2] },
+  progressTrack: {
+    height: 6, backgroundColor: colors.border.subtle, borderRadius: 3,
+    overflow: 'hidden', position: 'relative',
+  },
+  progressFill:  { height: '100%', borderRadius: 3 },
+  dayMarker: {
+    position: 'absolute', top: -2, bottom: -2,
+    width: 2, backgroundColor: colors.text.tertiary + '80', borderRadius: 1,
+  },
+  progressLabels: { flexDirection: 'row', justifyContent: 'space-between' },
+  kpiRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingTop: spacing[2], borderTopWidth: 1, borderTopColor: colors.border.subtle,
+  },
+  kpiItem: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  kpiDot:  { width: 6, height: 6, borderRadius: 3 },
+  kpiDivider: { width: 1, height: 28, backgroundColor: colors.border.subtle, marginHorizontal: spacing[2] },
+  insightRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
+    paddingTop: spacing[3], borderTopWidth: 1,
+  },
+});
+
+// ─── RecoverableCard ──────────────────────────────────────────────────────────
+
+function RecoverableCard({
+  totalDisposable,
+  onPress,
+}: {
+  totalDisposable:  number;
+  onPress:          () => void;
+}) {
+  if (totalDisposable <= 0) return null;
+
+  const recoverable = Math.round(totalDisposable * 0.5);
+  const fciEstimate = Math.round(recoverable * 0.030);
+
+  return (
+    <TouchableOpacity style={recStyles.card} onPress={onPress} activeOpacity={0.88}>
+      {/* Label */}
+      <View style={recStyles.labelRow}>
+        <View style={recStyles.labelDot} />
+        <Text variant="label" color={colors.text.secondary} style={{ fontSize: 10 }}>
+          DINERO QUE PODÉS RECUPERAR
+        </Text>
+      </View>
+
+      {/* Número protagonista */}
+      <Text style={recStyles.amount}>{formatCurrency(recoverable)}</Text>
+      <Text variant="caption" color={colors.text.secondary}>
+        Ajustando la mitad de tus gastos prescindibles ({formatCurrency(totalDisposable)}/mes)
+      </Text>
+
+      {/* FCI hint */}
+      <View style={recStyles.hintRow}>
+        <Ionicons name="trending-up-outline" size={13} color={colors.neon} />
+        <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }}>
+          Invertido en FCI Money Market: ~
+          <Text variant="caption" color={colors.neon}>+{formatCurrency(fciEstimate)}/mes</Text>
+          {' '}sin hacer nada más.
+        </Text>
+      </View>
+
+      {/* CTA */}
+      <View style={recStyles.cta}>
+        <Text style={recStyles.ctaText}>¿Cómo lo recorto?</Text>
+        <Ionicons name="arrow-forward" size={13} color={colors.black} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const recStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.red + '35',
+    borderLeftWidth: 3, borderLeftColor: colors.red,
+    borderRadius: 14, padding: spacing[5], gap: spacing[3],
+  },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  labelDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.red },
+  amount: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 32, color: colors.neon,
+    letterSpacing: -0.5, lineHeight: 44,
+  },
+  hintRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
+    backgroundColor: colors.neon + '0A', borderRadius: 8, padding: spacing[3],
+  },
+  cta: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    alignSelf: 'flex-start', backgroundColor: colors.neon,
+    borderRadius: 8, paddingHorizontal: spacing[4], paddingVertical: spacing[2],
+  },
+  ctaText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: colors.black },
+});
+
+// ─── QuickActions ─────────────────────────────────────────────────────────────
+
+function QuickActions() {
+  const actions = [
+    { label: 'Agregar gasto', icon: 'add-circle-outline',        color: colors.neon,    route: '/(app)/expenses'  },
+    { label: 'Asesor IA',     icon: 'chatbubble-ellipses-outline',color: colors.yellow,  route: '/(app)/advisor'   },
+    { label: 'Mi informe',    icon: 'bar-chart-outline',          color: colors.primary, route: '/(app)/reports'   },
+    { label: 'Simulador',     icon: 'trending-up-outline',        color: '#A78BFA',      route: '/(app)/simulator' },
+  ] as const;
+
+  return (
+    <View style={qaStyles.grid}>
+      {actions.map((a) => (
+        <PressableCard
+          key={a.label}
+          style={qaStyles.card}
+          onPress={() => router.push(a.route as any)}
+        >
+          <Ionicons name={a.icon as any} size={26} color={a.color} />
+          <Text variant="caption" color={colors.text.primary} style={qaStyles.label} numberOfLines={2}>
+            {a.label}
+          </Text>
+        </PressableCard>
+      ))}
+    </View>
+  );
+}
+
+const qaStyles = StyleSheet.create({
+  grid:  { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
+  card:  { width: '47%', padding: spacing[4], alignItems: 'center', gap: spacing[2] },
+  label: { textAlign: 'center', fontSize: 12, lineHeight: 16 },
+});
+
+// ─── HomeHighlightCarousel ────────────────────────────────────────────────────
+
+const CARD_W = Dimensions.get('window').width - layout.screenPadding * 2;
+
+interface HomeHighlight {
+  id:        string;
+  tag:       string;
+  tagColor:  string;
+  title:     string;
+  subtitle:  string;
+  icon:      string;
+  iconColor: string;
+  cta?:      { label: string; route: string };
+}
+
+function buildHomeHighlights({
+  totalThisMonth,
+  totalDisposable,
+  totalInvestable,
+  estimatedIncome,
+  expenses,
+  goals,
+}: {
+  totalThisMonth:  number;
+  totalDisposable: number;
+  totalInvestable: number;
+  estimatedIncome: number | null;
+  expenses:        Expense[];
+  goals:           SavingsGoal[];
+}): HomeHighlight[] {
+  const items: HomeHighlight[] = [];
+
+  // 1. Income status
+  if (estimatedIncome && estimatedIncome > 0 && totalThisMonth > 0) {
+    const pct = Math.round((totalThisMonth / estimatedIncome) * 100);
+    if (pct > 100) {
+      items.push({
+        id: 'over_income', tag: 'ATENCIÓN', tagColor: colors.red,
+        title: `Te pasaste un ${pct - 100}%`,
+        subtitle: `Gastaste ${formatCurrency(totalThisMonth - estimatedIncome)} más de tu ingreso mensual.`,
+        icon: 'trending-down-outline', iconColor: colors.red,
+        cta: { label: 'Ver informe', route: '/(app)/reports' },
+      });
+    } else if (pct >= 80) {
+      items.push({
+        id: 'tight_income', tag: 'AJUSTADO', tagColor: colors.yellow,
+        title: `Usaste el ${pct}% del ingreso`,
+        subtitle: 'Poco margen. Revisá los prescindibles antes de que sea tarde.',
+        icon: 'alert-circle-outline', iconColor: colors.yellow,
+        cta: { label: 'Ver gastos', route: '/(app)/expenses' },
+      });
+    } else {
+      items.push({
+        id: 'good_income', tag: 'EN CONTROL', tagColor: colors.neon,
+        title: `Usaste el ${pct}% del ingreso`,
+        subtitle: `Te quedan ${formatCurrency(estimatedIncome - totalThisMonth)} libres este mes. Buen ritmo.`,
+        icon: 'shield-checkmark-outline', iconColor: colors.neon,
+        cta: { label: 'Ver informe', route: '/(app)/reports' },
+      });
+    }
+  }
+
+  // 2. Recoverable from disposable
+  if (totalDisposable >= 5000) {
+    const recoverable = Math.round(totalDisposable * 0.5);
+    items.push({
+      id: 'recoverable', tag: 'OPORTUNIDAD', tagColor: colors.neon,
+      title: `Podrías recuperar ${formatCurrency(recoverable)}`,
+      subtitle: `Ajustando la mitad de tus gastos prescindibles de este mes.`,
+      icon: 'cash-outline', iconColor: colors.neon,
+      cta: { label: 'Hablar con asesor', route: '/(app)/advisor' },
+    });
+  }
+
+  // 3. Top expense category
+  if (expenses.length > 0) {
+    const catTotals: Record<string, number> = {};
+    expenses.forEach(e => {
+      const name = e.category?.name_es
+        ?? (e.classification === 'disposable' ? 'Prescindibles'
+          : e.classification === 'necessary' ? 'Necesarios' : 'Sin clasificar');
+      catTotals[name] = (catTotals[name] ?? 0) + e.amount;
+    });
+    const sorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+    const [topName, topAmt] = sorted[0] ?? ['', 0];
+    if (topAmt > 0) {
+      items.push({
+        id: 'top_category', tag: 'MAYOR GASTO', tagColor: colors.primary,
+        title: topName,
+        subtitle: `Gastaste ${formatCurrency(topAmt)} en ${topName.toLowerCase()} este mes.`,
+        icon: 'pie-chart-outline', iconColor: colors.primary,
+        cta: { label: 'Ver desglose', route: '/(app)/reports' },
+      });
+    }
+  }
+
+  // 4. Investment hint
+  if (totalInvestable >= 10000) {
+    const fciMonthly = Math.round(totalInvestable * 0.030);
+    items.push({
+      id: 'invest_hint', tag: 'INVERSIÓN', tagColor: '#A78BFA',
+      title: `${formatCurrency(totalInvestable)} disponibles`,
+      subtitle: `Invertido en FCI Money Market podrías ganar ~${formatCurrency(fciMonthly)}/mes sin hacer nada más.`,
+      icon: 'trending-up-outline', iconColor: '#A78BFA',
+      cta: { label: 'Ver simulador', route: '/(app)/simulator' },
+    });
+  }
+
+  // 5. Goal progress
+  const activeGoal = goals.find(g => g.current_amount < g.target_amount);
+  if (activeGoal) {
+    const pct = Math.round((activeGoal.current_amount / activeGoal.target_amount) * 100);
+    items.push({
+      id: 'goal_progress', tag: 'META DE AHORRO', tagColor: colors.neon,
+      title: `${activeGoal.emoji ?? '🎯'} ${pct}% completado`,
+      subtitle: `"${activeGoal.title}" — te faltan ${formatCurrency(activeGoal.target_amount - activeGoal.current_amount)}.`,
+      icon: 'flag-outline', iconColor: colors.neon,
+    });
+  }
+
+  // Fallback (no data yet)
+  if (items.length === 0) {
+    items.push({
+      id: 'welcome', tag: 'EMPEZÁ', tagColor: colors.primary,
+      title: 'Registrá tu primer gasto',
+      subtitle: 'Cuando tengas datos reales, acá vas a ver tus insights financieros personalizados.',
+      icon: 'sparkles-outline', iconColor: colors.primary,
+      cta: { label: 'Agregar gasto', route: '/(app)/expenses' },
+    });
+  }
+
+  return items.slice(0, 4);
+}
+
+function HighlightSlide({ highlight, width }: { highlight: HomeHighlight; width: number }) {
+  return (
+    <TouchableOpacity
+      activeOpacity={highlight.cta ? 0.85 : 1}
+      onPress={highlight.cta ? () => router.push(highlight.cta!.route as any) : undefined}
+      style={[slideStyles.card, { width }]}
+    >
+      <View style={[slideStyles.tagRow, { backgroundColor: highlight.tagColor + '15' }]}>
+        <Ionicons name={highlight.icon as any} size={12} color={highlight.iconColor} />
+        <Text style={[slideStyles.tag, { color: highlight.tagColor }]}>{highlight.tag}</Text>
+      </View>
+
+      <Text style={slideStyles.title} numberOfLines={2}>{highlight.title}</Text>
+
+      <Text variant="caption" color={colors.text.secondary} style={slideStyles.subtitle} numberOfLines={3}>
+        {highlight.subtitle}
+      </Text>
+
+      {highlight.cta && (
+        <View style={[slideStyles.cta, { backgroundColor: highlight.iconColor + '12', borderColor: highlight.iconColor + '35' }]}>
+          <Text style={[slideStyles.ctaText, { color: highlight.iconColor }]}>{highlight.cta.label}</Text>
+          <Ionicons name="arrow-forward" size={11} color={highlight.iconColor} />
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const slideStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 16, padding: spacing[5], gap: spacing[3],
+  },
+  tagRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+    alignSelf: 'flex-start', borderRadius: 20,
+    paddingHorizontal: spacing[3], paddingVertical: 4,
+  },
+  tag:      { fontFamily: 'Montserrat_700Bold', fontSize: 10, letterSpacing: 0.6 },
+  title:    { fontFamily: 'Montserrat_700Bold', fontSize: 24, color: colors.text.primary, lineHeight: 30 },
+  subtitle: { lineHeight: 18 },
+  cta: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+    alignSelf: 'flex-start', borderRadius: 8, borderWidth: 1,
+    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+    marginTop: spacing[1],
+  },
+  ctaText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 11 },
+});
+
+function HomeHighlightCarousel({ highlights }: { highlights: HomeHighlight[] }) {
+  const scrollRef  = useRef<ScrollView>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [paused,      setPaused]      = useState(false);
+
+  const scrollTo = useCallback((index: number) => {
+    scrollRef.current?.scrollTo({ x: index * CARD_W, animated: true });
+  }, []);
+
+  useEffect(() => {
+    if (highlights.length <= 1 || paused) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      return;
+    }
+    intervalRef.current = setInterval(() => {
+      setActiveIndex(prev => {
+        const next = (prev + 1) % highlights.length;
+        scrollTo(next);
+        return next;
+      });
+    }, 4500);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [paused, highlights.length, scrollTo]);
+
+  if (highlights.length === 0) return null;
+
+  return (
+    <View style={carouselStyles.container}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        decelerationRate="fast"
+        bounces={false}
+        onScrollBeginDrag={() => {
+          setPaused(true);
+          if (intervalRef.current) clearInterval(intervalRef.current);
+        }}
+        onMomentumScrollEnd={e => {
+          const idx = Math.round(e.nativeEvent.contentOffset.x / CARD_W);
+          setActiveIndex(idx);
+          setPaused(false);
+        }}
+      >
+        {highlights.map(h => <HighlightSlide key={h.id} highlight={h} width={CARD_W} />)}
+      </ScrollView>
+
+      {highlights.length > 1 && (
+        <View style={carouselStyles.dots}>
+          {highlights.map((_, i) => (
+            <TouchableOpacity
+              key={i}
+              onPress={() => { setActiveIndex(i); scrollTo(i); }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <View style={[carouselStyles.dot, i === activeIndex && carouselStyles.dotActive]} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+const carouselStyles = StyleSheet.create({
+  container: { gap: spacing[3] },
+  dots:      { flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  dot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.border.default },
+  dotActive: { width: 20, height: 6, borderRadius: 3, backgroundColor: colors.primary },
+});
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
   const { profile, user } = useAuthStore();
@@ -33,12 +629,9 @@ export default function HomeScreen() {
     fetchSubscriptionsAndProjection,
     projectedBalance,
     estimatedIncome,
-    lastMonthTotal,
-    avgLast3Months,
-    subscriptions,
     isLoading,
   } = useExpensesStore();
-  const { fetchGoals } = useGoalsStore();
+  const { goals, fetchGoals } = useGoalsStore();
 
   useEffect(() => {
     if (user?.id) {
@@ -48,20 +641,27 @@ export default function HomeScreen() {
     }
   }, [user?.id]);
 
-  // Notificaciones basadas en el estado del mes
+  // Notificaciones
   useEffect(() => {
     if (!estimatedIncome || estimatedIncome <= 0) return;
     const now = new Date();
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const daysLeft = daysInMonth - now.getDate();
-    const spentPct = totalThisMonth / estimatedIncome;
-    scheduleBudgetAlert(spentPct, estimatedIncome - totalThisMonth, daysLeft).catch(() => {});
+    scheduleBudgetAlert(totalThisMonth / estimatedIncome, estimatedIncome - totalThisMonth, daysLeft).catch(() => {});
   }, [totalThisMonth, estimatedIncome]);
 
-  const greeting = getGreeting(profile?.full_name ?? undefined);
-  const recentExpenses = expenses.slice(0, 3);
+  const recentExpenses = expenses.slice(0, 4);
 
-  // ── Editar ingreso ─────────────────────────────────────────────────────────
+  const highlights = buildHomeHighlights({
+    totalThisMonth,
+    totalDisposable,
+    totalInvestable,
+    estimatedIncome,
+    expenses,
+    goals,
+  });
+
+  // ── Editar ingreso ──────────────────────────────────────────────────────────
   const [showIncomeModal, setShowIncomeModal] = useState(false);
   const [selectedRange,   setSelectedRange]   = useState<string | null>(null);
   const [savingIncome,    setSavingIncome]     = useState(false);
@@ -76,14 +676,14 @@ export default function HomeScreen() {
   ];
 
   const openIncomeModal = async () => {
-    // Pre-cargar rango actual
     if (user?.id) {
       const { data } = await supabase
         .from('financial_profiles')
         .select('income_range')
         .eq('user_id', user.id)
         .single();
-      setSelectedRange(data?.income_range ?? null);
+      const range: string | null = (data as any)?.income_range ?? null;
+      setSelectedRange(range);
     }
     setShowIncomeModal(true);
   };
@@ -92,8 +692,7 @@ export default function HomeScreen() {
     if (!selectedRange || !user?.id) return;
     setSavingIncome(true);
     try {
-      await supabase
-        .from('financial_profiles')
+      await (supabase.from('financial_profiles') as any)
         .update({ income_range: selectedRange })
         .eq('user_id', user.id);
       setShowIncomeModal(false);
@@ -103,8 +702,14 @@ export default function HomeScreen() {
     }
   };
 
-  // Cálculo estimado del dinero potencialmente invertible
-  const potentialInvestable = totalInvestable > 0 ? totalInvestable * 0.3 : 0;
+  // Contexto para el asesor desde RecoverableCard
+  const recoverableCtx = totalDisposable > 0
+    ? [
+        `Tengo ${formatCurrency(totalDisposable)} en gastos prescindibles este mes.`,
+        `Si redujera la mitad (${formatCurrency(Math.round(totalDisposable * 0.5))}), ¿cuál sería mi mejor movimiento en Argentina hoy?`,
+        `¿En qué instrumento lo meto y cuánto podría ganar por mes?`,
+      ].join(' ')
+    : undefined;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -119,13 +724,11 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* Header */}
+        {/* ── Header ─────────────────────────────────────────────────────────── */}
         <View style={styles.header}>
           <View>
-            <Text variant="label" color={colors.text.secondary}>
-              {greeting.toUpperCase().includes(',' )
-                ? greeting.toUpperCase().split(',')[0]
-                : greeting.toUpperCase()}
+            <Text variant="caption" color={colors.text.tertiary}>
+              {getGreeting(profile?.full_name ?? undefined).split(',')[0].toUpperCase()}
             </Text>
             <Text variant="h4" color={colors.text.primary}>
               {profile?.full_name?.split(' ')[0] ?? 'Ahí vamos'} 👋
@@ -139,242 +742,40 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Main KPI Card */}
-        <Card variant="default" style={styles.mainCard}>
-          <View style={styles.mainCardHeader}>
-            <Text variant="label" color={colors.text.secondary}>GASTASTE ESTE MES</Text>
-            {estimatedIncome !== null && (
-              <TouchableOpacity style={styles.incomeChip} onPress={openIncomeModal}>
-                <Text variant="caption" color={colors.text.tertiary}>
-                  Ingreso: {formatCurrency(estimatedIncome)}
-                </Text>
-                <Ionicons name="pencil-outline" size={11} color={colors.text.tertiary} />
-              </TouchableOpacity>
-            )}
-            {estimatedIncome === null && (
-              <TouchableOpacity style={styles.incomeChip} onPress={openIncomeModal}>
-                <Ionicons name="add-outline" size={11} color={colors.neon} />
-                <Text variant="caption" color={colors.neon}>Cargar ingreso</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          <AmountDisplay amount={totalThisMonth} size="xl" />
-          <View style={styles.mainCardRow}>
-            <View style={styles.kpiItem}>
-              <Text variant="caption" color={colors.text.secondary}>NECESARIO</Text>
-              <Text variant="labelMd" color={colors.accent}>
-                {formatCurrency(totalNecessary)}
-              </Text>
-            </View>
-            <View style={styles.kpiDivider} />
-            <View style={styles.kpiItem}>
-              <Text variant="caption" color={colors.text.secondary}>PRESCINDIBLE</Text>
-              <Text variant="labelMd" color={colors.red}>
-                {formatCurrency(totalDisposable)}
-              </Text>
-            </View>
-            <View style={styles.kpiDivider} />
-            <View style={styles.kpiItem}>
-              <Text variant="caption" color={colors.text.secondary}>INVERTIBLE</Text>
-              <Text variant="labelMd" color={colors.neon}>
-                {formatCurrency(totalInvestable)}
-              </Text>
-            </View>
-          </View>
-        </Card>
+        {/* ── Radar financiero ───────────────────────────────────────────────── */}
+        <HomeHighlightCarousel highlights={highlights} />
 
-        {/* Contexto comparativo */}
-        {(lastMonthTotal !== null || avgLast3Months !== null) && totalThisMonth > 0 && (
-          <View style={styles.contextRow}>
-            {lastMonthTotal !== null && (() => {
-              const diff    = totalThisMonth - lastMonthTotal;
-              const pct     = lastMonthTotal > 0 ? Math.round(Math.abs(diff) / lastMonthTotal * 100) : 0;
-              const up      = diff > 0;
-              const neutral = Math.abs(diff) < lastMonthTotal * 0.03; // <3% = sin cambio
-              return (
-                <View style={styles.contextItem}>
-                  <Text variant="caption" color={colors.text.tertiary}>VS MES ANTERIOR</Text>
-                  <View style={styles.contextValueRow}>
-                    {!neutral && (
-                      <Ionicons
-                        name={up ? 'trending-up' : 'trending-down'}
-                        size={14}
-                        color={up ? colors.red : colors.neon}
-                      />
-                    )}
-                    <Text
-                      variant="labelMd"
-                      color={neutral ? colors.text.secondary : up ? colors.red : colors.neon}
-                    >
-                      {neutral ? 'Sin cambios' : `${up ? '+' : '-'}${pct}%`}
-                    </Text>
-                  </View>
-                  <Text variant="caption" color={colors.text.tertiary}>
-                    {formatCurrency(lastMonthTotal)}
-                  </Text>
-                </View>
-              );
-            })()}
+        {/* ── Hero: estado del mes ────────────────────────────────────────────── */}
+        <MonthHeroCard
+          totalThisMonth={totalThisMonth}
+          totalNecessary={totalNecessary}
+          totalDisposable={totalDisposable}
+          totalInvestable={totalInvestable}
+          estimatedIncome={estimatedIncome}
+          onEditIncome={openIncomeModal}
+        />
 
-            {lastMonthTotal !== null && avgLast3Months !== null && (
-              <View style={styles.contextDivider} />
-            )}
+        {/* ── Dinero recuperable ──────────────────────────────────────────────── */}
+        <RecoverableCard
+          totalDisposable={totalDisposable}
+          onPress={() => router.push({
+            pathname: '/(app)/advisor',
+            params: recoverableCtx ? { initialContext: recoverableCtx } : {},
+          } as any)}
+        />
 
-            {avgLast3Months !== null && (() => {
-              const diff    = totalThisMonth - avgLast3Months;
-              const pct     = avgLast3Months > 0 ? Math.round(Math.abs(diff) / avgLast3Months * 100) : 0;
-              const up      = diff > 0;
-              const neutral = Math.abs(diff) < avgLast3Months * 0.03;
-              return (
-                <View style={styles.contextItem}>
-                  <Text variant="caption" color={colors.text.tertiary}>VS PROMEDIO 3M</Text>
-                  <View style={styles.contextValueRow}>
-                    {!neutral && (
-                      <Ionicons
-                        name={up ? 'trending-up' : 'trending-down'}
-                        size={14}
-                        color={up ? colors.red : colors.neon}
-                      />
-                    )}
-                    <Text
-                      variant="labelMd"
-                      color={neutral ? colors.text.secondary : up ? colors.red : colors.neon}
-                    >
-                      {neutral ? 'Sin cambios' : `${up ? '+' : '-'}${pct}%`}
-                    </Text>
-                  </View>
-                  <Text variant="caption" color={colors.text.tertiary}>
-                    prom. {formatCurrency(avgLast3Months)}
-                  </Text>
-                </View>
-              );
-            })()}
-
-            {estimatedIncome !== null && estimatedIncome > 0 && (() => {
-              const pct     = Math.round(totalThisMonth / estimatedIncome * 100);
-              const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-              const dayOfMonth  = new Date().getDate();
-              const expectedPct = Math.round(dayOfMonth / daysInMonth * 100);
-              const onTrack     = pct <= expectedPct + 5;
-              return (
-                <>
-                  <View style={styles.contextDivider} />
-                  <View style={styles.contextItem}>
-                    <Text variant="caption" color={colors.text.tertiary}>DEL INGRESO</Text>
-                    <View style={styles.contextValueRow}>
-                      <Text
-                        variant="labelMd"
-                        color={onTrack ? colors.neon : colors.red}
-                      >
-                        {pct}%
-                      </Text>
-                    </View>
-                    <Text variant="caption" color={colors.text.tertiary}>
-                      {onTrack ? 'en ritmo' : 'acelerado'}
-                    </Text>
-                  </View>
-                </>
-              );
-            })()}
-          </View>
-        )}
-
-        {/* Termómetro del mes */}
-        <Card variant="default" style={styles.thermometerCard}>
-          <MonthlyThermometer spent={totalThisMonth} budget={estimatedIncome ?? 0} />
-        </Card>
-
-        {/* Alerta / Insight */}
-        {totalDisposable > 0 && (
-          <Card variant="default" style={styles.insightCard}>
-            <View style={styles.insightRow}>
-              <Ionicons name="warning-outline" size={20} color={colors.yellow} />
-              <View style={{ flex: 1, marginLeft: spacing[3] }}>
-                <Text variant="bodySmall" color={colors.text.primary}>
-                  Tenés {formatCurrency(totalDisposable)} en gastos prescindibles este mes.
-                </Text>
-                <Text variant="caption" color={colors.text.secondary} style={{ marginTop: spacing[1] }}>
-                  Si evitás la mitad, podés arrancar a invertir.
-                </Text>
-              </View>
-            </View>
-          </Card>
-        )}
-
-        {/* "Estás perdiendo X" — oportunidad de inversión */}
-        {totalDisposable > 20000 && (() => {
-          const fciReturn    = Math.round(totalDisposable * 0.5 * 0.02);  // mitad de prescindibles al 2%/mes
-          const cedearReturn = Math.round(totalDisposable * 0.5 * 0.035);
-          const investCtx = [
-            `Tengo ${formatCurrency(totalDisposable)} en gastos prescindibles este mes.`,
-            `Si invirtiese la mitad (${formatCurrency(Math.round(totalDisposable * 0.5))}), ¿en qué me conviene meterlo en Argentina hoy?`,
-            `¿Cuánto podría generar por mes con eso? Contame opciones concretas.`,
-          ].join(' ');
-          return (
-            <TouchableOpacity
-              activeOpacity={0.88}
-              style={styles.lossCard}
-              onPress={() => router.push({ pathname: '/(app)/advisor', params: { initialContext: investCtx } } as any)}
-            >
-              <View style={styles.lossTop}>
-                <Ionicons name="trending-down" size={18} color={colors.red} />
-                <Text style={styles.lossTitle}>Estás dejando ir {formatCurrency(totalDisposable)}/mes</Text>
-              </View>
-              <Text variant="caption" color={colors.text.secondary} style={{ lineHeight: 18 }}>
-                Si invertís la mitad de tus prescindibles podés generar entre{' '}
-                <Text variant="caption" color={colors.neon}>{formatCurrency(fciReturn)}</Text>
-                {' '}(FCI) y{' '}
-                <Text variant="caption" color={colors.neon}>{formatCurrency(cedearReturn)}</Text>
-                {' '}(CEDEARs) por mes sin hacer nada más.
-              </Text>
-              <View style={styles.lossBtn}>
-                <Text style={styles.lossBtnText}>¿En qué invierto?</Text>
-                <Ionicons name="arrow-forward" size={13} color={colors.black} />
-              </View>
-            </TouchableOpacity>
-          );
-        })()}
-
-        {/* Quick Actions */}
+        {/* ── Acciones rápidas ────────────────────────────────────────────────── */}
         <View style={styles.sectionHeader}>
           <Text variant="label" color={colors.text.secondary}>ACCIONES RÁPIDAS</Text>
         </View>
-        <View style={styles.quickActions}>
-          <PressableCard
-            style={styles.actionCard}
-            onPress={() => router.push('/(app)/expenses')}
-          >
-            <Ionicons name="add-circle-outline" size={28} color={colors.neon} />
-            <Text variant="bodySmall" color={colors.text.primary} style={styles.actionLabel}>
-              Agregar gasto
-            </Text>
-          </PressableCard>
-          <PressableCard
-            style={styles.actionCard}
-            onPress={() => router.push('/(app)/advisor')}
-          >
-            <Ionicons name="chatbubble-ellipses-outline" size={28} color={colors.yellow} />
-            <Text variant="bodySmall" color={colors.text.primary} style={styles.actionLabel}>
-              Asesor IA
-            </Text>
-          </PressableCard>
-          <PressableCard
-            style={styles.actionCard}
-            onPress={() => router.push('/(app)/reports')}
-          >
-            <Ionicons name="bar-chart-outline" size={28} color={colors.accent} />
-            <Text variant="bodySmall" color={colors.text.primary} style={styles.actionLabel}>
-              Mi informe
-            </Text>
-          </PressableCard>
-        </View>
+        <QuickActions />
 
-        {/* Metas de ahorro */}
+        {/* ── Metas de ahorro ────────────────────────────────────────────────── */}
         {user?.id && (
           <GoalsSection userId={user.id} projectedMonthlyFree={projectedBalance} />
         )}
 
-        {/* Últimos gastos */}
+        {/* ── Últimos gastos ──────────────────────────────────────────────────── */}
         <View style={styles.sectionHeader}>
           <Text variant="label" color={colors.text.secondary}>ÚLTIMOS GASTOS</Text>
           <TouchableOpacity onPress={() => router.push('/(app)/expenses')}>
@@ -384,133 +785,47 @@ export default function HomeScreen() {
 
         {recentExpenses.length === 0 ? (
           <Card style={styles.emptyCard}>
+            <Ionicons name="wallet-outline" size={36} color={colors.text.tertiary} />
             <Text variant="body" color={colors.text.secondary} align="center">
-              Todavía no cargaste gastos.{'\n'}Empezá a trackear tu plata.
+              Todavía no cargaste gastos este mes.
             </Text>
-            <TouchableOpacity
-              style={styles.emptyBtn}
-              onPress={() => router.push('/(app)/expenses')}
-            >
-              <Text variant="bodySmall" color={colors.neon}>
-                + Agregar primer gasto
-              </Text>
+            <TouchableOpacity onPress={() => router.push('/(app)/expenses')}>
+              <Text variant="bodySmall" color={colors.neon}>+ Agregar primer gasto</Text>
             </TouchableOpacity>
           </Card>
         ) : (
           <View style={styles.expenseList}>
             {recentExpenses.map((expense) => (
-              <PressableCard
+              <TouchableOpacity
                 key={expense.id}
                 style={styles.expenseItem}
                 onPress={() => router.push('/(app)/expenses')}
+                activeOpacity={0.7}
               >
-                <View style={styles.expenseRow}>
-                  <View style={styles.expenseLeft}>
-                    <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
-                      {expense.description}
-                    </Text>
-                    <View style={styles.expenseMetaRow}>
-                      <Text variant="caption" color={colors.text.secondary}>
-                        {expense.date}
-                      </Text>
-                      {expense.classification && (
-                        <Badge classification={expense.classification} small />
-                      )}
-                    </View>
-                  </View>
-                  <Text variant="labelMd" color={colors.text.primary}>
-                    {formatCurrency(expense.amount)}
+                <View style={styles.expenseLeft}>
+                  <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
+                    {expense.description}
                   </Text>
+                  <View style={styles.expenseMeta}>
+                    <Text variant="caption" color={colors.text.tertiary}>{expense.date}</Text>
+                    {expense.classification && <Badge classification={expense.classification} label={expense.classification} small />}
+                  </View>
                 </View>
-              </PressableCard>
+                <Text variant="labelMd" color={colors.text.primary}>
+                  {formatCurrency(expense.amount)}
+                </Text>
+              </TouchableOpacity>
             ))}
+            <TouchableOpacity style={styles.seeAllRow} onPress={() => router.push('/(app)/expenses')}>
+              <Text variant="label" color={colors.text.secondary}>Ver todos los gastos</Text>
+              <Ionicons name="arrow-forward" size={14} color={colors.text.secondary} />
+            </TouchableOpacity>
           </View>
         )}
-
-        {/* Proyección del mes siguiente */}
-        {projectedBalance !== null && (
-          <Card variant="default" style={styles.projectionCard}>
-            <View style={styles.projectionHeader}>
-              <Ionicons name="trending-up-outline" size={18} color={colors.neon} />
-              <Text variant="label" color={colors.text.secondary}>EL MES QUE VIENE TE QUEDAN</Text>
-            </View>
-            <Text variant="numberLg" color={projectedBalance >= 0 ? colors.neon : colors.red}>
-              {formatCurrency(projectedBalance)}
-            </Text>
-            {projectedBalance > 0 && (
-              <View style={styles.projectionTip}>
-                <Ionicons name="bulb-outline" size={14} color={colors.yellow} />
-                <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }}>
-                  Si lo ponés en un FCI Money Market (~3% TNA), ganarías{' '}
-                  <Text variant="caption" color={colors.neon}>
-                    {formatCurrency(Math.round(projectedBalance * 0.03 / 12))}
-                  </Text>{' '}en un mes sin hacer nada.
-                </Text>
-              </View>
-            )}
-            <Text variant="caption" color={colors.text.tertiary}>
-              Basado en tus gastos promedio de los últimos 3 meses
-              {estimatedIncome ? ` vs ingreso de ${formatCurrency(estimatedIncome)}` : ''}.
-            </Text>
-          </Card>
-        )}
-
-        {/* Suscripciones detectadas */}
-        {subscriptions.length > 0 && (
-          <>
-            <View style={styles.sectionHeader}>
-              <Text variant="label" color={colors.text.secondary}>SUSCRIPCIONES DETECTADAS</Text>
-              <Text variant="label" color={colors.neon}>{subscriptions.length}</Text>
-            </View>
-            <Card style={styles.subscriptionsCard}>
-              {subscriptions.map((sub, i) => (
-                <View
-                  key={sub.description}
-                  style={[styles.subItem, i < subscriptions.length - 1 && styles.subItemBorder]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text variant="bodySmall" color={colors.text.primary}>{sub.description}</Text>
-                    <Text variant="caption" color={colors.text.secondary}>
-                      {sub.occurrences} veces en 90 días
-                    </Text>
-                  </View>
-                  <Text variant="labelMd" color={colors.yellow}>
-                    {formatCurrency(sub.averageAmount)}/mes
-                  </Text>
-                </View>
-              ))}
-              <View style={styles.subTotal}>
-                <Text variant="label" color={colors.text.secondary}>TOTAL MENSUAL</Text>
-                <Text variant="labelMd" color={colors.red}>
-                  {formatCurrency(subscriptions.reduce((s, sub) => s + sub.averageAmount, 0))}/mes
-                </Text>
-              </View>
-            </Card>
-          </>
-        )}
-
-        {/* Simulador promo */}
-        <PressableCard
-          variant="neon"
-          style={styles.simulatorPromo}
-          onPress={() => router.push('/(app)/reports')}
-        >
-          <View style={styles.simulatorContent}>
-            <Ionicons name="trending-up" size={32} color={colors.neon} />
-            <View style={{ flex: 1 }}>
-              <Text variant="subtitle" color={colors.neon}>
-                ¿Qué hubiera pasado si invertías?
-              </Text>
-              <Text variant="bodySmall" color={colors.text.secondary}>
-                Simulá con datos reales de Argentina.
-              </Text>
-            </View>
-            <Ionicons name="arrow-forward" size={20} color={colors.neon} />
-          </View>
-        </PressableCard>
 
       </ScrollView>
-      {/* ── Modal editar ingreso ── */}
+
+      {/* ── Modal editar ingreso ────────────────────────────────────────────── */}
       <Modal
         visible={showIncomeModal}
         transparent
@@ -533,10 +848,7 @@ export default function HomeScreen() {
               {INCOME_OPTIONS.map((opt) => (
                 <TouchableOpacity
                   key={opt.value}
-                  style={[
-                    styles.incomeOption,
-                    selectedRange === opt.value && styles.incomeOptionActive,
-                  ]}
+                  style={[styles.incomeOption, selectedRange === opt.value && styles.incomeOptionActive]}
                   onPress={() => setSelectedRange(opt.value)}
                 >
                   <Text
@@ -565,246 +877,75 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
-
     </SafeAreaView>
   );
 }
 
+// ─── Estilos ──────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg.primary },
+  safe:   { flex: 1, backgroundColor: colors.bg.primary },
   scroll: {
     flexGrow: 1,
     paddingHorizontal: layout.screenPadding,
     paddingTop: spacing[4],
-    paddingBottom: layout.tabBarHeight + spacing[4],
+    paddingBottom: layout.tabBarHeight + spacing[6],
     gap: spacing[4],
   },
+
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing[2],
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingBottom: spacing[2],
   },
   avatarBtn: { padding: spacing[1] },
-  mainCard: {
-    padding: spacing[5],
-    gap: spacing[4],
-  },
-  mainCardHeader: {
-    flexDirection:  'row',
-    alignItems:     'center',
-    justifyContent: 'space-between',
-  },
-  incomeChip: {
-    flexDirection:     'row',
-    alignItems:        'center',
-    gap:               4,
-    paddingHorizontal: spacing[2],
-    paddingVertical:   3,
-    borderRadius:      20,
-    borderWidth:       1,
-    borderColor:       colors.border.default,
-    backgroundColor:   colors.bg.secondary,
-  },
-  mainCardRow: {
-    flexDirection: 'row',
-    paddingTop: spacing[4],
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
-  },
-  kpiItem: { flex: 1, gap: spacing[1] },
-  kpiDivider: {
-    width: 1,
-    backgroundColor: colors.border.subtle,
-    marginHorizontal: spacing[3],
-  },
-  insightCard: {
-    padding: spacing[4],
-    borderLeftWidth: 3,
-    borderLeftColor: colors.yellow,
-  },
-  insightRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  lossCard: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1,
-    borderColor: colors.red + '40',
-    borderLeftWidth: 3,
-    borderLeftColor: colors.red,
-    borderRadius: 12,
-    padding: spacing[4],
-    gap: spacing[3],
-  },
-  lossTop:   { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  lossTitle: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.red, flex: 1 },
-  lossBtn:   { flexDirection: 'row', alignItems: 'center', gap: spacing[2], alignSelf: 'flex-start', backgroundColor: colors.neon, borderRadius: 8, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
-  lossBtnText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: colors.black },
+
   sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  quickActions: {
-    flexDirection: 'row',
-    gap: spacing[3],
-  },
-  actionCard: {
-    flex: 1,
-    padding: spacing[4],
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  actionLabel: {
-    textAlign: 'center',
-    fontSize: 12,
-  },
-  expenseList: { gap: spacing[2] },
-  expenseItem: { padding: spacing[4] },
-  expenseRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  expenseLeft: { flex: 1, marginRight: spacing[4], gap: spacing[1] },
-  expenseMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  emptyCard: {
-    padding: spacing[6],
-    alignItems: 'center',
-    gap: spacing[4],
-  },
-  emptyBtn: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     marginTop: spacing[2],
   },
 
-  // ── Income modal ──
-  incomeOverlay: {
-    flex:            1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent:  'flex-end',
+  // Expenses
+  expenseList: {
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 14, overflow: 'hidden',
   },
+  expenseItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+    borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+  },
+  expenseLeft: { flex: 1, marginRight: spacing[4], gap: spacing[1] },
+  expenseMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  seeAllRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2],
+    paddingVertical: spacing[4],
+  },
+  emptyCard: { padding: spacing[6], alignItems: 'center', gap: spacing[4] },
+
+  // Income modal
+  incomeOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   incomeSheet: {
-    backgroundColor:  colors.bg.primary,
-    borderTopLeftRadius:  20,
-    borderTopRightRadius: 20,
-    padding:          spacing[5],
-    paddingBottom:    spacing[10],
-    gap:              spacing[3],
+    backgroundColor: colors.bg.primary, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    padding: spacing[5], paddingBottom: spacing[10], gap: spacing[3],
   },
   incomeSheetHandle: {
-    width:           40,
-    height:          4,
-    borderRadius:    2,
-    backgroundColor: colors.border.default,
-    alignSelf:       'center',
-    marginBottom:    spacing[2],
+    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border.default,
+    alignSelf: 'center', marginBottom: spacing[2],
   },
   incomeSheetHeader: {
-    flexDirection:  'row',
-    alignItems:     'center',
-    justifyContent: 'space-between',
-    marginBottom:   spacing[1],
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[1],
   },
   incomeOptions: { gap: spacing[2] },
   incomeOption: {
-    flexDirection:     'row',
-    alignItems:        'center',
-    justifyContent:    'space-between',
-    paddingVertical:   spacing[4],
-    paddingHorizontal: spacing[4],
-    borderRadius:      10,
-    borderWidth:       1,
-    borderColor:       colors.border.default,
-    backgroundColor:   colors.bg.secondary,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: spacing[4], paddingHorizontal: spacing[4],
+    borderRadius: 10, borderWidth: 1, borderColor: colors.border.default,
+    backgroundColor: colors.bg.secondary,
   },
-  incomeOptionActive: {
-    borderColor:     colors.primary,
-    backgroundColor: colors.primary + '0D',
-  },
+  incomeOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '0D' },
   incomeSaveBtn: {
-    marginTop:      spacing[3],
-    backgroundColor: colors.primary,
-    borderRadius:   12,
-    height:         52,
-    alignItems:     'center',
-    justifyContent: 'center',
-  },
-  projectionCard: {
-    padding: spacing[5],
-    gap: spacing[2],
-    borderLeftWidth: 3,
-    borderLeftColor: colors.primary,
-  },
-  projectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  projectionTip: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing[2],
-    backgroundColor: colors.yellow + '0F',
-    padding: spacing[3],
-    borderLeftWidth: 2,
-    borderLeftColor: colors.yellow,
-  },
-  subscriptionsCard: {
-    padding: spacing[4],
-  },
-  subItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing[3],
-  },
-  subItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
-  },
-  subTotal: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: colors.border.default,
-    marginTop: spacing[1],
-  },
-  thermometerCard: {
-    padding: spacing[5],
-  },
-  contextRow: {
-    flexDirection:    'row',
-    backgroundColor:  colors.bg.card,
-    borderWidth:      1,
-    borderColor:      colors.border.default,
-    paddingVertical:  spacing[4],
-  },
-  contextItem: {
-    flex:       1,
-    alignItems: 'center',
-    gap:        spacing[1],
-  },
-  contextValueRow: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[1],
-  },
-  contextDivider: {
-    width:           1,
-    backgroundColor: colors.border.subtle,
-    marginVertical:  spacing[1],
-  },
-  simulatorPromo: {
-    padding: spacing[5],
-    marginTop: spacing[2],
-  },
-  simulatorContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[4],
+    marginTop: spacing[3], backgroundColor: colors.primary,
+    borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center',
   },
 });
