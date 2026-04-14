@@ -20,6 +20,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { colors, spacing, layout } from '@/theme';
 import { Text, Card, Button, Input } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
+import { usePlanStore } from '@/store/planStore';
+import { PLANS } from '@/lib/plans';
 import { supabase } from '@/lib/supabase';
 
 const editSchema = z.object({
@@ -59,6 +61,22 @@ function MenuItem({ icon, label, description, onPress, color = colors.text.secon
 
 export default function ProfileScreen() {
   const { profile, user, signOut, updateProfile, isLoading } = useAuthStore();
+  const {
+    effectivePlan,
+    msgCount,
+    msgLimit,
+    isTrialActive,
+    daysLeftInTrial,
+    load: loadPlan,
+  } = usePlanStore();
+
+  useEffect(() => {
+    if (user?.id) loadPlan(user.id);
+  }, [user?.id]);
+
+  const trialActive = isTrialActive();
+  const daysLeft    = daysLeftInTrial();
+  const plan        = PLANS[effectivePlan];
   const [showEditModal, setShowEditModal] = useState(false);
   const [gmailEmail,   setGmailEmail]   = useState<string | null>(null);
   const [gmailExpired, setGmailExpired] = useState(false);
@@ -263,26 +281,61 @@ export default function ProfileScreen() {
         </View>
 
         {/* Plan */}
-        <Card variant={profile?.subscription_plan === 'pro' ? 'neon' : 'default'} style={styles.planCard}>
-          <View style={styles.planRow}>
-            <View>
-              <Text variant="label" color={colors.text.secondary}>PLAN ACTUAL</Text>
-              <Text variant="subtitle" color={profile?.subscription_plan === 'pro' ? colors.neon : colors.text.primary}>
-                {profile?.subscription_plan === 'pro' ? 'Pro' : 'Gratis'}
+        <Card style={[styles.planCard, trialActive && { borderColor: colors.neon + '60', borderWidth: 1 }]}>
+          {/* Trial banner */}
+          {trialActive && (
+            <View style={styles.trialBanner}>
+              <Ionicons name="star" size={13} color={colors.black} />
+              <Text variant="caption" color={colors.black} style={{ fontFamily: 'Montserrat_700Bold', flex: 1 }}>
+                Trial Premium activo
+                {daysLeft !== null && daysLeft > 0 ? ` · ${daysLeft} día${daysLeft !== 1 ? 's' : ''} restantes` : ' · vence hoy'}
               </Text>
             </View>
-            {profile?.subscription_plan === 'free' && (
-              <Button
-                label="MEJORAR"
-                variant="neon"
-                size="sm"
-                onPress={() => Alert.alert('Próximamente', 'El plan Pro va a estar disponible muy pronto.')}
-              />
-            )}
+          )}
+
+          {/* Plan header */}
+          <View style={styles.planRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+              <Text style={{ fontSize: 20 }}>{plan.emoji}</Text>
+              <View>
+                <Text variant="label" color={colors.text.secondary}>PLAN ACTUAL</Text>
+                <Text variant="subtitle" color={plan.color !== '#6B7280' ? plan.color : colors.text.primary}>
+                  {plan.name}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.planBtn}
+              onPress={() => router.push('/(app)/plans')}
+            >
+              <Text variant="caption" color={colors.black} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                {effectivePlan === 'premium' && !trialActive ? 'GESTIONAR' : 'VER PLANES'}
+              </Text>
+            </TouchableOpacity>
           </View>
-          {profile?.subscription_plan === 'free' && (
+
+          {/* Barra de uso de mensajes */}
+          {msgLimit !== null && (
+            <View style={styles.planUsage}>
+              <View style={styles.planUsageInfo}>
+                <Text variant="caption" color={colors.text.secondary}>Mensajes IA este mes</Text>
+                <Text variant="caption"
+                  color={msgCount >= msgLimit ? colors.red : colors.text.primary}
+                  style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                  {msgCount} / {msgLimit}
+                </Text>
+              </View>
+              <View style={styles.planTrack}>
+                <View style={[styles.planFill, {
+                  width: `${Math.min((msgCount / msgLimit) * 100, 100)}%`,
+                  backgroundColor: msgCount >= msgLimit ? colors.red : plan.color !== '#6B7280' ? plan.color : colors.primary,
+                }]} />
+              </View>
+            </View>
+          )}
+          {msgLimit === null && (
             <Text variant="caption" color={colors.text.secondary}>
-              Con Pro: asesor IA ilimitado, escaneo de tickets ilimitado y más.
+              Mensajes IA ilimitados incluidos en tu plan.
             </Text>
           )}
         </Card>
@@ -371,7 +424,7 @@ export default function ProfileScreen() {
                 >
                   <Ionicons name="refresh-outline" size={16} color={colors.yellow} />
                   <View style={{ flex: 1 }}>
-                    <Text variant="bodySmall" color={colors.yellow} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+                    <Text variant="bodySmall" color={colors.yellow} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
                       Reconectá tu cuenta de Gmail
                     </Text>
                     <Text variant="caption" color={colors.text.secondary}>
@@ -553,6 +606,19 @@ const styles = StyleSheet.create({
   editBtn: { padding: spacing[2] },
   planCard: { padding: spacing[5], gap: spacing[3] },
   planRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  trialBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    backgroundColor: colors.neon, borderRadius: 8,
+    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+  },
+  planBtn: {
+    backgroundColor: colors.primary, borderRadius: 6,
+    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+  },
+  planUsage: { gap: spacing[2] },
+  planUsageInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  planTrack: { height: 5, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
+  planFill:  { height: '100%', borderRadius: 3 },
   section: { gap: spacing[3] },
   sectionTitle: {},
   menuCard: { padding: 0, overflow: 'hidden' },

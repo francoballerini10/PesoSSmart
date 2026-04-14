@@ -301,6 +301,56 @@ serve(async (req) => {
       } catch { /* contexto DB no crítico */ }
     }
 
+    // ── Validar límite de mensajes (defensa en profundidad, no solo frontend) ──
+    if (!generate_welcome && user_id) {
+      try {
+        const sb = createClient(
+          Deno.env.get('SUPABASE_URL')!,
+          Deno.env.get('SUPABASE_ANON_KEY')!,
+          { global: { headers: { Authorization: authHeader } } },
+        );
+
+        const { data: planRow } = await sb
+          .from('profiles')
+          .select('subscription_plan, subscription_status, plan_expires_at')
+          .eq('id', user_id)
+          .single();
+
+        if (planRow) {
+          const raw     = planRow.subscription_plan ?? 'free';
+          const status  = planRow.subscription_status ?? 'inactive';
+          const expires = planRow.plan_expires_at;
+
+          let effective = 'free';
+          if (raw !== 'free') {
+            if (status === 'active') effective = raw;
+            else if (status === 'trial' && expires && new Date(expires) > new Date()) effective = raw;
+          }
+
+          const LIMITS: Record<string, number | null> = { free: 15, pro: 100, premium: null };
+          const limit = LIMITS[effective] ?? 15;
+
+          if (limit !== null) {
+            const now   = new Date();
+            const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            const { data: usage } = await sb
+              .from('ai_usage')
+              .select('msg_count')
+              .eq('user_id', user_id)
+              .eq('month', month)
+              .maybeSingle();
+
+            if ((usage?.msg_count ?? 0) >= limit) {
+              return new Response(
+                JSON.stringify({ error: 'limit_reached', plan: effective, limit }),
+                { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+              );
+            }
+          }
+        }
+      } catch { /* no bloquear si el check falla */ }
+    }
+
     // ── Fusionar contexto del cliente (más preciso para el mes actual) ────────
     if (client_context) {
       ctx.has_data = true;
