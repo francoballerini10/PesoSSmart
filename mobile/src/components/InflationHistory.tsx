@@ -246,7 +246,7 @@ function TrendSummary({
         <Ionicons name={meta.icon as any} size={16} color={meta.color} />
       </View>
       <View style={{ flex: 1, gap: 2 }}>
-        <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+        <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
           {trendLabel}
         </Text>
         {avgPersonalLast3 !== null && avgOfficialLast3 !== null && (

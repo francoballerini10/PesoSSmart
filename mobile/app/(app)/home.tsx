@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
+  Image,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
@@ -21,6 +22,12 @@ import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
 import type { Expense } from '@/types';
 import type { DetectedSubscription } from '@/store/expensesStore';
 import { GoalsSection } from '@/components/GoalsSection';
+import { StreakCard } from '@/components/StreakCard';
+import { HealthScoreCard, computeHealthScore } from '@/components/HealthScore';
+import { DecisionHistorySection, buildOpportunities } from '@/components/DecisionHistory';
+import { RoundUpSummary } from '@/components/RoundUpSummary';
+import { useStreakStore } from '@/store/streakStore';
+import { useRoundUpStore } from '@/store/roundUpStore';
 import { scheduleBudgetAlert } from '@/lib/notifications';
 import { getGreeting, formatCurrency } from '@/utils/format';
 
@@ -346,7 +353,7 @@ function RecoverableCard({
       {/* CTA */}
       <View style={recStyles.cta}>
         <Text style={recStyles.ctaText}>¿Cómo lo recorto?</Text>
-        <Ionicons name="arrow-forward" size={13} color={colors.black} />
+        <Ionicons name="arrow-forward" size={13} color={colors.white} />
       </View>
     </TouchableOpacity>
   );
@@ -374,7 +381,7 @@ const recStyles = StyleSheet.create({
     alignSelf: 'flex-start', backgroundColor: colors.neon,
     borderRadius: 8, paddingHorizontal: spacing[4], paddingVertical: spacing[2],
   },
-  ctaText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: colors.black },
+  ctaText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: colors.white },
 });
 
 // ─── TopCategoriesCard ────────────────────────────────────────────────────────
@@ -508,77 +515,96 @@ interface DataInsight {
 
 function buildKeyInsights({
   expenses, subscriptions, totalThisMonth, totalDisposable,
-  totalNecessary, totalInvestable, estimatedIncome, goals,
+  totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal,
 }: {
   expenses:        Expense[];
   subscriptions:   DetectedSubscription[];
   totalThisMonth:  number;
   totalDisposable: number;
-  totalNecessary:  number;
   totalInvestable: number;
   estimatedIncome: number | null;
   goals:           SavingsGoal[];
+  prevMonthCats:   Record<string, { name: string; amount: number }>;
+  prevMonthTotal:  number;
 }): DataInsight[] {
   const items: DataInsight[] = [];
   const now         = new Date();
   const dayOfMonth  = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
-  // 1. Proyección del mes
-  if (totalThisMonth > 0 && dayOfMonth > 3) {
-    const dailyRate = totalThisMonth / dayOfMonth;
-    const projected = Math.round(dailyRate * daysInMonth);
-    const isOverBudget = estimatedIncome && projected > estimatedIncome;
+  // ── Compute current month by category ────────────────────────────────────────
+  const currCats: Record<string, { name: string; amount: number; count: number }> = {};
+  expenses.forEach(e => {
+    const name = (e as any).category?.name_es ?? 'Sin categoría';
+    if (!currCats[name]) currCats[name] = { name, amount: 0, count: 0 };
+    currCats[name].amount += e.amount;
+    currCats[name].count  += 1;
+  });
+  const sortedCats = Object.values(currCats).sort((a, b) => b.amount - a.amount);
+  const topCat     = sortedCats[0];
+
+  // ── Week expenses (últimos 7 días) ────────────────────────────────────────────
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - 7);
+  const weekStartStr = weekStart.toISOString().slice(0, 10);
+  const weekExps     = expenses.filter(e => e.date >= weekStartStr);
+
+  // ── 1. PRIMERA SEMANA — proyección ─────────────────────────────────────────
+  if (totalThisMonth > 0 && dayOfMonth >= 2) {
+    const projected    = Math.round((totalThisMonth / dayOfMonth) * daysInMonth);
+    const overIncome   = !!(estimatedIncome && projected > estimatedIncome);
     items.push({
       id: 'projection',
-      icon: isOverBudget ? 'trending-up-outline' : 'analytics-outline',
-      iconColor: isOverBudget ? colors.red : colors.primary,
+      icon: overIncome ? 'trending-up-outline' : 'analytics-outline',
+      iconColor: overIncome ? colors.red : colors.primary,
       title: 'Proyección del mes',
-      body: isOverBudget
-        ? `Arrancaste el mes con ${formatCurrency(totalThisMonth)}. Si seguís así, en ${daysInMonth} días vas a gastar ${formatCurrency(projected)} — eso supera tu ingreso estimado.`
-        : `Llevas ${formatCurrency(totalThisMonth)} gastados. A este ritmo, vas a cerrar el mes en ${formatCurrency(projected)}. ${estimatedIncome ? `Eso es el ${Math.round((projected / estimatedIncome) * 100)}% del ingreso.` : '¿Está dentro de lo esperado?'}`,
+      body: `Arrancaste el mes con ${formatCurrency(totalThisMonth)} en gastos. Si seguís así, en ${daysInMonth} días vas a gastar ${formatCurrency(projected)}.${overIncome ? ' Eso supera tu ingreso estimado.' : ' ¿Está dentro de lo que esperabas?'}`,
       cta: { label: 'Ver análisis', route: '/(app)/expenses?tab=analisis' },
     });
   }
 
-  // 2. Prescindibles — oportunidad de ahorro
-  if (totalThisMonth > 0 && totalDisposable > 0) {
-    const pct = Math.round((totalDisposable / totalThisMonth) * 100);
-    const recoverable = Math.round(totalDisposable * 0.5);
-    const fciGain = Math.round(recoverable * 0.03);
-    items.push({
-      id: 'disposable',
-      icon: 'wallet-outline',
-      iconColor: pct > 20 ? colors.red : colors.yellow,
-      title: `${pct}% de tus gastos son prescindibles`,
-      body: `El ${pct}% de lo que gastaste este mes (${formatCurrency(totalDisposable)}) fue prescindible. Ajustando la mitad podrías recuperar ${formatCurrency(recoverable)}, que en FCI generaría ~${formatCurrency(fciGain)}/mes.`,
-      cta: { label: 'Hablar con asesor', route: '/(app)/advisor' },
-    });
-  }
-
-  // 3. Top categoría vs ingreso
-  if (expenses.length > 0 && estimatedIncome && estimatedIncome > 0) {
-    const catTotals: Record<string, { name: string; amount: number }> = {};
-    expenses.forEach(e => {
-      const name = (e as any).category?.name_es ?? (e.classification === 'disposable' ? 'Prescindibles' : 'Otros');
-      if (!catTotals[name]) catTotals[name] = { name, amount: 0 };
-      catTotals[name].amount += e.amount;
-    });
-    const top = Object.values(catTotals).sort((a, b) => b.amount - a.amount)[0];
-    if (top) {
-      const pct = Math.round((top.amount / estimatedIncome) * 100);
+  // ── 2. PRIMERA SEMANA — categoría vs mes pasado ────────────────────────────
+  if (topCat && dayOfMonth <= 12 && dayOfMonth >= 3 && prevMonthCats[topCat.name]) {
+    const prevAmt     = prevMonthCats[topCat.name].amount;
+    const weeklyPace  = topCat.amount; // amount in first ~week
+    const projectedM  = Math.round((weeklyPace / dayOfMonth) * daysInMonth);
+    if (projectedM > prevAmt * 0.9) {
       items.push({
-        id: 'top_category',
-        icon: 'pie-chart-outline',
-        iconColor: colors.primary,
-        title: `${top.name}: ${pct}% del ingreso`,
-        body: `Tu categoría más cara este mes fue "${top.name}" con ${formatCurrency(Math.round(top.amount))}. Representa el ${pct}% de tus ingresos estimados — comparado con el promedio del 12% en tu perfil.`,
+        id: 'week1_vs_prev',
+        icon: 'trending-up-outline',
+        iconColor: colors.red,
+        title: `${topCat.name}: camino a superar el mes pasado`,
+        body: `El mes pasado gastaste ${formatCurrency(Math.round(prevAmt))} en ${topCat.name}. Este mes ya llevas ${formatCurrency(Math.round(topCat.amount))} en la primera semana. Vas camino a superarlo.`,
         cta: { label: 'Ver desglose', route: '/(app)/expenses?tab=analisis' },
       });
     }
   }
 
-  // 4. Suscripciones detectadas
+  // ── 3. GASTOS CHICOS QUE SUMAN ─────────────────────────────────────────────
+  if (dayOfMonth > 3) {
+    const smallCats: Record<string, { name: string; total: number; count: number }> = {};
+    expenses.filter(e => e.amount < 6000).forEach(e => {
+      const name = (e as any).category?.name_es ?? 'Varios';
+      if (!smallCats[name]) smallCats[name] = { name, total: 0, count: 0 };
+      smallCats[name].total += e.amount;
+      smallCats[name].count++;
+    });
+    const topSmall = Object.values(smallCats).sort((a, b) => b.count - a.count)[0];
+    if (topSmall && topSmall.count >= 5) {
+      const dailyAvg = topSmall.total / topSmall.count;
+      const monthly  = Math.round(dailyAvg * 30);
+      const yearly   = Math.round(dailyAvg * 365);
+      items.push({
+        id: 'small_expenses',
+        icon: 'cafe-outline',
+        iconColor: colors.yellow,
+        title: 'Los gastos chicos suman más de lo que creés',
+        body: `Tu ${topSmall.name.toLowerCase()} de ${formatCurrency(Math.round(dailyAvg))} parece poco. En un mes son ${formatCurrency(monthly)}. En un año son ${formatCurrency(yearly)} — casi un sueldo.`,
+      });
+    }
+  }
+
+  // ── 4. SUSCRIPCIONES ───────────────────────────────────────────────────────
   if (subscriptions.length > 0) {
     const totalSubs = subscriptions.reduce((s, sub) => s + sub.averageAmount, 0);
     items.push({
@@ -586,54 +612,125 @@ function buildKeyInsights({
       icon: 'repeat-outline',
       iconColor: colors.yellow,
       title: `${subscriptions.length} suscripciones: ${formatCurrency(Math.round(totalSubs))}/mes`,
-      body: `Tenés ${subscriptions.length} suscripciones activas que te cuestan ${formatCurrency(Math.round(totalSubs))} por mes. En un año son ${formatCurrency(Math.round(totalSubs * 12))}. ¿Usaste todas este mes?`,
+      body: `Tenés ${subscriptions.length} suscripciones activas por ${formatCurrency(Math.round(totalSubs))}/mes. ¿Usaste todas este mes? Te mostramos cuáles no tocaste.`,
       cta: { label: 'Ver suscripciones', route: '/(app)/expenses' },
     });
   }
 
-  // 5. Pesos que rinden — si tiene invertibles
-  if (totalInvestable > 5000) {
-    const fciGain = Math.round(totalInvestable * 0.03);
+  // ── 5. COMERCIO REPETIDO ESTA SEMANA ──────────────────────────────────────
+  if (weekExps.length > 0) {
+    const descCount: Record<string, { count: number; total: number }> = {};
+    weekExps.forEach(e => {
+      const key = e.description.toLowerCase().trim();
+      if (!descCount[key]) descCount[key] = { count: 0, total: 0 };
+      descCount[key].count += 1;
+      descCount[key].total += e.amount;
+    });
+    const repeated = Object.entries(descCount).filter(([, v]) => v.count >= 3);
+    if (repeated.length > 0) {
+      const [desc, { count, total }] = repeated.sort((a, b) => b[1].count - a[1].count)[0];
+      const display = desc.charAt(0).toUpperCase() + desc.slice(1);
+      const fciGain = Math.round(total * 0.03);
+      items.push({
+        id: 'repeated_merchant',
+        icon: 'location-outline',
+        iconColor: colors.primary,
+        title: `${count} veces en "${display}" esta semana`,
+        body: `Sin juzgarte, pero esos ${formatCurrency(Math.round(total))} en FCI este mes te darían ${formatCurrency(Math.round(total + fciGain))}. Vos decidís.`,
+      });
+    }
+  }
+
+  // ── 6. TOP CATEGORÍA VS INGRESO ────────────────────────────────────────────
+  if (topCat && estimatedIncome && estimatedIncome > 0) {
+    const pct = Math.round((topCat.amount / estimatedIncome) * 100);
+    if (pct >= 10) {
+      items.push({
+        id: 'top_category',
+        icon: 'pie-chart-outline',
+        iconColor: colors.primary,
+        title: `${topCat.name}: ${pct}% del ingreso`,
+        body: `Tu categoría más cara este mes fue ${topCat.name}: ${formatCurrency(Math.round(topCat.amount))}. Representa el ${pct}% de tus ingresos. El promedio de tu perfil es 12%.`,
+        cta: { label: 'Ver desglose', route: '/(app)/expenses?tab=analisis' },
+      });
+    }
+  }
+
+  // ── 7. CATEGORÍA SPIKE VS MES PASADO ──────────────────────────────────────
+  if (topCat && dayOfMonth >= 20 && prevMonthCats[topCat.name]) {
+    const prevAmt = prevMonthCats[topCat.name].amount;
+    if (topCat.amount > prevAmt * 1.4) {
+      items.push({
+        id: 'category_spike',
+        icon: 'alert-circle-outline',
+        iconColor: colors.red,
+        title: `Pico de gasto en ${topCat.name}`,
+        body: `Este mes gastaste más en ${topCat.name} que el mes pasado (${formatCurrency(Math.round(prevAmt))} vs ${formatCurrency(Math.round(topCat.amount))}). ¿Fue algo especial o se fue de las manos?`,
+        cta: { label: 'Ver análisis', route: '/(app)/expenses?tab=analisis' },
+      });
+    }
+  }
+
+  // ── 8. PESOS PARADOS ───────────────────────────────────────────────────────
+  if (totalInvestable > 5000 && dayOfMonth > 7) {
+    const weeklyInflLoss = Math.round(totalInvestable * 0.03 / 4);
     items.push({
-      id: 'investable',
-      icon: 'trending-up-outline',
+      id: 'idle_money',
+      icon: 'cash-outline',
       iconColor: '#A78BFA',
-      title: `${formatCurrency(totalInvestable)} disponibles para invertir`,
-      body: `Tus gastos invertibles suman ${formatCurrency(totalInvestable)} este mes. Puestos en FCI Money Market te generarían ~${formatCurrency(fciGain)} sin hacer nada. ¿Los movemos?`,
+      title: `Perdés ${formatCurrency(weeklyInflLoss)} esta semana`,
+      body: `Tus pesos parados perdieron ${formatCurrency(weeklyInflLoss)} de poder adquisitivo esta semana. Con ese monto en FCI Money Market ya estarías cubierto.`,
       cta: { label: 'Ver simulador', route: '/(app)/simulator' },
     });
   }
 
-  // 6. Gastos chicos que suman (muchas transacciones pequeñas)
-  const smallExpenses = expenses.filter(e => e.amount < 5000);
-  if (smallExpenses.length >= 8 && dayOfMonth > 5) {
-    const totalSmall = smallExpenses.reduce((s, e) => s + e.amount, 0);
-    const monthlyProjected = Math.round((totalSmall / dayOfMonth) * daysInMonth);
-    const yearlyProjected  = Math.round((totalSmall / dayOfMonth) * 365);
-    items.push({
-      id: 'small_expenses',
-      icon: 'cafe-outline',
-      iconColor: colors.yellow,
-      title: 'Los gastos chicos suman más de lo que creés',
-      body: `Tus gastos menores a ${formatCurrency(5000)} parecen insignificantes, pero en el mes proyectan ${formatCurrency(monthlyProjected)} y al año son ${formatCurrency(yearlyProjected)} — casi un sueldo.`,
-    });
-  }
-
-  // 7. Fin de mes — sobrante
+  // ── 9. FIN DE MES — sobrante ───────────────────────────────────────────────
   if (dayOfMonth >= 25 && estimatedIncome && estimatedIncome > totalThisMonth) {
-    const surplus = Math.round(estimatedIncome - totalThisMonth);
+    const surplus  = Math.round(estimatedIncome - totalThisMonth);
     const inflLoss = Math.round(surplus * 0.028);
+    const fciGain  = Math.round(surplus * 0.03);
     items.push({
       id: 'eom_surplus',
-      icon: 'cash-outline',
+      icon: 'wallet-outline',
       iconColor: colors.neon,
       title: `Fin de mes: te sobraron ${formatCurrency(surplus)}`,
-      body: `Si los dejás en la cuenta pierden ~${formatCurrency(inflLoss)} de valor el mes que viene por inflación. Invertidos en FCI generarían ~${formatCurrency(Math.round(surplus * 0.03))} en cambio.`,
+      body: `Si los dejás en la cuenta pierden ${formatCurrency(inflLoss)} el mes que viene. Invertidos en FCI generarían ~${formatCurrency(fciGain)} en cambio. ¿Los movemos?`,
       cta: { label: 'Ver simulador', route: '/(app)/simulator' },
     });
   }
 
-  // 8. Meta de ahorro
+  // ── 10. COSTO DE OPORTUNIDAD — prescindibles ───────────────────────────────
+  if (totalDisposable > 10000 && dayOfMonth >= 20) {
+    const half    = Math.round(totalDisposable * 0.5);
+    const fciGain = Math.round(half * 0.03);
+    items.push({
+      id: 'opportunity_cost',
+      icon: 'trending-up-outline',
+      iconColor: colors.primary,
+      title: 'Costo de oportunidad de tus prescindibles',
+      body: `Si hubieras invertido la mitad de lo que gastaste en prescindibles este mes (${formatCurrency(half)}), hoy tendrías ${formatCurrency(half + fciGain)} más. Dato para reflexionar, no para culparte.`,
+      cta: { label: 'Hablar con asesor', route: '/(app)/advisor' },
+    });
+  }
+
+  // ── 11. INFLACIÓN PERSONAL (gasto vs mes pasado) ───────────────────────────
+  if (prevMonthTotal > 0 && totalThisMonth > 0 && dayOfMonth >= 25) {
+    const growth       = ((totalThisMonth - prevMonthTotal) / prevMonthTotal) * 100;
+    const INDEC_CPI    = 2.5; // % mensual estimado
+    if (growth > INDEC_CPI) {
+      const growthStr = growth.toFixed(1);
+      items.push({
+        id: 'personal_inflation',
+        icon: 'speedometer-outline',
+        iconColor: colors.red,
+        title: `Tu inflación personal: ${growthStr}%`,
+        body: `Tu inflación personal este mes fue ${growthStr}% — más que el ${INDEC_CPI}% del INDEC. Tus gastos suben más rápido que el promedio. Te mostramos por qué.`,
+        cta: { label: 'Ver informe', route: '/(app)/expenses?tab=analisis' },
+      });
+    }
+  }
+
+  // ── 12. META DE AHORRO ────────────────────────────────────────────────────
   const activeGoal = goals.find(g => g.current_amount < g.target_amount);
   if (activeGoal) {
     const pct       = Math.round((activeGoal.current_amount / activeGoal.target_amount) * 100);
@@ -648,16 +745,15 @@ function buildKeyInsights({
     });
   }
 
-  // 9. Inflación personal (prescindibles / total vs CPI estimado)
-  if (totalThisMonth > 0 && totalDisposable > 0) {
-    const personalInflation = ((totalDisposable / totalThisMonth) * 100).toFixed(1);
+  // ── 13. PRIMER DÍA DEL MES ────────────────────────────────────────────────
+  if (dayOfMonth === 1) {
     items.push({
-      id: 'personal_inflation',
-      icon: 'speedometer-outline',
-      iconColor: colors.red,
-      title: `Tu inflación personal: ${personalInflation}%`,
-      body: `Tu componente de gasto prescindible este mes fue del ${personalInflation}% — más que el INDEC. Tus gastos no esenciales suben más rápido que el promedio. Te mostramos por qué.`,
-      cta: { label: 'Ver informe', route: '/(app)/expenses?tab=analisis' },
+      id: 'month_start',
+      icon: 'calendar-outline',
+      iconColor: colors.primary,
+      title: 'Primer día del mes',
+      body: 'Es el primer día del mes. El mes pasado dijiste que ibas a gastar menos en salidas. ¿Arrancamos con el mismo objetivo o lo ajustamos?',
+      cta: { label: 'Hablar con asesor', route: '/(app)/advisor' },
     });
   }
 
@@ -1029,6 +1125,12 @@ export default function HomeScreen() {
     subscriptions,
   } = useExpensesStore();
   const { goals, fetchGoals } = useGoalsStore();
+  const streakStore  = useStreakStore();
+  const roundUpStore = useRoundUpStore();
+  const [showRoundUpConfig, setShowRoundUpConfig] = useState(false);
+
+  const [prevMonthCats,  setPrevMonthCats]  = useState<Record<string, { name: string; amount: number }>>({});
+  const [prevMonthTotal, setPrevMonthTotal] = useState(0);
 
   useEffect(() => {
     if (user?.id) {
@@ -1036,6 +1138,39 @@ export default function HomeScreen() {
       fetchSubscriptionsAndProjection(user.id);
       fetchGoals(user.id);
     }
+    streakStore.load();
+    roundUpStore.load();
+    roundUpStore.checkReset();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const now  = new Date();
+    const pm   = now.getMonth() === 0 ? 12 : now.getMonth();
+    const py   = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const start = `${py}-${String(pm).padStart(2, '0')}-01`;
+    const nm    = pm === 12 ? 1 : pm + 1;
+    const ny    = pm === 12 ? py + 1 : py;
+    const end   = `${ny}-${String(nm).padStart(2, '0')}-01`;
+    supabase
+      .from('expenses')
+      .select('amount, category:expense_categories(name_es)')
+      .eq('user_id', user.id)
+      .is('deleted_at', null)
+      .gte('date', start)
+      .lt('date', end)
+      .then(({ data }) => {
+        const map: Record<string, { name: string; amount: number }> = {};
+        let sum = 0;
+        for (const exp of data ?? []) {
+          const name = (exp as any).category?.name_es ?? 'Sin categoría';
+          if (!map[name]) map[name] = { name, amount: 0 };
+          map[name].amount += (exp as any).amount;
+          sum += (exp as any).amount;
+        }
+        setPrevMonthCats(map);
+        setPrevMonthTotal(sum);
+      });
   }, [user?.id]);
 
   // Notificaciones
@@ -1060,7 +1195,7 @@ export default function HomeScreen() {
 
   const keyInsights = buildKeyInsights({
     expenses, subscriptions, totalThisMonth, totalDisposable,
-    totalNecessary, totalInvestable, estimatedIncome, goals,
+    totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal,
   });
 
   // ── Editar ingreso ──────────────────────────────────────────────────────────
@@ -1104,6 +1239,34 @@ export default function HomeScreen() {
     }
   };
 
+  // ── Health Score ────────────────────────────────────────────────────────────
+  const healthScore = computeHealthScore({
+    totalThisMonth,
+    totalDisposable,
+    totalInvested:      0,  // se podría conectar a savingsStore cuando esté disponible
+    investmentTypes:    0,
+    hasSavings:         false,
+    weekStreak:         streakStore.weekStreak,
+    noDisposableStreak: streakStore.noDisposableStreak,
+    goals,
+  });
+
+  // ── Oportunidades pasadas (historial de decisiones) ──────────────────────
+  const pastOpportunities = buildOpportunities(
+    expenses
+      .filter(e => e.classification === 'disposable')
+      .reduce<{ monthKey: string; disposable: number }[]>((acc, e) => {
+        const mk = e.date.slice(0, 7); // YYYY-MM
+        const existing = acc.find(x => x.monthKey === mk);
+        if (existing) {
+          existing.disposable += e.amount;
+        } else {
+          acc.push({ monthKey: mk, disposable: e.amount });
+        }
+        return acc;
+      }, [])
+  );
+
   // Contexto para el asesor desde RecoverableCard
   const recoverableCtx = totalDisposable > 0
     ? [
@@ -1128,13 +1291,20 @@ export default function HomeScreen() {
       >
         {/* ── Header ─────────────────────────────────────────────────────────── */}
         <View style={styles.header}>
-          <View>
-            <Text variant="caption" color={colors.text.tertiary}>
-              {getGreeting(profile?.full_name ?? undefined).split(',')[0].toUpperCase()}
-            </Text>
-            <Text variant="h4" color={colors.text.primary}>
-              {profile?.full_name?.split(' ')[0] ?? 'Ahí vamos'} 👋
-            </Text>
+          <View style={styles.headerLeft}>
+            <Image
+              source={require('../../assets/icon.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <View>
+              <Text variant="caption" color={colors.text.tertiary}>
+                {getGreeting(profile?.full_name ?? undefined).split(',')[0].toUpperCase()}
+              </Text>
+              <Text variant="h4" color={colors.text.primary}>
+                {profile?.full_name?.split(' ')[0] ?? 'Ahí vamos'} 👋
+              </Text>
+            </View>
           </View>
           <TouchableOpacity
             onPress={() => router.push('/(app)/profile')}
@@ -1175,6 +1345,43 @@ export default function HomeScreen() {
             params: recoverableCtx ? { initialContext: recoverableCtx } : {},
           } as any)}
         />
+
+        {/* ── Score de salud financiera ───────────────────────────────────────── */}
+        <HealthScoreCard
+          score={healthScore}
+          input={{
+            totalThisMonth,
+            totalDisposable,
+            totalInvested:      0,
+            investmentTypes:    0,
+            hasSavings:         false,
+            weekStreak:         streakStore.weekStreak,
+            noDisposableStreak: streakStore.noDisposableStreak,
+            goals,
+          }}
+        />
+
+        {/* ── Rachas activas ──────────────────────────────────────────────────── */}
+        <StreakCard
+          weekStreak={streakStore.weekStreak}
+          noDisposableStreak={streakStore.noDisposableStreak}
+          bestWeekStreak={streakStore.bestWeekStreak}
+          monthsUnderBudget={streakStore.monthsUnderBudget}
+        />
+
+        {/* ── Redondeo automático ─────────────────────────────────────────────── */}
+        <RoundUpSummary
+          enabled={roundUpStore.enabled}
+          roundTo={roundUpStore.roundTo}
+          destination={roundUpStore.destination}
+          totalThisWeek={roundUpStore.totalThisWeek}
+          totalThisMonth={roundUpStore.totalThisMonth}
+          totalAllTime={roundUpStore.totalAllTime}
+          onConfigure={() => router.push('/(app)/profile')}
+        />
+
+        {/* ── Historial de decisiones ─────────────────────────────────────────── */}
+        <DecisionHistorySection opportunities={pastOpportunities} />
 
         {/* ── Metas de ahorro ────────────────────────────────────────────────── */}
         {user?.id && (
@@ -1276,8 +1483,8 @@ export default function HomeScreen() {
               disabled={!selectedRange || savingIncome}
             >
               {savingIncome
-                ? <ActivityIndicator size="small" color={colors.black} />
-                : <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.black }}>Guardar</Text>
+                ? <ActivityIndicator size="small" color={colors.white} />
+                : <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.white }}>Guardar</Text>
               }
             </TouchableOpacity>
           </View>
@@ -1303,7 +1510,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingBottom: spacing[2],
   },
-  avatarBtn: { padding: spacing[1] },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  logo:       { width: 36, height: 36, borderRadius: 8 },
+  avatarBtn:  { padding: spacing[1] },
 
   sectionHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

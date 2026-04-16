@@ -217,7 +217,7 @@ const cmpStyles = StyleSheet.create({
   },
   bigNum: {
     fontSize: 34,
-    fontFamily: 'DMSans_700Bold',
+    fontFamily: 'Montserrat_700Bold',
     lineHeight: 40,
   },
   vs: {
@@ -276,7 +276,7 @@ function InsightCard({
       <Text
         variant="bodySmall"
         color={levelColor}
-        style={{ fontFamily: 'DMSans_600SemiBold', marginBottom: spacing[1] }}
+        style={{ fontFamily: 'Montserrat_600SemiBold', marginBottom: spacing[1] }}
       >
         {headline}
       </Text>
@@ -325,7 +325,7 @@ function ImpactRow({
             variant="bodySmall"
             color={colors.text.primary}
             numberOfLines={1}
-            style={[{ flex: 1 }, isTop && { fontFamily: 'DMSans_600SemiBold' }]}
+            style={[{ flex: 1 }, isTop && { fontFamily: 'Montserrat_600SemiBold' }]}
           >
             {cw.categoryNameEs}
           </Text>

@@ -161,7 +161,7 @@ function IndicatorBar({ icon, label, value, max = 3, color = colors.primary }: I
       <View style={{ flex: 1, gap: 2 }}>
         <View style={indStyles.labelRow}>
           <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>{label}</Text>
-          <Text variant="caption" color={color} style={{ fontSize: 9, fontFamily: 'DMSans_600SemiBold' }}>
+          <Text variant="caption" color={color} style={{ fontSize: 9, fontFamily: 'Montserrat_600SemiBold' }}>
             {LEVEL_LABEL[value]}
           </Text>
         </View>
@@ -233,7 +233,7 @@ function OptionCard({ suggestion, isPrimary, whenText }: OptionCardProps) {
                 <Text variant="caption" color={colors.neon} style={{ fontSize: 8 }}>PRINCIPAL</Text>
               </View>
             )}
-            <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'DMSans_600SemiBold' }} numberOfLines={1}>
+            <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }} numberOfLines={1}>
               {instrument.shortName}
             </Text>
           </View>

@@ -274,11 +274,11 @@ export default function AdvisorScreen() {
       <View style={[styles.messageWrapper, isUser ? styles.messageWrapperUser : styles.messageWrapperAI]}>
         {!isUser && (
           <View style={styles.avatarAI}>
-            <Text variant="label" color={colors.black} style={{ fontSize: 10 }}>SP</Text>
+            <Text variant="label" color={colors.white} style={{ fontSize: 10 }}>SP</Text>
           </View>
         )}
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAI]}>
-          <Text variant="bodySmall" color={isUser ? colors.black : colors.text.primary} style={{ lineHeight: 21 }}>
+          <Text variant="bodySmall" color={isUser ? colors.white : colors.text.primary} style={{ lineHeight: 21 }}>
             {item.content}
           </Text>
         </View>
@@ -294,7 +294,7 @@ export default function AdvisorScreen() {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.advisorAvatar}>
-            <Text variant="label" color={colors.black} style={{ fontSize: 11 }}>SP</Text>
+            <Text variant="label" color={colors.white} style={{ fontSize: 11 }}>SP</Text>
           </View>
           <View>
             <Text variant="subtitle">Asesor SmartPesos</Text>
@@ -318,7 +318,7 @@ export default function AdvisorScreen() {
           /* Estado vacío — solo si la bienvenida falló */
           <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.emptyState} keyboardShouldPersistTaps="handled">
             <View style={styles.emptyAvatar}>
-              <Text variant="h3" color={colors.black}>SP</Text>
+              <Text variant="h3" color={colors.white}>SP</Text>
             </View>
             <Text variant="subtitle" align="center">
               Hola, {profile?.full_name?.split(' ')[0] ?? 'ahí'}
@@ -332,7 +332,7 @@ export default function AdvisorScreen() {
           /* Generando bienvenida */
           <View style={styles.loadingWelcome}>
             <View style={styles.emptyAvatar}>
-              <Text variant="h3" color={colors.black}>SP</Text>
+              <Text variant="h3" color={colors.white}>SP</Text>
             </View>
             <View style={styles.thinkingBubble}>
               <ActivityIndicator color={colors.neon} size="small" />
@@ -354,7 +354,7 @@ export default function AdvisorScreen() {
               isThinking ? (
                 <View style={styles.thinkingWrapper}>
                   <View style={styles.avatarAI}>
-                    <Text variant="label" color={colors.black} style={{ fontSize: 10 }}>SP</Text>
+                    <Text variant="label" color={colors.white} style={{ fontSize: 10 }}>SP</Text>
                   </View>
                   <View style={[styles.bubbleAI, styles.thinkingBubbleInline]}>
                     <ActivityIndicator color={colors.neon} size="small" />
@@ -424,7 +424,7 @@ export default function AdvisorScreen() {
               <Ionicons
                 name="send"
                 size={18}
-                color={!input.trim() || isThinking || !canSendMessage() ? colors.text.tertiary : colors.black}
+                color={!input.trim() || isThinking || !canSendMessage() ? colors.text.tertiary : colors.white}
               />
             </TouchableOpacity>
           </View>

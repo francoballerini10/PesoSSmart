@@ -265,7 +265,7 @@ function CoupleExpenseRow({
     <View style={styles.expRow}>
       {/* Indicador de quién gastó */}
       <View style={[styles.coupleAvatar, { borderColor: isMe ? colors.neon : colors.info }]}>
-        <Text style={{ fontSize: 10, color: isMe ? colors.neon : colors.info, fontFamily: 'DMSans_600SemiBold' }}>
+        <Text style={{ fontSize: 10, color: isMe ? colors.neon : colors.info, fontFamily: 'Montserrat_600SemiBold' }}>
           {isMe ? 'VOS' : memberName.split(' ')[0].slice(0, 3).toUpperCase()}
         </Text>
       </View>
@@ -277,7 +277,7 @@ function CoupleExpenseRow({
           </Text>
           {expense.is_shared && (
             <View style={styles.sharedBadge}>
-              <Text style={{ fontSize: 9, color: colors.yellow, fontFamily: 'DMSans_600SemiBold' }}>
+              <Text style={{ fontSize: 9, color: colors.yellow, fontFamily: 'Montserrat_600SemiBold' }}>
                 COMPARTIDO
               </Text>
             </View>
@@ -649,7 +649,7 @@ export default function FamilyScreen() {
                 variant="neon"
                 size="lg"
                 fullWidth
-                leftIcon={<Ionicons name="heart-outline" size={18} color={colors.black} />}
+                leftIcon={<Ionicons name="heart-outline" size={18} color={colors.white} />}
                 onPress={() => { setCreatingCoupleMode(true); setShowCreateModal(true); }}
               />
 
@@ -1246,7 +1246,7 @@ const styles = StyleSheet.create({
   youBadgeText: {
     fontFamily:    'Montserrat_700Bold',
     fontSize:      9,
-    color:         colors.black,
+    color:         colors.white,
     letterSpacing: 0.5,
   },
   rowDivider: {

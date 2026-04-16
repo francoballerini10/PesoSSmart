@@ -7,6 +7,7 @@ import {
   Alert,
   ScrollView,
   Modal,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@/theme';
@@ -35,13 +36,9 @@ interface Props {
   onConfirmed: () => void;
 }
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
-
 const INITIAL_VISIBLE = 5;
-const CAT_ICON_SIZE   = 20;
-const CAT_CHIP_SIZE   = 64;
 
-// ─── Helpers de metadata ──────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 type MovementType = 'enviada' | 'recibida' | 'pago' | 'compra' | 'otro';
 
@@ -55,22 +52,17 @@ interface TxMeta {
 
 function parseTxMeta(description: string | null, currency: string): TxMeta {
   const d = (description ?? '').toLowerCase();
-
   if (d.includes('enviada')) {
-    const via = extractVia(description, ['enviada a', 'enviado a']);
-    return { type: 'enviada', label: 'Enviada', via, color: '#ff8f00', icon: 'arrow-up-outline' };
+    return { type: 'enviada', label: 'Enviada', via: extractVia(description, ['enviada a', 'enviado a']), color: '#ff8f00', icon: 'arrow-up-outline' };
   }
   if (d.includes('recibida') || d.includes('desde')) {
-    const via = extractVia(description, ['recibida de', 'recibida desde', 'desde']);
-    return { type: 'recibida', label: 'Recibida', via, color: '#43a047', icon: 'arrow-down-outline' };
+    return { type: 'recibida', label: 'Recibida', via: extractVia(description, ['recibida de', 'recibida desde', 'desde']), color: '#43a047', icon: 'arrow-down-outline' };
   }
   if (d.includes('pago') || d.includes('pagaste')) {
-    const via = extractVia(description, ['pago en', 'pago a']);
-    return { type: 'pago', label: 'Pago', via, color: '#5c6bc0', icon: 'card-outline' };
+    return { type: 'pago', label: 'Pago', via: extractVia(description, ['pago en', 'pago a']), color: '#5c6bc0', icon: 'card-outline' };
   }
   if (d.includes('compra')) {
-    const via = extractVia(description, ['compra en', 'compra a']);
-    return { type: 'compra', label: 'Compra', via, color: '#8e24aa', icon: 'bag-outline' };
+    return { type: 'compra', label: 'Compra', via: extractVia(description, ['compra en', 'compra a']), color: '#8e24aa', icon: 'bag-outline' };
   }
   return { type: 'otro', label: currency === 'USD' ? 'USD' : 'Movimiento', via: null, color: '#78909c', icon: 'swap-horizontal-outline' };
 }
@@ -81,8 +73,7 @@ function extractVia(description: string | null, prefixes: string[]): string | nu
   for (const prefix of prefixes) {
     const idx = lower.indexOf(prefix);
     if (idx !== -1) {
-      const raw = description.slice(idx + prefix.length).trim();
-      // Capitalizar primera letra, máx 20 chars
+      const raw   = description.slice(idx + prefix.length).trim();
       const clean = raw.charAt(0).toUpperCase() + raw.slice(1);
       return clean.length > 22 ? clean.slice(0, 20) + '…' : clean;
     }
@@ -93,104 +84,172 @@ function extractVia(description: string | null, prefixes: string[]): string | nu
 function formatDateLabel(dateStr: string | null): string | null {
   if (!dateStr) return null;
   const date  = new Date(dateStr + 'T00:00:00');
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diff = Math.round((today.getTime() - date.getTime()) / 86400000);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff  = Math.round((today.getTime() - date.getTime()) / 86400000);
   if (diff === 0) return 'Hoy';
   if (diff === 1) return 'Ayer';
   return date.toLocaleDateString('es-AR', { day: 'numeric', month: 'short' });
 }
 
-// ─── CategoryChip ─────────────────────────────────────────────────────────────
+// ─── CategorizarSheet ─────────────────────────────────────────────────────────
 
-function CategoryChip({
-  cat,
-  onPress,
-  disabled,
+function CategorizarSheet({
+  tx,
+  categories,
+  onSelect,
+  onClose,
+  isSaving,
 }: {
-  cat: ExpenseCategory;
-  onPress: () => void;
-  disabled: boolean;
+  tx:         PendingTransaction;
+  categories: ExpenseCategory[];
+  onSelect:   (cat: ExpenseCategory) => void;
+  onClose:    () => void;
+  isSaving:   boolean;
 }) {
+  const suggestedCat = categories.find(c => c.name === tx.suggested_category);
+  const [selected, setSelected] = useState<string | null>(suggestedCat?.id ?? null);
+
+  const handleConfirm = () => {
+    const cat = categories.find(c => c.id === selected);
+    if (cat) onSelect(cat);
+  };
+
   return (
-    <TouchableOpacity
-      style={styles.catChip}
-      onPress={onPress}
-      disabled={disabled}
-      activeOpacity={0.65}
-    >
-      {/* Contenedor de ícono con tamaño fijo garantiza centrado perfecto */}
-      <View style={styles.catIconBox}>
-        <Ionicons name={cat.icon as any} size={CAT_ICON_SIZE} color={cat.color ?? colors.text.tertiary} />
+    <View style={sheetStyles.backdrop}>
+      <TouchableOpacity style={{ flex: 1 }} onPress={onClose} activeOpacity={1} />
+      <View style={sheetStyles.sheet}>
+        {/* Drag indicator */}
+        <View style={sheetStyles.dragBar} />
+
+        {/* Header: gasto */}
+        <View style={sheetStyles.header}>
+          <View style={{ flex: 1 }}>
+            <Text variant="subtitle" color={colors.text.primary} numberOfLines={1}>
+              {tx.merchant ?? 'Gasto detectado'}
+            </Text>
+            <Text variant="caption" color={colors.text.secondary}>
+              {formatDateLabel(tx.transaction_date) ?? 'Sin fecha'}
+            </Text>
+          </View>
+          <Text style={sheetStyles.amount}>
+            ${tx.amount.toLocaleString('es-AR')}
+          </Text>
+        </View>
+
+        {/* Sugerido por IA */}
+        {suggestedCat && (
+          <View style={sheetStyles.aiRow}>
+            <Ionicons name="sparkles-outline" size={13} color={colors.primary} />
+            <Text variant="caption" color={colors.primary}>
+              IA sugiere: <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>{suggestedCat.name_es}</Text>
+            </Text>
+          </View>
+        )}
+
+        <Text variant="label" color={colors.text.tertiary} style={{ marginBottom: spacing[2] }}>
+          ELEGÍ UNA CATEGORÍA
+        </Text>
+
+        {/* Grid de categorías */}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={sheetStyles.grid}
+          style={{ maxHeight: 260 }}
+        >
+          {categories.map(cat => {
+            const isActive = selected === cat.id;
+            return (
+              <TouchableOpacity
+                key={cat.id}
+                style={[
+                  sheetStyles.catItem,
+                  isActive && { borderColor: cat.color ?? colors.primary, backgroundColor: (cat.color ?? colors.primary) + '15' },
+                ]}
+                onPress={() => setSelected(cat.id)}
+                activeOpacity={0.7}
+              >
+                <View style={[sheetStyles.catIconBox, { backgroundColor: (cat.color ?? colors.primary) + '20' }]}>
+                  <Ionicons name={cat.icon as any} size={20} color={cat.color ?? colors.primary} />
+                </View>
+                <Text
+                  variant="caption"
+                  color={isActive ? (cat.color ?? colors.primary) : colors.text.secondary}
+                  style={isActive ? { fontFamily: 'Montserrat_600SemiBold' } : undefined}
+                  numberOfLines={2}
+                >
+                  {cat.name_es}
+                </Text>
+                {isActive && (
+                  <View style={[sheetStyles.checkBadge, { backgroundColor: cat.color ?? colors.primary }]}>
+                    <Ionicons name="checkmark" size={10} color={colors.white} />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* Confirmar */}
+        <TouchableOpacity
+          style={[sheetStyles.confirmBtn, (!selected || isSaving) && { opacity: 0.5 }]}
+          onPress={handleConfirm}
+          disabled={!selected || isSaving}
+          activeOpacity={0.85}
+        >
+          {isSaving
+            ? <ActivityIndicator size="small" color={colors.white} />
+            : <>
+                <Ionicons name="checkmark-circle-outline" size={18} color={colors.white} />
+                <Text style={sheetStyles.confirmBtnText}>Confirmar categoría</Text>
+              </>
+          }
+        </TouchableOpacity>
       </View>
-      <Text style={[styles.catChipLabel, { color: colors.text.secondary }]}>
-        {cat.name_es}
-      </Text>
-    </TouchableOpacity>
+    </View>
   );
 }
 
-// ─── CategoryGridItem ─────────────────────────────────────────────────────────
-
-function CategoryGridItem({
-  cat,
-  onPress,
-}: {
-  cat: ExpenseCategory;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity style={styles.catGridItem} onPress={onPress} activeOpacity={0.65}>
-      <View style={styles.catIconBox}>
-        <Ionicons name={cat.icon as any} size={CAT_ICON_SIZE} color={cat.color ?? colors.text.tertiary} />
-      </View>
-      <Text style={[styles.catChipLabel, { color: colors.text.secondary }]}>
-        {cat.name_es}
-      </Text>
-    </TouchableOpacity>
-  );
-}
+const sheetStyles = StyleSheet.create({
+  backdrop:      { ...StyleSheet.absoluteFillObject, backgroundColor: '#00000070', justifyContent: 'flex-end' },
+  sheet:         { backgroundColor: colors.bg.primary, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing[5], gap: spacing[4], paddingBottom: spacing[8] },
+  dragBar:       { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border.default, alignSelf: 'center', marginBottom: spacing[1] },
+  header:        { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  amount:        { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: colors.text.primary, lineHeight: 28 },
+  aiRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.primary + '10', borderRadius: 8, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
+  grid:          { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  catItem:       { width: '30%', alignItems: 'center', gap: spacing[1], padding: spacing[2], borderRadius: 12, borderWidth: 1, borderColor: colors.border.subtle, backgroundColor: colors.bg.card, position: 'relative' },
+  catIconBox:    { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  checkBadge:    { position: 'absolute', top: 4, right: 4, width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  confirmBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.primary, borderRadius: 12, paddingVertical: spacing[4] },
+  confirmBtnText:{ fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.white },
+});
 
 // ─── PendingTransactions ──────────────────────────────────────────────────────
 
 export function PendingTransactions({ transactions, userId, isPolling, categories, onConfirmed }: Props) {
-  const [updatingId,  setUpdatingId]  = useState<string | null>(null);
-  const [showAll,     setShowAll]     = useState(false);
-  const [modalTxId,   setModalTxId]   = useState<string | null>(null);
-  const [bulkLoading, setBulkLoading] = useState(false);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [updatingId,   setUpdatingId]   = useState<string | null>(null);
+  const [activeTxId,   setActiveTxId]   = useState<string | null>(null);
+  const [showAll,      setShowAll]       = useState(false);
+  const [bulkLoading,  setBulkLoading]   = useState(false);
 
-  const visible     = showAll ? transactions : transactions.slice(0, INITIAL_VISIBLE);
-  const hiddenCount = transactions.length - INITIAL_VISIBLE;
+  const filtered     = transactions.filter(tx => !dismissedIds.has(tx.id));
+  const visible      = showAll ? filtered : filtered.slice(0, INITIAL_VISIBLE);
+  const hiddenCount  = filtered.length - INITIAL_VISIBLE;
+  const activeTx     = filtered.find(tx => tx.id === activeTxId) ?? null;
 
-  // Cuántas tienen categoría sugerida válida (la IA ya las clasificó)
-  const withSuggestion = transactions.filter(
+  const withSuggestion = filtered.filter(
     tx => tx.suggested_category && categories.some(c => c.name === tx.suggested_category)
   );
 
-  if (transactions.length === 0 && !isPolling) return null;
+  if (filtered.length === 0 && !isPolling) return null;
 
-  const handleBulkConfirm = async () => {
-    if (bulkLoading || withSuggestion.length === 0) return;
-    setBulkLoading(true);
-    try {
-      for (const tx of withSuggestion) {
-        const cat = categories.find(c => c.name === tx.suggested_category);
-        if (!cat) continue;
-        await handleCategorySelect(tx, cat);
-      }
-    } finally {
-      setBulkLoading(false);
-    }
-  };
-
-  const handleCategorySelect = async (tx: PendingTransaction, cat: ExpenseCategory) => {
+  const saveCategoryForTx = async (tx: PendingTransaction, cat: ExpenseCategory) => {
     if (updatingId !== null) return;
     setUpdatingId(tx.id);
-
     try {
       const txDate = tx.transaction_date ?? new Date().toISOString().split('T')[0];
-
-      const { data: expenseRows, error: expErr } = await supabase
+      const { data: expenseRows } = await supabase
         .from('expenses')
         .select('id')
         .eq('user_id', userId)
@@ -199,46 +258,48 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
         .order('created_at', { ascending: false })
         .limit(1);
 
-      if (expErr) console.warn('[PendingTx] expense lookup error:', expErr.message);
       const expenseId = expenseRows?.[0]?.id ?? null;
-
       if (expenseId) {
-        const { error } = await supabase
-          .from('expenses')
-          .update({ category_id: cat.id })
-          .eq('id', expenseId);
+        const { error } = await supabase.from('expenses').update({ category_id: cat.id }).eq('id', expenseId);
         if (error) throw new Error(error.message);
       } else {
-        const { error } = await supabase
-          .from('expenses')
-          .insert({
-            user_id:        userId,
-            amount:         tx.amount,
-            description:    tx.merchant || tx.description || 'Gasto detectado',
-            category_id:    cat.id,
-            date:           txDate,
-            payment_method: 'digital_wallet' as const,
-            classification: (tx.suggested_classification ?? 'disposable') as const,
-            is_recurring:   false,
-          });
+        const { error } = await supabase.from('expenses').insert({
+          user_id: userId, amount: tx.amount,
+          description: tx.merchant || tx.description || 'Gasto detectado',
+          category_id: cat.id, date: txDate,
+          payment_method: 'digital_wallet' as const,
+          classification: (tx.suggested_classification ?? 'disposable') as const,
+          is_recurring: false,
+        });
         if (error) throw new Error(error.message);
       }
-
       setDismissedIds(prev => new Set([...prev, tx.id]));
+      setActiveTxId(null);
       onConfirmed();
-
     } catch (err: any) {
-      console.error('[PendingTx] error:', err?.message ?? err);
       Alert.alert('Error', 'No se pudo guardar el gasto. Intentá de nuevo.');
     } finally {
       setUpdatingId(null);
     }
   };
 
+  const handleBulkConfirm = async () => {
+    if (bulkLoading || withSuggestion.length === 0) return;
+    setBulkLoading(true);
+    try {
+      for (const tx of withSuggestion) {
+        const cat = categories.find(c => c.name === tx.suggested_category);
+        if (cat) await saveCategoryForTx(tx, cat);
+      }
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
 
-      {/* ── Header ── */}
+      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Ionicons name="flash-outline" size={14} color={colors.neon} />
@@ -246,15 +307,15 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
         </View>
         <View style={styles.headerRight}>
           {isPolling && <ActivityIndicator size="small" color={colors.text.tertiary} />}
-          {transactions.length > 0 && (
+          {filtered.length > 0 && (
             <Text variant="caption" color={colors.text.tertiary}>
-              {transactions.length} nuevo{transactions.length > 1 ? 's' : ''}
+              {filtered.length} nuevo{filtered.length > 1 ? 's' : ''}
             </Text>
           )}
         </View>
       </View>
 
-      {/* ── Bulk confirm ── */}
+      {/* Bulk confirm */}
       {withSuggestion.length >= 2 && (
         <TouchableOpacity
           style={[styles.bulkBtn, bulkLoading && { opacity: 0.6 }]}
@@ -263,8 +324,8 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
           activeOpacity={0.8}
         >
           {bulkLoading
-            ? <ActivityIndicator size="small" color={colors.black} />
-            : <Ionicons name="checkmark-done-outline" size={15} color={colors.black} />
+            ? <ActivityIndicator size="small" color={colors.white} />
+            : <Ionicons name="checkmark-done-outline" size={15} color={colors.white} />
           }
           <Text style={styles.bulkBtnText}>
             {bulkLoading
@@ -275,124 +336,69 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
         </TouchableOpacity>
       )}
 
-      {/* ── Cards ── */}
-      {visible.map((tx) => {
-        const isUpdating = updatingId === tx.id;
-        const meta       = parseTxMeta(tx.description, tx.currency);
-        const dateLabel  = formatDateLabel(tx.transaction_date);
-
-        // Metadata compacta: "Enviada · Mercado Pago"
-        const metaParts  = [meta.via].filter(Boolean);
+      {/* Cards */}
+      {visible.map(tx => {
+        const meta      = parseTxMeta(tx.description, tx.currency);
+        const dateLabel = formatDateLabel(tx.transaction_date);
+        const suggestedCat = categories.find(c => c.name === tx.suggested_category);
+        const isLoading = updatingId === tx.id;
 
         return (
-          <Card key={tx.id} style={styles.card}>
-
-            {/* Fila principal */}
-            <View style={styles.cardTop}>
-              <View style={styles.cardInfo}>
-                {/* Nombre */}
-                <Text variant="bodySmall" color={colors.text.primary} style={styles.merchantName} numberOfLines={1}>
-                  {tx.merchant ?? 'Comercio desconocido'}
-                </Text>
-
-                {/* Metadata: pill + texto compacto */}
-                <View style={styles.metaRow}>
-                  <View style={[styles.typePill, { backgroundColor: meta.color + '1A' }]}>
-                    <Ionicons name={meta.icon as any} size={10} color={meta.color} />
-                    <Text style={[styles.typePillLabel, { color: meta.color }]}>{meta.label}</Text>
+          <TouchableOpacity
+            key={tx.id}
+            activeOpacity={0.8}
+            onPress={() => !isLoading && setActiveTxId(tx.id)}
+          >
+            <Card style={styles.card}>
+              <View style={styles.cardTop}>
+                <View style={styles.cardInfo}>
+                  <Text variant="bodySmall" color={colors.text.primary} style={styles.merchantName} numberOfLines={1}>
+                    {tx.merchant ?? 'Comercio desconocido'}
+                  </Text>
+                  <View style={styles.metaRow}>
+                    <View style={[styles.typePill, { backgroundColor: meta.color + '1A' }]}>
+                      <Ionicons name={meta.icon as any} size={10} color={meta.color} />
+                      <Text style={[styles.typePillLabel, { color: meta.color }]}>{meta.label}</Text>
+                    </View>
+                    {dateLabel && (
+                      <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 11 }}>
+                        {dateLabel}
+                      </Text>
+                    )}
                   </View>
-                  {metaParts.length > 0 && (
-                    <Text variant="caption" color={colors.text.tertiary} style={styles.metaText} numberOfLines={1}>
-                      {metaParts.join(' · ')}
+                </View>
+                <View style={styles.cardRight}>
+                  {isLoading
+                    ? <ActivityIndicator size="small" color={colors.neon} />
+                    : <View style={styles.newBadge}>
+                        <Text style={styles.newBadgeText}>NUEVO</Text>
+                      </View>
+                  }
+                  <Text variant="subtitle" color={colors.neon} style={styles.amount}>
+                    ${tx.amount.toLocaleString('es-AR')}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Pie: categoría sugerida o CTA */}
+              <View style={styles.cardFoot}>
+                {suggestedCat ? (
+                  <View style={styles.suggestedRow}>
+                    <Ionicons name="sparkles-outline" size={12} color={colors.primary} />
+                    <Text variant="caption" color={colors.primary}>
+                      Sugerido: <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>{suggestedCat.name_es}</Text>
                     </Text>
-                  )}
-                </View>
-              </View>
-
-              <View style={styles.cardRight}>
-                <View style={styles.newBadge}>
-                  <Text style={styles.newBadgeText}>NUEVO</Text>
-                </View>
-                <Text variant="subtitle" color={colors.neon} style={styles.amount}>
-                  ${tx.amount.toLocaleString('es-AR')}
-                </Text>
-              </View>
-            </View>
-
-            {/* Divisor */}
-            <View style={styles.divider} />
-
-            {/* Selector de categoría */}
-            <View style={styles.catSection}>
-              <View style={styles.catLabelRow}>
-                <Text variant="label" color={colors.text.tertiary} style={styles.catLabel}>
-                  {isUpdating ? 'GUARDANDO...' : 'ELEGÍ UNA CATEGORÍA'}
-                </Text>
-                {isUpdating && <ActivityIndicator size="small" color={colors.neon} />}
-              </View>
-
-              <View style={[styles.catRow, isUpdating && { opacity: 0.4 }]}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.catList}
-                  style={{ flex: 1 }}
-                >
-                  {categories.map((cat) => (
-                    <CategoryChip
-                      key={cat.id}
-                      cat={cat}
-                      onPress={() => handleCategorySelect(tx, cat)}
-                      disabled={updatingId !== null}
-                    />
-                  ))}
-                </ScrollView>
-
-                {/* Botón Todos */}
-                <TouchableOpacity
-                  style={styles.allBtn}
-                  onPress={() => setModalTxId(tx.id)}
-                  disabled={updatingId !== null}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="grid-outline" size={16} color={colors.neon} />
-                  <Text style={styles.allBtnLabel}>TODOS</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Modal grilla completa */}
-            <Modal
-              visible={modalTxId === tx.id}
-              transparent
-              animationType="slide"
-              onRequestClose={() => setModalTxId(null)}
-            >
-              <View style={styles.modalOverlay}>
-                <View style={styles.modalSheet}>
-                  <View style={styles.modalHeader}>
-                    <Text variant="label" color={colors.text.primary}>TODAS LAS CATEGORÍAS</Text>
-                    <TouchableOpacity onPress={() => setModalTxId(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Ionicons name="close" size={20} color={colors.text.secondary} />
-                    </TouchableOpacity>
                   </View>
-                  <View style={styles.catGrid}>
-                    {categories.map((cat) => (
-                      <CategoryGridItem
-                        key={cat.id}
-                        cat={cat}
-                        onPress={() => {
-                          setModalTxId(null);
-                          handleCategorySelect(tx, cat);
-                        }}
-                      />
-                    ))}
+                ) : (
+                  <View style={styles.ctaRow}>
+                    <Ionicons name="pricetag-outline" size={12} color={colors.text.tertiary} />
+                    <Text variant="caption" color={colors.text.tertiary}>Tocá para categorizar</Text>
                   </View>
-                </View>
+                )}
+                <Ionicons name="chevron-forward" size={14} color={colors.text.tertiary} />
               </View>
-            </Modal>
-
-          </Card>
+            </Card>
+          </TouchableOpacity>
         );
       })}
 
@@ -403,12 +409,30 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
           <Ionicons name="chevron-down" size={14} color={colors.neon} />
         </TouchableOpacity>
       )}
-      {showAll && transactions.length > INITIAL_VISIBLE && (
+      {showAll && filtered.length > INITIAL_VISIBLE && (
         <TouchableOpacity style={styles.showMoreBtn} onPress={() => setShowAll(false)}>
           <Text variant="caption" color={colors.text.secondary}>Mostrar menos</Text>
           <Ionicons name="chevron-up" size={14} color={colors.text.secondary} />
         </TouchableOpacity>
       )}
+
+      {/* Bottom sheet modal de categorización */}
+      <Modal
+        visible={!!activeTx}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setActiveTxId(null)}
+      >
+        {activeTx && (
+          <CategorizarSheet
+            tx={activeTx}
+            categories={categories}
+            onSelect={cat => saveCategoryForTx(activeTx, cat)}
+            onClose={() => setActiveTxId(null)}
+            isSaving={updatingId === activeTx.id}
+          />
+        )}
+      </Modal>
 
     </View>
   );
@@ -417,220 +441,35 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-
   container: { gap: spacing[3] },
 
-  // Header
-  header: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[2],
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[2],
-  },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
 
-  // Card
-  card: {
-    padding: spacing[4],
-    gap:     spacing[3],
-  },
-  cardTop: {
-    flexDirection: 'row',
-    alignItems:    'flex-start',
-    gap:           spacing[3],
-  },
-  cardInfo: {
-    flex: 1,
-    gap:  3,
-  },
-  merchantName: {
-    fontFamily: 'DMSans_600SemiBold',
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[2],
-    flexWrap:      'nowrap',
-  },
-  typePill: {
-    flexDirection:     'row',
-    alignItems:        'center',
-    gap:               3,
-    paddingHorizontal: spacing[2],
-    paddingVertical:   2,
-    borderRadius:      20,
-    flexShrink:        0,
-  },
-  typePillLabel: {
-    fontSize:   9,
-    fontFamily: 'DMSans_600SemiBold',
-  },
-  metaText: {
-    fontSize: 11,
-    flexShrink: 1,
-  },
   bulkBtn: {
-    flexDirection:     'row',
-    alignItems:        'center',
-    gap:               spacing[2],
-    backgroundColor:   colors.primary,
-    borderRadius:      10,
-    paddingHorizontal: spacing[4],
-    paddingVertical:   spacing[3],
-    alignSelf:         'stretch',
-    justifyContent:    'center',
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    backgroundColor: colors.primary, borderRadius: 10,
+    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+    alignSelf: 'stretch', justifyContent: 'center',
   },
-  bulkBtnText: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize:   13,
-    color:      colors.black,
-  },
-  cardRight: {
-    alignItems: 'flex-end',
-    gap:        spacing[1],
-    flexShrink: 0,
-  },
-  newBadge: {
-    backgroundColor:   colors.neon,
-    paddingHorizontal: spacing[2],
-    paddingVertical:   2,
-    borderRadius:      3,
-  },
-  newBadgeText: {
-    fontSize:   9,
-    fontFamily: 'DMSans_700Bold',
-    color:      '#000',
-  },
-  amount: {
-    fontFamily: 'DMSans_700Bold',
-  },
+  bulkBtnText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.white },
 
-  divider: {
-    height:          1,
-    backgroundColor: colors.border.subtle,
-    marginHorizontal: -spacing[4],
-  },
+  card: { padding: spacing[4], gap: spacing[3] },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
+  cardInfo: { flex: 1, gap: 3 },
+  merchantName: { fontFamily: 'Montserrat_600SemiBold' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  typePill: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 20 },
+  typePillLabel: { fontSize: 9, fontFamily: 'Montserrat_600SemiBold' },
+  cardRight: { alignItems: 'flex-end', gap: spacing[1], flexShrink: 0 },
+  newBadge: { backgroundColor: colors.neon, paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 3 },
+  newBadgeText: { fontSize: 9, fontFamily: 'Montserrat_700Bold', color: colors.white },
+  amount: { fontFamily: 'Montserrat_700Bold' },
 
-  // Categorías
-  catSection: { gap: spacing[2] },
-  catLabelRow: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[2],
-  },
-  catLabel: {
-    fontSize: 10,
-  },
-  catRow: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[2],
-  },
-  catList: {
-    gap:        spacing[2],
-    alignItems: 'center',
-  },
+  cardFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: colors.border.subtle },
+  suggestedRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  ctaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
 
-  // Chip en la fila horizontal — tamaño cuadrado fijo
-  catChip: {
-    width:          CAT_CHIP_SIZE,
-    height:         CAT_CHIP_SIZE,
-    alignItems:     'center',
-    justifyContent: 'center',
-    gap:            4,
-    borderWidth:    1,
-    borderColor:    colors.border.default,
-    borderRadius:   12,
-    backgroundColor: colors.bg.elevated,
-  },
-
-  // Wrapper del ícono — garantiza centrado perfecto independiente del SVG
-  catIconBox: {
-    width:          CAT_ICON_SIZE + 4,
-    height:         CAT_ICON_SIZE + 4,
-    alignItems:     'center',
-    justifyContent: 'center',
-  },
-
-  catChipLabel: {
-    fontSize:   8,
-    lineHeight: 10,
-    textAlign:  'center',
-    fontFamily: 'DMSans_400Regular',
-  },
-
-  // Botón TODOS
-  allBtn: {
-    width:          CAT_CHIP_SIZE,
-    height:         CAT_CHIP_SIZE,
-    alignItems:     'center',
-    justifyContent: 'center',
-    gap:            4,
-    borderWidth:    1,
-    borderColor:    colors.neon + '50',
-    borderRadius:   12,
-    backgroundColor: colors.neon + '0D',
-    flexShrink:     0,
-  },
-  allBtnLabel: {
-    fontSize:   8,
-    lineHeight: 10,
-    color:      colors.neon,
-    fontFamily: 'DMSans_600SemiBold',
-  },
-
-  // Show more
-  showMoreBtn: {
-    flexDirection:   'row',
-    alignItems:      'center',
-    justifyContent:  'center',
-    gap:             spacing[1],
-    paddingVertical: spacing[3],
-    borderTopWidth:  1,
-    borderTopColor:  colors.border.subtle,
-  },
-
-  // Modal
-  modalOverlay: {
-    flex:            1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent:  'flex-end',
-  },
-  modalSheet: {
-    backgroundColor:      colors.bg.primary,
-    borderTopLeftRadius:  20,
-    borderTopRightRadius: 20,
-    padding:              spacing[5],
-    gap:                  spacing[4],
-    paddingBottom:        spacing[10],
-  },
-  modalHeader: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
-  },
-  catGrid: {
-    flexDirection: 'row',
-    flexWrap:      'wrap',
-    gap:           spacing[2],
-  },
-  catGridItem: {
-    width:           '22%',
-    aspectRatio:     1,
-    alignItems:      'center',
-    justifyContent:  'center',
-    gap:             4,
-    borderWidth:     1,
-    borderColor:     colors.border.default,
-    borderRadius:    12,
-    backgroundColor: colors.bg.elevated,
-  },
+  showMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], paddingVertical: spacing[2] },
 });

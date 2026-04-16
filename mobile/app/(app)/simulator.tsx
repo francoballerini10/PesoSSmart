@@ -229,7 +229,7 @@ export default function SimulatorScreen() {
                 >
                   <Text
                     variant="label"
-                    color={selectedPeriod === p.months ? colors.black : colors.text.secondary}
+                    color={selectedPeriod === p.months ? colors.white : colors.text.secondary}
                   >
                     {p.label}
                   </Text>
@@ -254,7 +254,7 @@ export default function SimulatorScreen() {
             activeOpacity={0.85}
           >
             <Text style={styles.calcBtnText}>CALCULAR</Text>
-            <Ionicons name="arrow-forward" size={16} color={colors.black} />
+            <Ionicons name="arrow-forward" size={16} color={colors.white} />
           </TouchableOpacity>
 
           {/* ── Resultado ─────────────────────────────────────────────────── */}
@@ -445,7 +445,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neon, borderRadius: 12, paddingVertical: spacing[4],
   },
   calcBtnDisabled: { backgroundColor: colors.mediumGray },
-  calcBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.black },
+  calcBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.white },
 
   // Resultado
   resultCard: { padding: spacing[5], gap: spacing[4] },

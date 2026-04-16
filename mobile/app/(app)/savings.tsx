@@ -12,6 +12,7 @@ import {
   Platform,
   RefreshControl,
 } from 'react-native';
+import Svg, { Circle, Path, Rect, Ellipse, G } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +28,92 @@ import {
 } from '@/store/savingsStore';
 import { fetchDolarRateNow } from '@/hooks/useDolarRates';
 import { formatCurrency } from '@/utils/format';
+
+// ─── Empty State ──────────────────────────────────────────────────────────────
+
+function SavingsEmptyIllustration() {
+  return (
+    <Svg width={160} height={140} viewBox="0 0 160 140">
+      {/* Fondo círculo suave */}
+      <Circle cx="80" cy="75" r="60" fill={colors.primary + '12'} />
+      {/* Alcancía cuerpo */}
+      <Ellipse cx="80" cy="82" rx="38" ry="32" fill={colors.primary + '30'} />
+      <Ellipse cx="80" cy="82" rx="38" ry="32" fill="none" stroke={colors.primary} strokeWidth="2" />
+      {/* Hocico */}
+      <Ellipse cx="112" cy="86" rx="10" ry="8" fill={colors.primary + '40'} stroke={colors.primary} strokeWidth="1.5" />
+      {/* Ojo */}
+      <Circle cx="97" cy="74" r="3" fill={colors.primary} />
+      {/* Oreja */}
+      <Ellipse cx="62" cy="56" rx="8" ry="10" fill={colors.primary + '40'} stroke={colors.primary} strokeWidth="1.5" />
+      {/* Ranura moneda */}
+      <Rect x="70" y="52" width="20" height="4" rx="2" fill={colors.primary} />
+      {/* Patas */}
+      <Rect x="60" y="110" width="10" height="14" rx="5" fill={colors.primary + '50'} />
+      <Rect x="76" y="112" width="10" height="12" rx="5" fill={colors.primary + '50'} />
+      <Rect x="92" y="110" width="10" height="14" rx="5" fill={colors.primary + '50'} />
+      {/* Monedas flotando */}
+      <Circle cx="36" cy="44" r="10" fill={colors.yellow + '60'} />
+      <Circle cx="36" cy="44" r="10" fill="none" stroke={colors.yellow} strokeWidth="1.5" />
+      <Path d="M33 44 Q36 40 39 44 Q36 48 33 44Z" fill={colors.yellow} />
+      <Circle cx="128" cy="38" r="8" fill={colors.yellow + '60'} />
+      <Circle cx="128" cy="38" r="8" fill="none" stroke={colors.yellow} strokeWidth="1.5" />
+      <Path d="M125.5 38 Q128 34.5 130.5 38 Q128 41.5 125.5 38Z" fill={colors.yellow} />
+      <Circle cx="50" cy="24" r="6" fill={colors.yellow + '40'} />
+    </Svg>
+  );
+}
+
+function SavingsEmptyState({ onAddCash, onAddInvestment }: { onAddCash: () => void; onAddInvestment: () => void }) {
+  return (
+    <View style={emptyStyles.container}>
+      <SavingsEmptyIllustration />
+      <View style={emptyStyles.textBlock}>
+        <Text variant="subtitle" color={colors.text.primary} align="center">
+          Tu capital hoy es $0
+        </Text>
+        <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
+          Cada peso que registres acá empieza a trabajar para vos.
+        </Text>
+      </View>
+
+      <View style={emptyStyles.buttons}>
+        <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.primary }]} onPress={onAddCash} activeOpacity={0.85}>
+          <Ionicons name="cash-outline" size={18} color={colors.white} />
+          <Text style={emptyStyles.btnText}>+ Agregar efectivo</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.bg.elevated, borderWidth: 1, borderColor: colors.border.default }]} onPress={onAddInvestment} activeOpacity={0.85}>
+          <Ionicons name="trending-up-outline" size={18} color={colors.primary} />
+          <Text style={[emptyStyles.btnText, { color: colors.primary }]}>+ Agregar inversión</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={emptyStyles.legend}>
+        <View style={emptyStyles.legendItem}>
+          <Ionicons name="cash-outline" size={14} color={colors.text.tertiary} />
+          <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, lineHeight: 18 }}>
+            <Text variant="caption" color={colors.text.secondary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>Efectivo</Text>: billetes, cuentas, dólares que tenés guardados.
+          </Text>
+        </View>
+        <View style={emptyStyles.legendItem}>
+          <Ionicons name="trending-up-outline" size={14} color={colors.text.tertiary} />
+          <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, lineHeight: 18 }}>
+            <Text variant="caption" color={colors.text.secondary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>Inversión</Text>: FCI, Cedears, Plazo Fijo, cripto y más.
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const emptyStyles = StyleSheet.create({
+  container:   { alignItems: 'center', gap: spacing[5], paddingVertical: spacing[6] },
+  textBlock:   { gap: spacing[2], paddingHorizontal: spacing[4] },
+  buttons:     { gap: spacing[3], width: '100%' },
+  btn:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], borderRadius: 12, paddingVertical: spacing[4] },
+  btnText:     { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.white },
+  legend:      { gap: spacing[3], width: '100%', paddingHorizontal: spacing[2] },
+  legendItem:  { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
+});
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -377,7 +464,7 @@ function AddSavingModal({
                   style={[modalStyles.seg, currency === c && modalStyles.segActive]}
                   onPress={() => setCurrency(c)}
                 >
-                  <Text variant="label" style={{ color: currency === c ? colors.black : colors.text.secondary }}>
+                  <Text variant="label" style={{ color: currency === c ? colors.white : colors.text.secondary }}>
                     {c === 'ARS' ? '🇦🇷 Pesos' : '💵 Dólares'}
                   </Text>
                 </TouchableOpacity>
@@ -414,7 +501,7 @@ function AddSavingModal({
               disabled={saving}
             >
               {saving
-                ? <ActivityIndicator size="small" color={colors.black} />
+                ? <ActivityIndicator size="small" color={colors.white} />
                 : <Text style={modalStyles.saveBtnText}>Guardar</Text>
               }
             </TouchableOpacity>
@@ -509,8 +596,8 @@ function AddInvestmentModal({
                         active && { backgroundColor: cfg.color, borderColor: cfg.color },
                       ]}
                     >
-                      <Ionicons name={cfg.icon as any} size={14} color={active ? colors.black : cfg.color} />
-                      <Text style={[modalStyles.instrChipText, { color: active ? colors.black : colors.text.secondary }]}>
+                      <Ionicons name={cfg.icon as any} size={14} color={active ? colors.white : cfg.color} />
+                      <Text style={[modalStyles.instrChipText, { color: active ? colors.white : colors.text.secondary }]}>
                         {cfg.label}
                       </Text>
                     </TouchableOpacity>
@@ -528,7 +615,7 @@ function AddInvestmentModal({
                   style={[modalStyles.seg, currency === c && modalStyles.segActive]}
                   onPress={() => setCurrency(c)}
                 >
-                  <Text variant="label" style={{ color: currency === c ? colors.black : colors.text.secondary }}>
+                  <Text variant="label" style={{ color: currency === c ? colors.white : colors.text.secondary }}>
                     {c}
                   </Text>
                 </TouchableOpacity>
@@ -588,7 +675,7 @@ function AddInvestmentModal({
               disabled={saving}
             >
               {saving
-                ? <ActivityIndicator size="small" color={colors.black} />
+                ? <ActivityIndicator size="small" color={colors.white} />
                 : <Text style={modalStyles.saveBtnText}>Guardar</Text>
               }
             </TouchableOpacity>
@@ -620,7 +707,7 @@ const modalStyles = StyleSheet.create({
   },
   instrChipText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 11 },
   saveBtn:     { marginTop: spacing[4], backgroundColor: colors.primary, borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center' },
-  saveBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.black },
+  saveBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.white },
 });
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -726,6 +813,12 @@ export default function SavingsScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── Empty State ────────────────────────────────────────────────── */}
+        {totalARS + totalUSDInARS + totalInvested === 0 && !isLoading ? (
+          <SavingsEmptyState onAddCash={openAddSaving} onAddInvestment={openAddInv} />
+        ) : (
+        <>
+
         {/* ── Total ──────────────────────────────────────────────────────── */}
         <TotalCapitalCard
           totalARS={totalARS}
@@ -819,9 +912,9 @@ export default function SavingsScreen() {
           } as any)}
           activeOpacity={0.85}
         >
-          <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.black} />
+          <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.white} />
           <Text style={styles.advisorBtnText}>Hablar con el asesor sobre mi capital</Text>
-          <Ionicons name="arrow-forward" size={14} color={colors.black} />
+          <Ionicons name="arrow-forward" size={14} color={colors.white} />
         </TouchableOpacity>
 
         {/* ── Ver simulador ───────────────────────────────────────────────── */}
@@ -834,6 +927,8 @@ export default function SavingsScreen() {
           <Text variant="label" color={colors.primary}>Simular rendimientos</Text>
           <Ionicons name="arrow-forward" size={14} color={colors.primary} />
         </TouchableOpacity>
+
+        </>)}
       </ScrollView>
 
       <AddSavingModal
@@ -899,7 +994,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neon, borderRadius: 14,
     paddingHorizontal: spacing[5], paddingVertical: spacing[4],
   },
-  advisorBtnText: { flex: 1, fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.black },
+  advisorBtnText: { flex: 1, fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.white },
   simBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2],
     borderWidth: 1, borderColor: colors.primary + '40',

@@ -573,11 +573,11 @@ export function DineroRecuperableCard({ sugerencias, month, year }: {
         activeOpacity={0.85}
         onPress={() => router.push({ pathname: '/(app)/advisor', params: { initialContext: investContext } } as any)}
       >
-        <Ionicons name="trending-up-outline" size={16} color={colors.black} />
-        <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.black }}>
+        <Ionicons name="trending-up-outline" size={16} color={colors.white} />
+        <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.white }}>
           ¿En qué invierto y cuánto genero?
         </Text>
-        <Ionicons name="arrow-forward" size={14} color={colors.black} style={{ marginLeft: 'auto' }} />
+        <Ionicons name="arrow-forward" size={14} color={colors.white} style={{ marginLeft: 'auto' }} />
       </TouchableOpacity>
     </Card>
   );
@@ -682,19 +682,19 @@ export function AdvisorCTA({ context }: { context: string }) {
     >
       <View style={ctaStyles.left}>
         <View style={ctaStyles.avatar}>
-          <Text style={{ fontSize: 13, fontFamily: 'Montserrat_700Bold', color: colors.black }}>SP</Text>
+          <Text style={{ fontSize: 13, fontFamily: 'Montserrat_700Bold', color: colors.white }}>SP</Text>
         </View>
         <View style={{ flex: 1, gap: 3 }}>
-          <Text variant="labelMd" color={colors.black}>Hablá con tu asesor</Text>
-          <Text variant="caption" color={colors.black + 'AA'}>Tiene tu contexto real. Preguntale lo que quieras.</Text>
+          <Text variant="labelMd" color={colors.white}>Hablá con tu asesor</Text>
+          <Text variant="caption" color={colors.white + 'AA'}>Tiene tu contexto real. Preguntale lo que quieras.</Text>
         </View>
       </View>
-      <Ionicons name="arrow-forward" size={18} color={colors.black} />
+      <Ionicons name="arrow-forward" size={18} color={colors.white} />
     </TouchableOpacity>
   );
 }
 const ctaStyles = StyleSheet.create({
   card:   { backgroundColor: colors.neon, borderRadius: 14, padding: spacing[4], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[3] },
   left:   { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.black + '18', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.white + '18', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 });
