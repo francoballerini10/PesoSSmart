@@ -144,7 +144,7 @@ function PlanCard({
             onPress={() => onSelect(planId)}
             activeOpacity={0.85}
           >
-            <Text style={[cardStyles.ctaText, { color: planId === 'premium' ? colors.black : colors.black }]}>
+            <Text style={[cardStyles.ctaText, { color: planId === 'premium' ? colors.white : colors.black }]}>
               {plan.ctaLabel}
             </Text>
           </TouchableOpacity>
@@ -163,7 +163,7 @@ const cardStyles = StyleSheet.create({
     backgroundColor: colors.neon, paddingHorizontal: spacing[3], paddingVertical: 4,
     borderBottomLeftRadius: 8,
   },
-  popularText: { fontSize: 9, fontFamily: 'Montserrat_700Bold', color: colors.black },
+  popularText: { fontSize: 9, fontFamily: 'Montserrat_700Bold', color: colors.white },
   header:      { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   priceBox:    { alignItems: 'flex-end', gap: 1 },
   highlights:  { gap: spacing[2] },
@@ -236,10 +236,10 @@ export default function PlansScreen() {
         {/* Trial Banner */}
         {trialActive && (
           <View style={styles.trialBanner}>
-            <Ionicons name="star-outline" size={18} color={colors.black} />
+            <Ionicons name="star-outline" size={18} color={colors.white} />
             <View style={{ flex: 1, gap: 2 }}>
-              <Text variant="labelMd" color={colors.black}>Trial Premium activo</Text>
-              <Text variant="caption" color={colors.black + 'CC'}>
+              <Text variant="labelMd" color={colors.white}>Trial Premium activo</Text>
+              <Text variant="caption" color={colors.white + 'CC'}>
                 {daysLeft !== null && daysLeft > 0
                   ? `Te quedan ${daysLeft} día${daysLeft !== 1 ? 's' : ''} para explorar todas las funciones.`
                   : 'Tu trial está por vencer. Elegí un plan para continuar.'}

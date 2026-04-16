@@ -26,6 +26,8 @@ import { Text, Card, PressableCard, Button, Input, Badge } from '@/components/ui
 import { useAuthStore } from '@/store/authStore';
 import { useExpensesStore } from '@/store/expensesStore';
 import type { DetectedSubscription } from '@/store/expensesStore';
+import { useRoundUpStore } from '@/store/roundUpStore';
+import { useStreakStore } from '@/store/streakStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/utils/format';
 import type { PaymentMethod, Expense, ExpenseClassification } from '@/types';
@@ -221,7 +223,7 @@ function MonthSelector({
           >
             <Text
               variant="label"
-              style={{ fontSize: 10, color: isActive ? colors.black : colors.text.secondary }}
+              style={{ fontSize: 10, color: isActive ? colors.white : colors.text.secondary }}
             >
               {m.label.toUpperCase()}
             </Text>
@@ -276,6 +278,15 @@ export default function ExpensesScreen() {
 
   const { rates, labels: dolarLabels } = useDolarRates();
   // dolarLabels viene del hook pero también exportamos DOLAR_LABELS directamente
+
+  const roundUpStore  = useRoundUpStore();
+  const streakStore   = useStreakStore();
+
+  useEffect(() => {
+    roundUpStore.load();
+    roundUpStore.checkReset();
+    streakStore.load();
+  }, []);
 
   const [showSubscriptions, setShowSubscriptions] = useState(false);
   const [activeTab, setActiveTab] = useState<'gastos' | 'analisis'>('gastos');
@@ -655,7 +666,7 @@ export default function ExpensesScreen() {
         notesWithFx = data.notes ? `${data.notes} | ${fxNote}` : fxNote;
       }
 
-      await addExpense(user.id, {
+      const savedExpense = await addExpense(user.id, {
         description:    data.description,
         amount:         finalAmount,
         date:           data.date,
@@ -664,6 +675,23 @@ export default function ExpensesScreen() {
         notes:          notesWithFx,
         is_recurring:   false,
       });
+
+      // Gamificación — racha
+      const classification = (savedExpense as any).classification ?? 'necessary';
+      streakStore.recordExpense(data.date, classification as any);
+
+      // Redondeo automático
+      const roundedUp = await roundUpStore.recordExpense(finalAmount);
+      if (roundedUp > 0) {
+        const dest = roundUpStore.destination === 'fci' ? 'FCI Money Market' : 'Ahorro en efectivo';
+        Alert.alert(
+          '🪙 Redondeo automático',
+          `+$${roundedUp.toLocaleString('es-AR')} acumulados en ${dest}.`,
+          [{ text: 'OK' }],
+          { cancelable: true },
+        );
+      }
+
       reset();
       setShowAddModal(false);
       setSelectedCategory(null);
@@ -798,49 +826,28 @@ export default function ExpensesScreen() {
         )}
       </View>
 
-      {/* Suscripciones detectadas */}
+      {/* Suscripciones detectadas — banner compacto */}
       {subscriptions.length > 0 && (
         <TouchableOpacity
-          style={styles.subsHeader}
-          onPress={() => setShowSubscriptions(!showSubscriptions)}
-          activeOpacity={0.7}
+          style={styles.subsBanner}
+          onPress={() => setShowSubscriptions(true)}
+          activeOpacity={0.85}
         >
-          <View style={styles.subsHeaderLeft}>
-            <Ionicons name="repeat-outline" size={16} color={colors.yellow} />
-            <Text variant="label" color={colors.yellow}>
-              {subscriptions.length} SUSCRIPCIÓN{subscriptions.length > 1 ? 'ES' : ''} DETECTADA{subscriptions.length > 1 ? 'S' : ''}
-            </Text>
-          </View>
-          <Ionicons
-            name={showSubscriptions ? 'chevron-up' : 'chevron-down'}
-            size={16}
-            color={colors.text.secondary}
-          />
-        </TouchableOpacity>
-      )}
-
-      {showSubscriptions && subscriptions.length > 0 && (
-        <View style={styles.subsContainer}>
-          {subscriptions.map((sub) => (
-            <View key={sub.description} style={styles.subRow}>
-              <View style={{ flex: 1 }}>
-                <Text variant="bodySmall" color={colors.text.primary}>{sub.description}</Text>
-                <Text variant="caption" color={colors.text.secondary}>
-                  {sub.occurrences} veces en 90 días
-                </Text>
-              </View>
-              <Text variant="labelMd" color={colors.yellow}>
-                {formatCurrency(sub.averageAmount)}/mes
+          <View style={styles.subsBannerLeft}>
+            <View style={styles.subsBannerIcon}>
+              <Ionicons name="repeat-outline" size={16} color={colors.yellow} />
+            </View>
+            <View style={{ gap: 2 }}>
+              <Text variant="label" color={colors.yellow}>
+                {subscriptions.length} SUSCRIPCIÓN{subscriptions.length > 1 ? 'ES' : ''} DETECTADA{subscriptions.length > 1 ? 'S' : ''}
+              </Text>
+              <Text variant="caption" color={colors.text.secondary}>
+                {formatCurrency(subscriptions.reduce((s, sub) => s + sub.averageAmount, 0))} / mes · Tocá para ver el detalle
               </Text>
             </View>
-          ))}
-          <View style={styles.subsTotalRow}>
-            <Text variant="label" color={colors.text.secondary}>TOTAL MENSUAL</Text>
-            <Text variant="labelMd" color={colors.red}>
-              {formatCurrency(subscriptions.reduce((s, sub) => s + sub.averageAmount, 0))}/mes
-            </Text>
           </View>
-        </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+        </TouchableOpacity>
       )}
     </>
   );
@@ -956,6 +963,105 @@ export default function ExpensesScreen() {
         <Ionicons name="add" size={26} color={colors.white} />
       </TouchableOpacity>
 
+      {/* Bottom sheet — Suscripciones detectadas */}
+      <Modal
+        visible={showSubscriptions}
+        animationType="slide"
+        presentationStyle="formSheet"
+        onRequestClose={() => setShowSubscriptions(false)}
+      >
+        <SafeAreaView style={styles.modal}>
+          {/* Header */}
+          <View style={styles.modalHeader}>
+            <View style={{ gap: 2 }}>
+              <Text variant="h4">Suscripciones detectadas</Text>
+              <Text variant="caption" color={colors.text.secondary}>
+                Débitos recurrentes en los últimos 90 días
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setShowSubscriptions(false)}>
+              <Ionicons name="close" size={24} color={colors.text.primary} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView contentContainerStyle={{ padding: layout.screenPadding, gap: spacing[4] }} showsVerticalScrollIndicator={false}>
+
+            {/* Total mensual destacado */}
+            <View style={subsSheetStyles.totalCard}>
+              <Ionicons name="repeat-outline" size={20} color={colors.yellow} />
+              <View style={{ flex: 1 }}>
+                <Text variant="caption" color={colors.text.secondary}>Total mensual en suscripciones</Text>
+                <Text style={subsSheetStyles.totalAmount}>
+                  {formatCurrency(subscriptions.reduce((s, sub) => s + sub.averageAmount, 0))}
+                </Text>
+              </View>
+              <View style={subsSheetStyles.countBadge}>
+                <Text style={subsSheetStyles.countText}>{subscriptions.length}</Text>
+              </View>
+            </View>
+
+            {/* Lista */}
+            {subscriptions.map((sub, idx) => (
+              <View key={sub.description} style={subsSheetStyles.card}>
+                <View style={subsSheetStyles.cardHeader}>
+                  <View style={subsSheetStyles.cardIcon}>
+                    <Ionicons
+                      name={sub.category === 'Entretenimiento' ? 'play-circle-outline' : sub.category === 'Salud' ? 'fitness-outline' : 'card-outline'}
+                      size={18}
+                      color={colors.yellow}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                      {sub.description}
+                    </Text>
+                    {sub.category && (
+                      <Text variant="caption" color={colors.text.tertiary}>{sub.category}</Text>
+                    )}
+                  </View>
+                  <View style={subsSheetStyles.amountCol}>
+                    <Text style={subsSheetStyles.subAmount}>{formatCurrency(sub.averageAmount)}</Text>
+                    <Text variant="caption" color={colors.text.tertiary}>/mes</Text>
+                  </View>
+                </View>
+
+                <View style={subsSheetStyles.metaRow}>
+                  <View style={subsSheetStyles.metaChip}>
+                    <Ionicons name="calendar-outline" size={11} color={colors.text.tertiary} />
+                    <Text variant="caption" color={colors.text.tertiary}>
+                      {sub.occurrences} veces en 90 días
+                    </Text>
+                  </View>
+                  <View style={subsSheetStyles.metaChip}>
+                    <Ionicons name="time-outline" size={11} color={colors.text.tertiary} />
+                    <Text variant="caption" color={colors.text.tertiary}>
+                      Último: {sub.lastDate}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Tip de ahorro anual */}
+                <View style={subsSheetStyles.tipRow}>
+                  <Ionicons name="bulb-outline" size={12} color={colors.text.tertiary} />
+                  <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1 }}>
+                    Son {formatCurrency(sub.averageAmount * 12)} al año
+                  </Text>
+                </View>
+              </View>
+            ))}
+
+            {/* Disclaimer */}
+            <View style={subsSheetStyles.disclaimer}>
+              <Ionicons name="information-circle-outline" size={13} color={colors.text.tertiary} />
+              <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, lineHeight: 17 }}>
+                Detectamos estos débitos automáticamente a partir de tus gastos registrados. Pueden incluir suscripciones, servicios o pagos recurrentes.
+              </Text>
+            </View>
+
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
       {/* Modal agregar gasto */}
       <Modal
         visible={showAddModal}
@@ -1031,13 +1137,13 @@ export default function ExpensesScreen() {
                         >
                           <Text
                             variant="caption"
-                            color={dolarType === t ? colors.black : colors.text.secondary}
+                            color={dolarType === t ? colors.white : colors.text.secondary}
                           >
                             {dolarLabels[t]}
                           </Text>
                           <Text
                             variant="caption"
-                            color={dolarType === t ? colors.black : colors.text.tertiary}
+                            color={dolarType === t ? colors.white : colors.text.tertiary}
                           >
                             {rate ? `$${rate.toLocaleString('es-AR')}` : '...'}
                           </Text>
@@ -1142,7 +1248,7 @@ export default function ExpensesScreen() {
                     >
                       <Text
                         variant="caption"
-                        color={selectedPayment === pm.value ? colors.black : colors.text.secondary}
+                        color={selectedPayment === pm.value ? colors.white : colors.text.secondary}
                       >
                         {pm.label}
                       </Text>
@@ -1523,7 +1629,7 @@ const styles = StyleSheet.create({
     flex:       1,
     color:      colors.text.primary,
     fontSize:   14,
-    fontFamily: 'DMSans_400Regular',
+    fontFamily: 'Montserrat_400Regular',
     paddingVertical: spacing[1],
   },
   filterChip: {
@@ -1741,5 +1847,57 @@ const styles = StyleSheet.create({
   toggleDotActive: {
     backgroundColor: colors.neon,
     borderColor:     colors.neon,
+  },
+  // Subscriptions banner (list header)
+  subsBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginHorizontal: layout.screenPadding, marginBottom: spacing[2],
+    backgroundColor: colors.yellow + '0D', borderWidth: 1, borderColor: colors.yellow + '33',
+    borderRadius: 12, padding: spacing[3],
+  },
+  subsBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], flex: 1 },
+  subsBannerIcon: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: colors.yellow + '20',
+    alignItems: 'center', justifyContent: 'center',
+  },
+});
+
+const subsSheetStyles = StyleSheet.create({
+  totalCard: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: colors.yellow + '10', borderWidth: 1, borderColor: colors.yellow + '30',
+    borderRadius: 14, padding: spacing[4],
+  },
+  totalAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: colors.yellow },
+  countBadge: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: colors.yellow + '20',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  countText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.yellow },
+  card: {
+    backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 14, padding: spacing[4], gap: spacing[2],
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  cardIcon: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: colors.yellow + '15',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  amountCol: { alignItems: 'flex-end', gap: 1 },
+  subAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: colors.yellow },
+  metaRow: { flexDirection: 'row', gap: spacing[2] },
+  metaChip: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+    backgroundColor: colors.bg.elevated, borderRadius: 6,
+    paddingHorizontal: spacing[2], paddingVertical: spacing[1],
+  },
+  tipRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    backgroundColor: colors.border.subtle + '60', borderRadius: 6,
+    paddingHorizontal: spacing[2], paddingVertical: spacing[1],
+  },
+  disclaimer: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
+    paddingTop: spacing[2],
   },
 });

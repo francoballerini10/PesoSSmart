@@ -122,12 +122,12 @@ function MiniResult({
       <View style={miniStyles.left}>
         {isPrimary && (
           <View style={miniStyles.primTag}>
-            <Text style={{ fontSize: 7, color: colors.neon, fontFamily: 'DMSans_600SemiBold' }}>
+            <Text style={{ fontSize: 7, color: colors.neon, fontFamily: 'Montserrat_600SemiBold' }}>
               PRINCIPAL
             </Text>
           </View>
         )}
-        <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'DMSans_600SemiBold' }} numberOfLines={1}>
+        <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }} numberOfLines={1}>
           {result.instrument.shortName}
         </Text>
         <View style={[miniStyles.badge, { backgroundColor: uiColor + '20' }]}>
@@ -310,7 +310,7 @@ export function SavingsSimulator({
       {/* Referencia al ahorro real */}
       <Text variant="caption" color={colors.text.tertiary}>
         Tus ahorros reales:{' '}
-        <Text variant="caption" color={colors.text.secondary} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+        <Text variant="caption" color={colors.text.secondary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
           {formatCurrency(realAmount)}
         </Text>
         {isModified && (
@@ -364,7 +364,7 @@ export function SavingsSimulator({
               <Text
                 variant="caption"
                 color={isActive ? colors.neon : colors.text.secondary}
-                style={{ fontSize: 9, fontFamily: isActive ? 'DMSans_600SemiBold' : 'DMSans_400Regular' }}
+                style={{ fontSize: 9, fontFamily: isActive ? 'Montserrat_600SemiBold' : 'Montserrat_400Regular' }}
               >
                 {p.label}
               </Text>
@@ -435,7 +435,7 @@ const simStyles = StyleSheet.create({
   amountInput: {
     flex:        1,
     fontSize:    22,
-    fontFamily:  'DMSans_700Bold',
+    fontFamily:  'Montserrat_700Bold',
     color:       colors.text.primary,
     paddingVertical: 0,
   },

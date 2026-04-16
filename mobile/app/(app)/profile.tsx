@@ -4,6 +4,7 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
+  Switch,
   Alert,
   Modal,
   KeyboardAvoidingView,
@@ -21,6 +22,8 @@ import { colors, spacing, layout } from '@/theme';
 import { Text, Card, Button, Input } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
 import { usePlanStore } from '@/store/planStore';
+import { useRoundUpStore } from '@/store/roundUpStore';
+import type { RoundTo, RoundDest } from '@/store/roundUpStore';
 import { PLANS } from '@/lib/plans';
 import { supabase } from '@/lib/supabase';
 
@@ -70,14 +73,22 @@ export default function ProfileScreen() {
     load: loadPlan,
   } = usePlanStore();
 
+  const roundUp = useRoundUpStore();
+
   useEffect(() => {
     if (user?.id) loadPlan(user.id);
   }, [user?.id]);
 
+  useEffect(() => {
+    roundUp.load();
+    roundUp.checkReset();
+  }, []);
+
   const trialActive = isTrialActive();
   const daysLeft    = daysLeftInTrial();
   const plan        = PLANS[effectivePlan];
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [showEditModal,   setShowEditModal]   = useState(false);
+  const [showRoundUpModal, setShowRoundUpModal] = useState(false);
   const [gmailEmail,   setGmailEmail]   = useState<string | null>(null);
   const [gmailExpired, setGmailExpired] = useState(false);
   const [gmailLoading, setGmailLoading] = useState(false);
@@ -257,9 +268,9 @@ export default function ProfileScreen() {
         {/* Header */}
         <View style={styles.profileHeader}>
           <TouchableOpacity style={styles.avatar} onPress={openEditModal}>
-            <Text variant="h4" color={colors.black}>{initials}</Text>
+            <Text variant="h4" color={colors.white}>{initials}</Text>
             <View style={styles.avatarEditBadge}>
-              <Ionicons name="pencil" size={10} color={colors.black} />
+              <Ionicons name="pencil" size={10} color={colors.white} />
             </View>
           </TouchableOpacity>
           <View style={{ flex: 1, gap: spacing[1] }}>
@@ -285,8 +296,8 @@ export default function ProfileScreen() {
           {/* Trial banner */}
           {trialActive && (
             <View style={styles.trialBanner}>
-              <Ionicons name="star" size={13} color={colors.black} />
-              <Text variant="caption" color={colors.black} style={{ fontFamily: 'Montserrat_700Bold', flex: 1 }}>
+              <Ionicons name="star" size={13} color={colors.white} />
+              <Text variant="caption" color={colors.white} style={{ fontFamily: 'Montserrat_700Bold', flex: 1 }}>
                 Trial Premium activo
                 {daysLeft !== null && daysLeft > 0 ? ` · ${daysLeft} día${daysLeft !== 1 ? 's' : ''} restantes` : ' · vence hoy'}
               </Text>
@@ -308,7 +319,7 @@ export default function ProfileScreen() {
               style={styles.planBtn}
               onPress={() => router.push('/(app)/plans')}
             >
-              <Text variant="caption" color={colors.black} style={{ fontFamily: 'Montserrat_700Bold' }}>
+              <Text variant="caption" color={colors.white} style={{ fontFamily: 'Montserrat_700Bold' }}>
                 {effectivePlan === 'premium' && !trialActive ? 'GESTIONAR' : 'VER PLANES'}
               </Text>
             </TouchableOpacity>
@@ -463,6 +474,27 @@ export default function ProfileScreen() {
           </Card>
         </View>
 
+        {/* Automatización */}
+        <View style={styles.section}>
+          <Text variant="label" color={colors.text.secondary} style={styles.sectionTitle}>AUTOMATIZACIÓN</Text>
+          <Card style={styles.menuCard}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => setShowRoundUpModal(true)}>
+              <View style={styles.menuIcon}>
+                <Ionicons name="magnet-outline" size={20} color={roundUp.enabled ? colors.primary : colors.text.secondary} />
+              </View>
+              <View style={styles.menuText}>
+                <Text variant="bodySmall" color={colors.text.primary}>Redondeo automático</Text>
+                <Text variant="caption" color={roundUp.enabled ? colors.primary : colors.text.secondary}>
+                  {roundUp.enabled
+                    ? `Activo · al siguiente $${roundUp.roundTo} → ${roundUp.destination === 'fci' ? 'FCI' : 'Ahorro'}`
+                    : 'Acumulá ahorro con cada gasto'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+            </TouchableOpacity>
+          </Card>
+        </View>
+
         {/* Cerrar sesión */}
         <Card style={styles.menuCard}>
           <MenuItem
@@ -478,6 +510,111 @@ export default function ProfileScreen() {
           SmartPesos v1.0.0 · Tu plata, inteligente.
         </Text>
       </ScrollView>
+
+      {/* Modal redondeo automático */}
+      <Modal
+        visible={showRoundUpModal}
+        animationType="slide"
+        presentationStyle="formSheet"
+        onRequestClose={() => setShowRoundUpModal(false)}
+      >
+        <SafeAreaView style={styles.modal}>
+          <View style={styles.modalHeader}>
+            <Text variant="h4">Redondeo automático</Text>
+            <TouchableOpacity onPress={() => setShowRoundUpModal(false)}>
+              <Ionicons name="close" size={24} color={colors.text.primary} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
+            {/* Enable toggle */}
+            <View style={ruStyles.row}>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text variant="bodySmall" color={colors.text.primary}>Activar redondeo</Text>
+                <Text variant="caption" color={colors.text.secondary}>
+                  Cada gasto se redondea y la diferencia se acumula automáticamente.
+                </Text>
+              </View>
+              <Switch
+                value={roundUp.enabled}
+                onValueChange={(v) => roundUp.configure({ enabled: v })}
+                trackColor={{ false: colors.border.default, true: colors.primary + '80' }}
+                thumbColor={roundUp.enabled ? colors.primary : colors.text.tertiary}
+              />
+            </View>
+
+            {roundUp.enabled && (
+              <>
+                {/* Redondear a */}
+                <View style={ruStyles.section}>
+                  <Text variant="label" color={colors.text.secondary}>REDONDEAR AL SIGUIENTE</Text>
+                  <View style={ruStyles.optRow}>
+                    {([500, 1000] as RoundTo[]).map((v) => (
+                      <TouchableOpacity
+                        key={v}
+                        style={[ruStyles.opt, roundUp.roundTo === v && { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
+                        onPress={() => roundUp.configure({ roundTo: v })}
+                      >
+                        <Text variant="bodySmall" color={roundUp.roundTo === v ? colors.primary : colors.text.secondary}>
+                          ${v.toLocaleString('es-AR')}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                {/* Destino */}
+                <View style={ruStyles.section}>
+                  <Text variant="label" color={colors.text.secondary}>DESTINO DEL REDONDEO</Text>
+                  <View style={ruStyles.destCol}>
+                    {([
+                      { key: 'fci' as RoundDest,     label: 'FCI Money Market',   icon: 'trending-up-outline', desc: 'Rinde ~3% mensual, disponible siempre' },
+                      { key: 'savings' as RoundDest, label: 'Ahorro en efectivo',  icon: 'wallet-outline',      desc: 'Separado del gasto, sin inversión' },
+                    ]).map(({ key, label, icon, desc }) => (
+                      <TouchableOpacity
+                        key={key}
+                        style={[ruStyles.destOpt, roundUp.destination === key && { borderColor: colors.primary, backgroundColor: colors.primary + '10' }]}
+                        onPress={() => roundUp.configure({ destination: key })}
+                      >
+                        <Ionicons name={icon as any} size={18} color={roundUp.destination === key ? colors.primary : colors.text.tertiary} />
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text variant="bodySmall" color={roundUp.destination === key ? colors.primary : colors.text.primary}>{label}</Text>
+                          <Text variant="caption" color={colors.text.tertiary}>{desc}</Text>
+                        </View>
+                        {roundUp.destination === key && (
+                          <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                {/* Resumen acumulado */}
+                {roundUp.totalAllTime > 0 && (
+                  <View style={ruStyles.summary}>
+                    <Ionicons name="sparkles-outline" size={14} color={colors.yellow} />
+                    <Text variant="caption" color={colors.text.secondary} style={{ flex: 1, lineHeight: 17 }}>
+                      Acumulaste{' '}
+                      <Text variant="caption" color={colors.yellow} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                        ${roundUp.totalAllTime.toLocaleString('es-AR')}
+                      </Text>{' '}
+                      en total solo con redondeos.
+                    </Text>
+                  </View>
+                )}
+              </>
+            )}
+
+            <Button
+              label="LISTO"
+              variant="neon"
+              size="lg"
+              fullWidth
+              onPress={() => setShowRoundUpModal(false)}
+              style={{ marginTop: spacing[4] }}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       {/* Modal editar perfil */}
       <Modal
@@ -502,7 +639,7 @@ export default function ProfileScreen() {
               {/* Avatar preview */}
               <View style={styles.modalAvatarRow}>
                 <View style={styles.modalAvatar}>
-                  <Text variant="h3" color={colors.black}>{initials}</Text>
+                  <Text variant="h3" color={colors.white}>{initials}</Text>
                 </View>
               </View>
 
@@ -684,5 +821,30 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border.subtle,
+  },
+});
+
+const ruStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[4],
+    backgroundColor: colors.bg.elevated, borderRadius: 12, padding: spacing[4],
+  },
+  section: { gap: spacing[3] },
+  optRow:  { flexDirection: 'row', gap: spacing[3] },
+  opt: {
+    flex: 1, alignItems: 'center', paddingVertical: spacing[3],
+    borderRadius: 10, borderWidth: 1, borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+  },
+  destCol:  { gap: spacing[2] },
+  destOpt: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    borderWidth: 1, borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+    borderRadius: 12, padding: spacing[4],
+  },
+  summary: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
+    backgroundColor: colors.yellow + '0C', borderRadius: 8, padding: spacing[3],
   },
 });

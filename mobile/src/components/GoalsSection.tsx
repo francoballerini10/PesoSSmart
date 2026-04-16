@@ -109,7 +109,7 @@ export function GoalsSection({ userId, projectedMonthlyFree }: GoalsSectionProps
       <View style={styles.sectionHeader}>
         <Text variant="label" color={colors.text.secondary}>METAS DE AHORRO</Text>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowAddModal(true)}>
-          <Ionicons name="add" size={18} color={colors.black} />
+          <Ionicons name="add" size={18} color={colors.white} />
         </TouchableOpacity>
       </View>
 
@@ -253,6 +253,34 @@ export function GoalsSection({ userId, projectedMonthlyFree }: GoalsSectionProps
   );
 }
 
+/** Tasa de inflación mensual asumida para ajustar la meta */
+const MONTHLY_INFLATION = 0.035;
+
+/**
+ * Calcula los meses que faltan hasta una fecha límite.
+ * Mínimo 1 mes para evitar división por 0.
+ */
+function monthsUntilDeadline(deadline: string): number {
+  const now  = new Date();
+  const dead = new Date(deadline);
+  const diff =
+    (dead.getFullYear() - now.getFullYear()) * 12 +
+    (dead.getMonth() - now.getMonth());
+  return Math.max(1, diff);
+}
+
+/**
+ * Cuánto hay que ahorrar por mes para llegar a la meta antes del deadline,
+ * ajustando el monto restante por inflación.
+ *
+ *   target_ajustado = remaining × (1 + MONTHLY_INFLATION)^N
+ *   cuota           = target_ajustado / N
+ */
+function inflationAdjustedMonthly(remaining: number, months: number): number {
+  const adjustedTarget = remaining * Math.pow(1 + MONTHLY_INFLATION, months);
+  return Math.ceil(adjustedTarget / months);
+}
+
 function GoalCard({
   goal,
   projectedMonthlyFree,
@@ -264,30 +292,86 @@ function GoalCard({
   onAddFunds: () => void;
   onDelete: () => void;
 }) {
-  const pct = goal.target_amount > 0 ? Math.min(goal.current_amount / goal.target_amount, 1) : 0;
+  const pct       = goal.target_amount > 0 ? Math.min(goal.current_amount / goal.target_amount, 1) : 0;
   const remaining = goal.target_amount - goal.current_amount;
-  const monthsToGoal = projectedMonthlyFree != null && projectedMonthlyFree > 0
+  const isComplete = pct >= 1;
+
+  // ── Cálculos con deadline ──────────────────────────────────────────────────
+  const deadlineMonths = goal.deadline ? monthsUntilDeadline(goal.deadline) : null;
+  const deadlineExpired = goal.deadline
+    ? new Date(goal.deadline) < new Date()
+    : false;
+
+  // Cuota mensual ajustada por inflación para llegar a la meta a tiempo
+  const monthlyCuota = !isComplete && deadlineMonths && deadlineMonths > 0
+    ? inflationAdjustedMonthly(remaining, deadlineMonths)
+    : null;
+
+  // ¿Va en camino? Compara cuota necesaria vs flujo libre proyectado
+  const onTrack = monthlyCuota !== null && projectedMonthlyFree !== null
+    ? projectedMonthlyFree >= monthlyCuota
+    : null;
+
+  // Sin deadline: meses a ritmo actual
+  const monthsToGoalAtCurrentRate = !goal.deadline && projectedMonthlyFree != null && projectedMonthlyFree > 0
     ? Math.ceil(remaining / projectedMonthlyFree)
     : null;
-  const isComplete = pct >= 1;
+
+  const progressColor = isComplete
+    ? colors.primary
+    : onTrack === true
+      ? colors.neon
+      : onTrack === false
+        ? colors.red
+        : colors.primary;
 
   return (
     <Card style={styles.goalCard}>
+      {/* Header */}
       <View style={styles.goalHeader}>
         <Text style={{ fontSize: 28 }}>{goal.emoji}</Text>
         <View style={{ flex: 1 }}>
           <Text variant="bodySmall" color={colors.text.primary}>{goal.title}</Text>
-          {goal.deadline && (
-            <Text variant="caption" color={colors.text.tertiary}>Meta: {goal.deadline}</Text>
+
+          {/* Deadline badge */}
+          {goal.deadline && !isComplete && (
+            <View style={styles.deadlineRow}>
+              <Ionicons
+                name={deadlineExpired ? 'warning-outline' : 'calendar-outline'}
+                size={11}
+                color={deadlineExpired ? colors.red : colors.text.tertiary}
+              />
+              <Text variant="caption" color={deadlineExpired ? colors.red : colors.text.tertiary}>
+                {deadlineExpired
+                  ? 'Plazo vencido'
+                  : `${deadlineMonths} ${deadlineMonths === 1 ? 'mes' : 'meses'} restantes`}
+              </Text>
+            </View>
           )}
         </View>
+
+        {/* Track badge */}
+        {onTrack !== null && !isComplete && (
+          <View style={[styles.trackBadge, { backgroundColor: onTrack ? colors.neon + '18' : colors.red + '18' }]}>
+            <Ionicons
+              name={onTrack ? 'checkmark-circle-outline' : 'alert-circle-outline'}
+              size={12}
+              color={onTrack ? colors.neon : colors.red}
+            />
+            <Text style={[styles.trackText, { color: onTrack ? colors.neon : colors.red }]}>
+              {onTrack ? 'En camino' : 'Retrasado'}
+            </Text>
+          </View>
+        )}
+
         <TouchableOpacity onPress={onDelete} style={styles.deleteBtn}>
           <Ionicons name="trash-outline" size={16} color={colors.text.tertiary} />
         </TouchableOpacity>
       </View>
 
+      {/* Barra de progreso */}
       <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%`, backgroundColor: isComplete ? colors.primary : colors.accent }]} />
+        <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%`, backgroundColor: progressColor }]} />
       </View>
 
       <View style={styles.goalAmounts}>
@@ -296,19 +380,39 @@ function GoalCard({
         <Text variant="caption" color={colors.text.secondary}>{formatCurrency(goal.target_amount)} total</Text>
       </View>
 
+      {/* Footer */}
       {!isComplete && (
         <View style={styles.goalFooter}>
-          {monthsToGoal != null ? (
+          {/* Info de cuota o ritmo */}
+          {monthlyCuota !== null ? (
+            <View style={styles.cuotaRow}>
+              <Ionicons name="trending-up-outline" size={12} color={colors.text.tertiary} />
+              <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, lineHeight: 16 }}>
+                {formatCurrency(monthlyCuota)}/mes ajustado por inflación
+              </Text>
+            </View>
+          ) : monthsToGoalAtCurrentRate != null ? (
             <Text variant="caption" color={colors.text.tertiary}>
-              A tu ritmo: {monthsToGoal} {monthsToGoal === 1 ? 'mes' : 'meses'} para lograrlo
+              A tu ritmo: {monthsToGoalAtCurrentRate} {monthsToGoalAtCurrentRate === 1 ? 'mes' : 'meses'}
             </Text>
           ) : (
             <Text variant="caption" color={colors.text.tertiary}>Te faltan {formatCurrency(remaining)}</Text>
           )}
+
           <TouchableOpacity style={styles.addFundsBtn} onPress={onAddFunds}>
-            <Ionicons name="add" size={14} color={colors.black} />
-            <Text variant="caption" color={colors.black}>Agregar</Text>
+            <Ionicons name="add" size={14} color={colors.white} />
+            <Text variant="caption" color={colors.white}>Agregar</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Inflación disclaimer cuando hay deadline */}
+      {monthlyCuota !== null && !isComplete && (
+        <View style={styles.inflationNote}>
+          <Ionicons name="information-circle-outline" size={11} color={colors.text.tertiary} />
+          <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, fontSize: 10, lineHeight: 14 }}>
+            Cuota ajustada asumiendo ~3.5% de inflación mensual sobre el monto restante.
+          </Text>
         </View>
       )}
 
@@ -344,4 +448,9 @@ const styles = StyleSheet.create({
   emojiBtn: { width: 48, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border.default },
   emojiBtnActive: { borderColor: colors.primary, backgroundColor: colors.primary + '1A' },
   addFundsContent: { padding: layout.screenPadding, gap: spacing[5], flex: 1 },
+  deadlineRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: 2 },
+  trackBadge:   { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 6, paddingHorizontal: spacing[2], paddingVertical: 2 },
+  trackText:    { fontFamily: 'Montserrat_600SemiBold', fontSize: 10 },
+  cuotaRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing[1], flex: 1 },
+  inflationNote: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[1] },
 });

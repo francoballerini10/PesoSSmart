@@ -88,7 +88,7 @@ function WhatIfRow({ result, uiLabel, uiColor }: { result: WhatIfResult; uiLabel
       {/* Header: instrumento + badges */}
       <View style={wifStyles.header}>
         <View style={{ flex: 1 }}>
-          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'DMSans_600SemiBold' }} numberOfLines={1}>
+          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }} numberOfLines={1}>
             {result.instrument.name}
           </Text>
           <Text variant="caption" color={colors.text.tertiary}>
@@ -136,7 +136,7 @@ function WhatIfRow({ result, uiLabel, uiColor }: { result: WhatIfResult; uiLabel
 
       {/* Ganancia/pérdida */}
       <View style={wifStyles.gainRow}>
-        <Text variant="caption" color={gainColor} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+        <Text variant="caption" color={gainColor} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
           {result.isLoss ? '−' : '+'}{formatCurrency(Math.abs(result.gainArs))}
           {'  '}({result.isLoss ? '' : '+'}{result.returnPct.toFixed(1)}%)
           {'  '}en {result.periodLabel}
@@ -215,7 +215,7 @@ function CategoryCard({ opportunity, monthsBack }: { opportunity: CategoryOpport
       <TouchableOpacity style={catStyles.header} onPress={() => setExpanded(e => !e)} activeOpacity={0.7}>
         <View style={[catStyles.dot, { backgroundColor: opportunity.categoryColor }]} />
         <View style={{ flex: 1 }}>
-          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
             {opportunity.categoryNameEs}
           </Text>
           <Text variant="caption" color={colors.text.tertiary}>
@@ -294,7 +294,7 @@ function SavingsCard({ opportunity, fromMonthKey, toMonthKey }: {
       {/* Monto ahorrado */}
       <Text variant="bodySmall" color={colors.text.primary} style={{ lineHeight: 20 }}>
         Tenés{' '}
-        <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'DMSans_700Bold' }}>
+        <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
           {formatCurrency(savingsAmount)}
         </Text>
         {' '}guardados sin rendir.
@@ -313,7 +313,7 @@ function SavingsCard({ opportunity, fromMonthKey, toMonthKey }: {
         <Text variant="caption" color={colors.text.secondary}>
           Con inflación de {officialMonthlyInflation.toFixed(1)}% mensual:
         </Text>
-        <Text variant="caption" color={colors.red} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+        <Text variant="caption" color={colors.red} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
           perdés ~{formatCurrency(inflationLossArs)}/mes de poder adquisitivo
         </Text>
       </View>
@@ -409,7 +409,7 @@ function Disclaimer() {
       <Ionicons name="shield-checkmark-outline" size={12} color={colors.text.tertiary} />
       <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, lineHeight: 16 }}>
         Simulaciones educativas con rendimientos históricos aproximados.{' '}
-        <Text variant="caption" color={colors.text.tertiary} style={{ fontFamily: 'DMSans_600SemiBold' }}>
+        <Text variant="caption" color={colors.text.tertiary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
           No son asesoramiento financiero ni recomendación de inversión (CNV).
         </Text>
         {' '}Consultá a un asesor registrado antes de invertir.

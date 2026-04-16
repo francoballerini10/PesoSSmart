@@ -116,7 +116,7 @@ function DonutChart({
               {formatCurrency(selected.amount)}
             </Text>
             <View style={[styles.pctBadge, { backgroundColor: selected.color + '20' }]}>
-              <Text style={{ fontSize: 11, fontFamily: 'DMSans_600SemiBold', color: selected.color }}>
+              <Text style={{ fontSize: 11, fontFamily: 'Montserrat_600SemiBold', color: selected.color }}>
                 {Math.round(selected.percentage * 100)}%
               </Text>
             </View>
@@ -156,11 +156,11 @@ function CategoryRow_({
         <View style={{ flex: 1, gap: 5 }}>
           <View style={styles.catTop}>
             <Text variant="bodySmall" color={colors.text.primary}
-              style={{ fontFamily: 'DMSans_600SemiBold', flex: 1 }}>
+              style={{ fontFamily: 'Montserrat_600SemiBold', flex: 1 }}>
               {row.name}
             </Text>
             <Text variant="bodySmall" color={colors.text.primary}
-              style={{ fontFamily: 'DMSans_600SemiBold' }}>
+              style={{ fontFamily: 'Montserrat_600SemiBold' }}>
               {formatCurrency(row.amount)}
             </Text>
           </View>
@@ -196,7 +196,7 @@ function CategoryRow_({
                   <Text variant="caption" color={colors.text.tertiary}>{exp.date}</Text>
                 </View>
                 <Text variant="caption" color={colors.text.primary}
-                  style={{ fontFamily: 'DMSans_600SemiBold' }}>
+                  style={{ fontFamily: 'Montserrat_600SemiBold' }}>
                   {formatCurrency(exp.amount)}
                 </Text>
               </View>

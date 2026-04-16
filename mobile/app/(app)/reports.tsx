@@ -224,8 +224,8 @@ export default function ReportsScreen() {
               Cargá gastos para ver tu informe, estado del mes y oportunidades de ahorro.
             </Text>
             <TouchableOpacity style={s.emptyBtn} onPress={() => router.push('/(app)/expenses')} activeOpacity={0.8}>
-              <Ionicons name="add" size={16} color={colors.black} />
-              <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: colors.black }}>
+              <Ionicons name="add" size={16} color={colors.white} />
+              <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: colors.white }}>
                 Ir a cargar gastos
               </Text>
             </TouchableOpacity>
