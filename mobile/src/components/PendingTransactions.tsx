@@ -13,8 +13,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@/theme';
 import { Text, Card } from '@/components/ui';
-import { supabase } from '@/lib/supabase';
-import type { ExpenseCategory } from '@/types';
+import { supabase as _supabase } from '@/lib/supabase';
+const supabase = _supabase as any;
+import type { ExpenseCategory, ExpenseClassification } from '@/types';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -269,7 +270,7 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
           description: tx.merchant || tx.description || 'Gasto detectado',
           category_id: cat.id, date: txDate,
           payment_method: 'digital_wallet' as const,
-          classification: (tx.suggested_classification ?? 'disposable') as const,
+          classification: (tx.suggested_classification ?? 'disposable') as ExpenseClassification,
           is_recurring: false,
         });
         if (error) throw new Error(error.message);

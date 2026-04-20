@@ -8,7 +8,8 @@ import type {
   FamilyStatus,
   RiskProfile,
 } from '@/types';
-import { supabase, handleSupabaseError } from '@/lib/supabase';
+import { supabase as _supabase, handleSupabaseError } from '@/lib/supabase';
+const supabase = _supabase as any;
 
 interface OnboardingData {
   // Step 1 — Perfil financiero

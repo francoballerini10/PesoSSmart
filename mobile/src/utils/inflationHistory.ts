@@ -11,7 +11,8 @@
  * No depende de ningún componente — lógica pura + supabase.
  */
 
-import { supabase } from '@/lib/supabase';
+import { supabase as _supabase } from '@/lib/supabase';
+const supabase = _supabase as any;
 import { getIndecEntry, getLatestIndecEntry } from '@/lib/indecData';
 import {
   calculatePersonalInflation,

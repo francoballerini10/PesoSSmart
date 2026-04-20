@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Expense, ExpenseCategory } from '@/types';
-import { supabase, handleSupabaseError } from '@/lib/supabase';
+import { supabase as _supabase, handleSupabaseError } from '@/lib/supabase';
+const supabase = _supabase as any;
 import { notifyNewSubscription } from '@/lib/notifications';
 
 interface ExpensesFilter {
@@ -309,7 +310,7 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         if (months.size >= 2) {
           const avg = data.amounts.reduce((a, b) => a + b, 0) / data.amounts.length;
           detected.push({
-            description: recentExpenses.find(e => e.description.toLowerCase().trim() === desc)?.description ?? desc,
+            description: recentExpenses.find((e: any) => e.description.toLowerCase().trim() === desc)?.description ?? desc,
             averageAmount: Math.round(avg),
             occurrences: data.amounts.length,
             lastDate: data.dates[0],

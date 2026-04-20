@@ -62,17 +62,17 @@ export default function FinancialProfileScreen() {
   // Pre-cargar valores existentes del perfil financiero
   useEffect(() => {
     if (!user?.id) return;
-    supabase
+    (supabase as any)
       .from('financial_profiles')
       .select('income_range, work_type, family_status, has_savings, has_debt')
       .eq('user_id', user.id)
       .single()
-      .then(({ data }) => {
+      .then(({ data }: { data: { income_range: string | null; work_type: string | null; family_status: string | null; has_savings: boolean; has_debt: boolean } | null }) => {
         if (data) {
           setFinancialProfile({
-            income_range: data.income_range ?? null,
-            work_type: data.work_type ?? null,
-            family_status: data.family_status ?? null,
+            income_range: (data.income_range ?? null) as any,
+            work_type: (data.work_type ?? null) as any,
+            family_status: (data.family_status ?? null) as any,
             has_savings: data.has_savings ?? false,
             has_debt: data.has_debt ?? false,
           });

@@ -114,12 +114,12 @@ export default function ProfileScreen() {
   // Cargar estado de Gmail al entrar
   useEffect(() => {
     if (!user?.id) return;
-    supabase
+    (supabase as any)
       .from('gmail_connections')
       .select('gmail_email, token_expired')
       .eq('user_id', user.id)
       .maybeSingle()
-      .then(({ data }) => {
+      .then(({ data }: { data: { gmail_email: string; token_expired: boolean } | null }) => {
         if (data) {
           setGmailEmail(data.gmail_email);
           setGmailExpired(data.token_expired ?? false);

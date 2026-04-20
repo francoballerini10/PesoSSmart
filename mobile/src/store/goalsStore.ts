@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { supabase } from '@/lib/supabase';
+import { supabase as _supabase } from '@/lib/supabase';
+const supabase = _supabase as any;
 
 export interface SavingsGoal {
   id: string;

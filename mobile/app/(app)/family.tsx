@@ -328,8 +328,10 @@ export default function FamilyScreen() {
     }
     setViewState('loading');
 
+    const db = supabase as any;
+
     // ¿El usuario tiene membresía?
-    const { data: membership } = await supabase
+    const { data: membership } = await db
       .from('family_members')
       .select('role, group_id')
       .eq('user_id', user.id)
@@ -343,7 +345,7 @@ export default function FamilyScreen() {
     setMyRole(membership.role as FamilyRole);
 
     // Info del grupo
-    const { data: groupData } = await supabase
+    const { data: groupData } = await db
       .from('family_groups')
       .select('id, name, invite_code, group_type')
       .eq('id', membership.group_id)
@@ -357,7 +359,7 @@ export default function FamilyScreen() {
     setGroup(groupData);
 
     // Miembros con perfil
-    const { data: membersRaw } = await supabase
+    const { data: membersRaw } = await db
       .from('family_members')
       .select('id, user_id, role, profiles:user_id(full_name)')
       .eq('group_id', membership.group_id)
@@ -432,7 +434,8 @@ export default function FamilyScreen() {
       const code = generateInviteCode();
       const role = groupType === 'couple' ? 'partner' : 'parent';
 
-      const { data: newGroup, error: groupErr } = await supabase
+      const db2 = supabase as any;
+      const { data: newGroup, error: groupErr } = await db2
         .from('family_groups')
         .insert({ name: groupName.trim(), invite_code: code, group_type: groupType })
         .select()
@@ -445,7 +448,7 @@ export default function FamilyScreen() {
 
       console.log('[Family] Grupo creado OK:', newGroup.id, '| Insertando membresía...');
 
-      const { error: memberErr } = await supabase
+      const { error: memberErr } = await db2
         .from('family_members')
         .insert({ group_id: newGroup.id, user_id: user.id, role });
 
@@ -479,7 +482,8 @@ export default function FamilyScreen() {
     if (!user?.id || joinCode.trim().length < 6) return;
     setIsSubmitting(true);
     try {
-      const { data: targetGroup, error: findErr } = await supabase
+      const db3 = supabase as any;
+      const { data: targetGroup, error: findErr } = await db3
         .from('family_groups')
         .select('id, name, group_type')
         .eq('invite_code', joinCode.trim().toUpperCase())
@@ -502,7 +506,7 @@ export default function FamilyScreen() {
       }
 
       const joinRole = targetGroup.group_type === 'couple' ? 'partner' : 'child';
-      const { error: joinErr } = await supabase
+      const { error: joinErr } = await db3
         .from('family_members')
         .insert({ group_id: targetGroup.id, user_id: user.id, role: joinRole });
 
@@ -547,9 +551,9 @@ export default function FamilyScreen() {
             if (!user?.id || !group?.id) return;
             if (isAdmin) {
               // Elimina el grupo → CASCADE borra todos los miembros
-              await supabase.from('family_groups').delete().eq('id', group.id);
+              await (supabase as any).from('family_groups').delete().eq('id', group.id);
             } else {
-              await supabase
+              await (supabase as any)
                 .from('family_members')
                 .delete()
                 .eq('user_id', user.id)

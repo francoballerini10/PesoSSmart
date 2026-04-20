@@ -86,7 +86,7 @@ const profileDescriptions: Record<RiskProfile, { label: string; description: str
 
 export default function RiskProfileScreen() {
   const { user } = useAuthStore();
-  const { setRiskProfile, saveRiskProfile, completeOnboarding, updateProfile, isLoading } = useOnboardingStore();
+  const { setRiskProfile, saveRiskProfile, completeOnboarding, isLoading } = useOnboardingStore();
   const { updateProfile: updateAuthProfile } = useAuthStore();
 
   const [answers, setAnswers] = useState<Record<string, string>>({});

@@ -232,11 +232,12 @@ export function buildOpportunityInsights(
     const recommendation = getPersonalizedRecommendation(profile, goal);
 
     // WhatIf para instrumento primario (1 mes)
-    const primaryReturn = recommendation.primary.monthlyReturns[toMonthKey];
+    const primaryInstr = recommendation.primary.instrument;
+    const primaryReturn = primaryInstr.monthlyReturns[toMonthKey];
     if (primaryReturn !== undefined) {
       const primaryGain  = Math.round(savingsAmount * primaryReturn / 100);
       const primaryWhatIf: WhatIfResult = {
-        instrument:      recommendation.primary,
+        instrument:      primaryInstr,
         initialAmount:   savingsAmount,
         finalAmount:     savingsAmount + primaryGain,
         returnPct:       primaryReturn,
@@ -244,18 +245,19 @@ export function buildOpportunityInsights(
         isLoss:          false,
         monthsCovered:   1,
         periodLabel:     'en 1 mes',
-        matchesInterest: recommendation.primary.matchInterestKeys.some(k => interestKeys.includes(k)),
+        matchesInterest: primaryInstr.matchInterestKeys.some(k => interestKeys.includes(k)),
         interpretation:  recommendation.rationale,
       };
 
       // WhatIf para instrumento secundario (1 mes), si existe
       let secondaryWhatIf: WhatIfResult | null = null;
       if (recommendation.secondary) {
-        const secReturn = recommendation.secondary.monthlyReturns[toMonthKey];
+        const secInstr = recommendation.secondary.instrument;
+        const secReturn = secInstr.monthlyReturns[toMonthKey];
         if (secReturn !== undefined) {
           const secGain = Math.round(savingsAmount * secReturn / 100);
           secondaryWhatIf = {
-            instrument:      recommendation.secondary,
+            instrument:      secInstr,
             initialAmount:   savingsAmount,
             finalAmount:     savingsAmount + secGain,
             returnPct:       secReturn,
@@ -263,7 +265,7 @@ export function buildOpportunityInsights(
             isLoss:          secReturn < 0,
             monthsCovered:   1,
             periodLabel:     'en 1 mes',
-            matchesInterest: recommendation.secondary.matchInterestKeys.some(k => interestKeys.includes(k)),
+            matchesInterest: secInstr.matchInterestKeys.some(k => interestKeys.includes(k)),
             interpretation:  `Alternativa complementaria según tu perfil.`,
           };
         }

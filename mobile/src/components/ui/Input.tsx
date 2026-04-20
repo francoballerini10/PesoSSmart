@@ -3,18 +3,21 @@ import {
   TextInput,
   TextInputProps,
   View,
+  ViewStyle,
+  StyleProp,
   StyleSheet,
   TouchableOpacity,
 } from 'react-native';
 import { colors, spacing, radius, layout, textVariants } from '@/theme';
 import { Text } from './Text';
 
-interface InputProps extends TextInputProps {
+interface InputProps extends Omit<TextInputProps, 'style'> {
   label?: string;
   error?: string;
   hint?: string;
   leftIcon?: React.ReactNode;
   rightElement?: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
 }
 
 export const Input = forwardRef<TextInput, InputProps>(({

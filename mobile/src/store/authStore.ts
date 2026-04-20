@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { Session, User } from '@supabase/supabase-js';
 import type { Profile } from '@/types';
-import { supabase, handleSupabaseError } from '@/lib/supabase';
+import { supabase as _supabase, handleSupabaseError } from '@/lib/supabase';
+const supabase = _supabase as any;
 
 interface AuthState {
   session: Session | null;
@@ -46,7 +47,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     // Escuchar cambios de sesión
-    supabase.auth.onAuthStateChange(async (_event, session) => {
+    _supabase.auth.onAuthStateChange(async (_event, session) => {
       set({ session, user: session?.user ?? null });
       if (session?.user) {
         await get().fetchProfile();

@@ -29,11 +29,14 @@ export type PaymentMethod = 'cash' | 'debit' | 'credit' | 'transfer' | 'digital_
 export type ReceiptStatus = 'pending' | 'processing' | 'completed' | 'failed';
 export type ChatRole = 'user' | 'assistant';
 export type InstrumentType = 'fci_money_market' | 'fci_cer' | 'lecap' | 'dolar_mep' | 'cedear' | 'bond' | 'other';
+export type FamilyGroupType = 'couple' | 'family';
+export type FamilyRole = 'admin' | 'member';
+export type SavingCurrency = 'ARS' | 'USD';
 
-// ---- Tablas principales ----
+// ---- Tipos de fila (Row types) ----
 
 export interface Profile {
-  id: string; // uuid, FK a auth.users
+  id: string;
   email: string;
   full_name: string | null;
   avatar_url: string | null;
@@ -54,11 +57,11 @@ export interface FinancialProfile {
   id: string;
   user_id: string;
   income_range: IncomeRange | null;
-  fixed_expenses_estimated: number | null; // en ARS
+  fixed_expenses_estimated: number | null;
   work_type: WorkType | null;
   family_status: FamilyStatus | null;
   dependents_count: number;
-  investable_amount_estimated: number | null; // en ARS
+  investable_amount_estimated: number | null;
   has_savings: boolean;
   savings_amount: number | null;
   has_debt: boolean;
@@ -72,8 +75,8 @@ export interface RiskProfileRecord {
   id: string;
   user_id: string;
   profile: RiskProfile;
-  score: number; // 0-100
-  answers: Json; // respuestas del cuestionario
+  score: number;
+  answers: Json;
   created_at: string;
   updated_at: string;
 }
@@ -81,8 +84,8 @@ export interface RiskProfileRecord {
 export interface UserInterest {
   id: string;
   user_id: string;
-  interest_key: string; // ej: 'fci', 'dolar_mep', 'cedears', 'crypto'
-  priority: number; // orden de preferencia
+  interest_key: string;
+  priority: number;
   created_at: string;
 }
 
@@ -92,7 +95,7 @@ export interface ExpenseCategory {
   name_es: string;
   icon: string;
   color: string;
-  is_system: boolean; // categorías base del sistema
+  is_system: boolean;
   created_at: string;
 }
 
@@ -100,21 +103,21 @@ export interface Expense {
   id: string;
   user_id: string;
   category_id: string | null;
-  amount: number; // en ARS
+  amount: number;
   description: string;
-  date: string; // ISO date
+  date: string;
   payment_method: PaymentMethod;
   notes: string | null;
   classification: ExpenseClassification | null;
   classification_explanation: string | null;
-  classification_confidence: number | null; // 0-1
+  classification_confidence: number | null;
   receipt_id: string | null;
   is_recurring: boolean;
-  recurring_frequency: string | null; // 'daily' | 'weekly' | 'monthly'
+  recurring_frequency: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  // relaciones (cuando se hace join)
+  // relaciones opcionales (join)
   category?: ExpenseCategory;
   receipt?: ExpenseReceipt;
 }
@@ -123,11 +126,11 @@ export interface ExpenseReceipt {
   id: string;
   user_id: string;
   expense_id: string | null;
-  storage_path: string; // path en Supabase Storage
+  storage_path: string;
   original_filename: string | null;
   status: ReceiptStatus;
   ocr_raw_text: string | null;
-  ocr_extracted_data: Json | null; // { total, date, merchant, items }
+  ocr_extracted_data: Json | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -137,16 +140,16 @@ export interface MonthlyReport {
   id: string;
   user_id: string;
   year: number;
-  month: number; // 1-12
+  month: number;
   total_expenses: number;
-  total_by_category: Json; // { category_id: amount }
+  total_by_category: Json;
   total_necessary: number;
   total_disposable: number;
   total_investable: number;
   previous_month_total: number | null;
-  inflation_rate: number | null; // tasa del mes
+  inflation_rate: number | null;
   inflation_adjusted_comparison: number | null;
-  ai_insights: Json | null; // { findings: string[], tips: string[] }
+  ai_insights: Json | null;
   generated_at: string;
   pdf_storage_path: string | null;
   created_at: string;
@@ -168,10 +171,10 @@ export interface MarketInstrument {
 export interface InstrumentPriceHistory {
   id: string;
   instrument_id: string;
-  date: string; // ISO date
+  date: string;
   open_price: number | null;
   close_price: number;
-  currency: string; // 'ARS' | 'USD'
+  currency: string;
   source: string | null;
   created_at: string;
 }
@@ -180,7 +183,7 @@ export interface InvestmentSimulation {
   id: string;
   user_id: string;
   instrument_id: string;
-  amount: number; // monto inicial en ARS
+  amount: number;
   start_date: string;
   end_date: string;
   initial_value_ars: number;
@@ -188,10 +191,8 @@ export interface InvestmentSimulation {
   return_pct: number;
   inflation_during_period: number | null;
   real_return_pct: number | null;
-  simulation_data: Json; // datos del gráfico
+  simulation_data: Json;
   created_at: string;
-  // relaciones
-  instrument?: MarketInstrument;
 }
 
 export interface AIChatThread {
@@ -234,7 +235,7 @@ export interface Subscription {
 export interface FeatureUsageLog {
   id: string;
   user_id: string;
-  feature: string; // 'ai_chat', 'simulator', 'receipt_scan', etc.
+  feature: string;
   used_at: string;
   metadata: Json | null;
 }
@@ -242,7 +243,7 @@ export interface FeatureUsageLog {
 export interface UserAlert {
   id: string;
   user_id: string;
-  type: string; // 'overspending', 'goal_reached', 'high_inflation', etc.
+  type: string;
   title: string;
   message: string;
   is_read: boolean;
@@ -252,27 +253,213 @@ export interface UserAlert {
   expires_at: string | null;
 }
 
+export interface GmailConnection {
+  id: string;
+  user_id: string;
+  gmail_email: string;
+  refresh_token: string;
+  access_token: string | null;
+  token_expired: boolean;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PendingTransaction {
+  id: string;
+  user_id: string;
+  raw_subject: string;
+  merchant: string | null;
+  description: string | null;
+  amount: number;
+  currency: string;
+  date: string | null;
+  suggested_classification: ExpenseClassification | null;
+  status: 'pending' | 'confirmed' | 'dismissed';
+  source: string | null;
+  created_at: string;
+}
+
+export interface FamilyGroup {
+  id: string;
+  name: string;
+  invite_code: string;
+  group_type: FamilyGroupType;
+  created_by: string;
+  created_at: string;
+}
+
+export interface FamilyMember {
+  id: string;
+  group_id: string;
+  user_id: string;
+  role: FamilyRole;
+  joined_at: string;
+}
+
+export interface SavingsGoalRow {
+  id: string;
+  user_id: string;
+  title: string;
+  target_amount: number;
+  current_amount: number;
+  deadline: string | null;
+  emoji: string;
+  created_at: string;
+}
+
+export interface AiUsageRow {
+  user_id: string;
+  month: string;
+  msg_count: number;
+}
+
 // ---- Database type completo para Supabase client ----
+// Formato exacto requerido por @supabase/postgrest-js v2 (PostgrestVersion "12")
 
 export interface Database {
   public: {
     Tables: {
-      profiles: { Row: Profile; Insert: Omit<Profile, 'created_at' | 'updated_at'>; Update: Partial<Profile> };
-      financial_profiles: { Row: FinancialProfile; Insert: Omit<FinancialProfile, 'id' | 'created_at' | 'updated_at'>; Update: Partial<FinancialProfile> };
-      risk_profiles: { Row: RiskProfileRecord; Insert: Omit<RiskProfileRecord, 'id' | 'created_at' | 'updated_at'>; Update: Partial<RiskProfileRecord> };
-      user_interests: { Row: UserInterest; Insert: Omit<UserInterest, 'id' | 'created_at'>; Update: Partial<UserInterest> };
-      expense_categories: { Row: ExpenseCategory; Insert: Omit<ExpenseCategory, 'id' | 'created_at'>; Update: Partial<ExpenseCategory> };
-      expenses: { Row: Expense; Insert: Omit<Expense, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Expense> };
-      expense_receipts: { Row: ExpenseReceipt; Insert: Omit<ExpenseReceipt, 'id' | 'created_at' | 'updated_at'>; Update: Partial<ExpenseReceipt> };
-      monthly_reports: { Row: MonthlyReport; Insert: Omit<MonthlyReport, 'id' | 'created_at'>; Update: Partial<MonthlyReport> };
-      market_instruments: { Row: MarketInstrument; Insert: Omit<MarketInstrument, 'id' | 'created_at' | 'updated_at'>; Update: Partial<MarketInstrument> };
-      instrument_price_history: { Row: InstrumentPriceHistory; Insert: Omit<InstrumentPriceHistory, 'id' | 'created_at'>; Update: Partial<InstrumentPriceHistory> };
-      investment_simulations: { Row: InvestmentSimulation; Insert: Omit<InvestmentSimulation, 'id' | 'created_at'>; Update: Partial<InvestmentSimulation> };
-      ai_chat_threads: { Row: AIChatThread; Insert: Omit<AIChatThread, 'id' | 'created_at' | 'updated_at'>; Update: Partial<AIChatThread> };
-      ai_chat_messages: { Row: AIChatMessage; Insert: Omit<AIChatMessage, 'id' | 'created_at'>; Update: Partial<AIChatMessage> };
-      subscriptions: { Row: Subscription; Insert: Omit<Subscription, 'id' | 'created_at' | 'updated_at'>; Update: Partial<Subscription> };
-      feature_usage_logs: { Row: FeatureUsageLog; Insert: Omit<FeatureUsageLog, 'id' | 'used_at'>; Update: Partial<FeatureUsageLog> };
-      user_alerts: { Row: UserAlert; Insert: Omit<UserAlert, 'id' | 'created_at'>; Update: Partial<UserAlert> };
+      profiles: {
+        Row: Profile;
+        Insert: Omit<Profile, 'created_at' | 'updated_at'>;
+        Update: Partial<Profile>;
+        Relationships: [];
+      };
+      financial_profiles: {
+        Row: FinancialProfile;
+        Insert: Omit<FinancialProfile, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<FinancialProfile>;
+        Relationships: [];
+      };
+      risk_profiles: {
+        Row: RiskProfileRecord;
+        Insert: Omit<RiskProfileRecord, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<RiskProfileRecord>;
+        Relationships: [];
+      };
+      user_interests: {
+        Row: UserInterest;
+        Insert: Omit<UserInterest, 'id' | 'created_at'>;
+        Update: Partial<UserInterest>;
+        Relationships: [];
+      };
+      expense_categories: {
+        Row: ExpenseCategory;
+        Insert: Omit<ExpenseCategory, 'id' | 'created_at'>;
+        Update: Partial<ExpenseCategory>;
+        Relationships: [];
+      };
+      expenses: {
+        Row: Expense;
+        Insert: Omit<Expense, 'id' | 'created_at' | 'updated_at' | 'category' | 'receipt'>;
+        Update: Partial<Omit<Expense, 'category' | 'receipt'>>;
+        Relationships: [
+          {
+            foreignKeyName: 'expenses_category_id_fkey';
+            columns: ['category_id'];
+            isOneToOne: false;
+            referencedRelation: 'expense_categories';
+            referencedColumns: ['id'];
+          }
+        ];
+      };
+      expense_receipts: {
+        Row: ExpenseReceipt;
+        Insert: Omit<ExpenseReceipt, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<ExpenseReceipt>;
+        Relationships: [];
+      };
+      monthly_reports: {
+        Row: MonthlyReport;
+        Insert: Omit<MonthlyReport, 'id' | 'created_at'>;
+        Update: Partial<MonthlyReport>;
+        Relationships: [];
+      };
+      market_instruments: {
+        Row: MarketInstrument;
+        Insert: Omit<MarketInstrument, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<MarketInstrument>;
+        Relationships: [];
+      };
+      instrument_price_history: {
+        Row: InstrumentPriceHistory;
+        Insert: Omit<InstrumentPriceHistory, 'id' | 'created_at'>;
+        Update: Partial<InstrumentPriceHistory>;
+        Relationships: [];
+      };
+      investment_simulations: {
+        Row: InvestmentSimulation;
+        Insert: Omit<InvestmentSimulation, 'id' | 'created_at'>;
+        Update: Partial<InvestmentSimulation>;
+        Relationships: [];
+      };
+      ai_chat_threads: {
+        Row: AIChatThread;
+        Insert: Omit<AIChatThread, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<AIChatThread>;
+        Relationships: [];
+      };
+      ai_chat_messages: {
+        Row: AIChatMessage;
+        Insert: Omit<AIChatMessage, 'id' | 'created_at'>;
+        Update: Partial<AIChatMessage>;
+        Relationships: [];
+      };
+      subscriptions: {
+        Row: Subscription;
+        Insert: Omit<Subscription, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Subscription>;
+        Relationships: [];
+      };
+      feature_usage_logs: {
+        Row: FeatureUsageLog;
+        Insert: Omit<FeatureUsageLog, 'id' | 'used_at'>;
+        Update: Partial<FeatureUsageLog>;
+        Relationships: [];
+      };
+      user_alerts: {
+        Row: UserAlert;
+        Insert: Omit<UserAlert, 'id' | 'created_at'>;
+        Update: Partial<UserAlert>;
+        Relationships: [];
+      };
+      gmail_connections: {
+        Row: GmailConnection;
+        Insert: Omit<GmailConnection, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<GmailConnection>;
+        Relationships: [];
+      };
+      pending_transactions: {
+        Row: PendingTransaction;
+        Insert: Omit<PendingTransaction, 'id' | 'created_at'>;
+        Update: Partial<PendingTransaction>;
+        Relationships: [];
+      };
+      family_groups: {
+        Row: FamilyGroup;
+        Insert: Omit<FamilyGroup, 'id' | 'created_at'>;
+        Update: Partial<FamilyGroup>;
+        Relationships: [];
+      };
+      family_members: {
+        Row: FamilyMember;
+        Insert: Omit<FamilyMember, 'id' | 'joined_at'>;
+        Update: Partial<FamilyMember>;
+        Relationships: [];
+      };
+      savings_goals: {
+        Row: SavingsGoalRow;
+        Insert: Omit<SavingsGoalRow, 'id' | 'created_at'>;
+        Update: Partial<SavingsGoalRow>;
+        Relationships: [];
+      };
+      ai_usage: {
+        Row: AiUsageRow;
+        Insert: AiUsageRow;
+        Update: Partial<AiUsageRow>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
