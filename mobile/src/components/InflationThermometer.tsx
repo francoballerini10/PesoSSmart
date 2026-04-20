@@ -496,7 +496,7 @@ export function InflationThermometer({ userId, year, month }: InflationThermomet
       const lastDay = new Date(year, month, 0).getDate();
       const to      = `${year}-${String(month).padStart(2, '0')}-${lastDay}`;
 
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('expenses')
         .select('amount, expense_categories ( name_es, color )')
         .eq('user_id', userId)

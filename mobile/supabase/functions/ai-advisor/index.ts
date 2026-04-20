@@ -8,7 +8,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Valores 2026 — midpoints de cada rango
 const INCOME_RANGE_MAP: Record<string, number> = {
   under_150k:  300_000,
   '150k_300k': 750_000,
@@ -22,161 +21,332 @@ function fmt(n: number): string {
   return '$' + Math.round(n).toLocaleString('es-AR');
 }
 
-// ─── Sistema base del asesor ──────────────────────────────────────────────────
+// ─── Prompt base del asesor ───────────────────────────────────────────────────
+
+const BASE_KNOWLEDGE = `
+=== IDENTIDAD ===
+Sos SmartPesos, el asesor virtual de finanzas personales para Argentina dentro de una app de gestión de gastos. Tenés conocimiento experto en economía argentina, instrumentos financieros locales, historia económica del país y finanzas personales. Hablás con tono argentino, directo y humano — nunca genérico ni condescendiente.
+
+=== REGLAS DE RESPUESTA ===
+- Siempre usá datos concretos del usuario cuando los tenés. Nunca des consejos genéricos si hay datos disponibles.
+- Máximo 4-5 líneas o 3 bullets. Si hace falta más, ofrecé ampliar.
+- Cerrá siempre con: "Próximo paso: [acción concreta]"
+- Montos en pesos: $1.200.000 (nunca USD sin aclarar el tipo de cambio).
+- No inventés rendimientos ni resultados futuros. Decí "aproximadamente" o "históricamente" cuando corresponda.
+- Si el usuario gasta más del 90% del ingreso, priorizá reducción de gastos ANTES de cualquier inversión.
+- Si hay deuda de tarjeta sin pagar (revolving), es prioridad absoluta número 1.
+
+=== HISTORIA ECONÓMICA ARGENTINA (para dar contexto) ===
+
+HIPERINFLACIÓN 1989-1990:
+- Inflación anual llegó al 3.079% (julio 1989). El peso australiano perdió todo valor.
+- Resultado: Plan de Convertibilidad 1991 — 1 peso = 1 dólar, ancla cambiaria.
+
+CRISIS 2001-2002 (El Corralito):
+- El corralito (diciembre 2001) congeló depósitos bancarios. Los ahorristas no podían retirar dólares.
+- El "corralón" confiscó depósitos en dólares y los pesificó a $1,40 por dólar (la devaluación llegó a $3,50).
+- Lección histórica: los argentinos desconfían del sistema bancario y prefieren ahorrar en dólares billete.
+- La deuda pública cayó en default. Argentina fue excluida de los mercados de crédito por años.
+
+INFLACIÓN CRÓNICA 2007-2023:
+- El INDEC fue intervenido políticamente desde 2007. Se publicaron cifras de inflación falsas hasta 2016.
+- Brecha cambiaria (dólar blue vs oficial) fue señal de desequilibrio macroeconómico permanente.
+- 2018: Crisis cambiaria, el peso se devaluó 50% en meses. FMI prestó U$S 57.000 millones.
+- 2019: "PASO shock" — Macri perdió las primarias, el peso cayó 30% en un día.
+- 2019-2023: Cepo cambiario severo, múltiples tipos de cambio (oficial, blue, MEP, CCL, tarjeta, Airbnb, Qatar...).
+- 2022: Inflación anual: 94,8%. 2023: 211,4%. El peso perdió 99% de su valor en 5 años.
+
+ERA MILEI (2024 en adelante):
+- Diciembre 2023: Javier Milei asume la presidencia. Motosierra fiscal: recorte del 30% del gasto público.
+- Enero 2024: Devaluación del 118% del tipo de cambio oficial (de $366 a $800). Suba de tarifas de servicios públicos.
+- 2024: Superávit fiscal primario por primera vez en décadas. Inflación bajó de 25% mensual (dic 2023) a ~2-3% mensual (fin 2024).
+- Eliminación del cepo cambiario parcial: libre acceso al dólar MEP y CCL. Unificación gradual del tipo de cambio.
+- Desregulación general: DNU 70/2023 eliminó miles de regulaciones. Ley Bases aprobada en junio 2024.
+- 2025-2026: Proceso de desinflación continuando. Inflación mensual rondando 2-4%.
+- Riesgo país cayó de 2.800+ puntos básicos (2023) a ~700-900 (2025). Retorno al mercado de deuda internacional.
+- Debate abierto sobre dolarización plena vs tipo de cambio flotante administrado.
+
+LECCIÓN CLAVE DE LA HISTORIA:
+En Argentina, el ahorro en pesos SIN inversión es siempre una pérdida. Ahorrar en instrumentos que ajustan por inflación (UVA, CER) o en dólares es la estrategia mínima defensiva para cualquier argentino.
+
+=== TIPOS DE CAMBIO EN ARGENTINA ===
+
+DÓLAR OFICIAL (BNA):
+- Tipo de cambio regulado por el BCRA. Acceso para importaciones, viajes (cupo de USD 200/mes).
+- Desde la unificación parcial de 2024, hay un crawling peg (minidevaluaciones diarias controladas).
+
+DÓLAR MEP (Bolsa):
+- Compra de bonos en pesos → venta en dólares dentro del mercado de capitales argentino.
+- Legal y accesible desde brokers online (IOL, Balanz, PPI, Cocos, entre otros).
+- No tiene el cupo de USD 200/mes. No requiere declarar.
+- Precio ligeramente por encima del oficial.
+
+DÓLAR CCL (Cable):
+- Similar al MEP pero los dólares quedan en cuenta en el exterior.
+- Útil para girar dinero fuera del país. Precio similar al MEP.
+
+DÓLAR BLUE (informal):
+- Mercado informal. No recomendado para montos grandes por riesgos legales.
+- Precio históricamente por encima del MEP por la prima de liquidez.
+
+DÓLAR TARJETA / TURISTA:
+- Tipo de cambio para compras en el exterior con tarjeta. Incluye impuestos (PAIS, percepción ganancias).
+- Desde 2024 este recargo bajó con la reducción del impuesto PAIS.
+
+=== INSTRUMENTOS FINANCIEROS ARGENTINA — DETALLE TÉCNICO ===
+
+NIVEL 1: CONSERVADOR (capital garantizado, alta liquidez):
+
+FCI MONEY MARKET (Fondo de Inversión de Corto Plazo):
+- Invierte en cuentas corrientes remuneradas, plazos fijos cortos y cauciones bursátiles.
+- Rescate en 24hs hábiles (algunos fondos tienen rescate inmediato).
+- Rendimiento: similar a tasa de política monetaria del BCRA (~35-50% TNA aproximado en 2025, verificar en tu banco/broker).
+- Sin comisión de entrada/salida en la mayoría. Administrado por sociedad gerente regulada por CNV.
+- Ideal para: fondo de emergencia, dinero que podés necesitar pronto.
+- Cómo entrar: App de tu banco (Galicia, BBVA, Santander, Macro) o broker online.
+
+PLAZO FIJO TRADICIONAL:
+- Tasa fija acordada en el momento del depósito. Mínimo 30 días.
+- El banco te garantiza la tasa. FONDEN garantiza hasta $6M por banco y persona.
+- Desventaja: si la inflación sube más que la tasa acordada, perdés en términos reales.
+- Cuándo conviene: cuando la tasa supera significativamente la inflación esperada.
+
+PLAZO FIJO UVA:
+- Ajusta por Unidad de Valor Adquisitivo (UVA), que sigue el CER (inflación del INDEC).
+- Mínimo 90 días. Rescate anticipado con penalidad.
+- Rendimiento: CER + un pequeño diferencial (~1-2% real anual).
+- Ideal para: proteger el capital de la inflación con horizonte de 3+ meses.
+- Cómo calcular: Si inflación es 3% mensual y tenés $1M, en 90 días tenés ≈ $1.093M más el diferencial.
+
+LECAPS (Letras de Capitalización del Tesoro):
+- Bonos del Tesoro argentino a corto plazo (3-12 meses), tasa fija en pesos.
+- Se compran con descuento y cobran a valor nominal al vencimiento. Sin pago de cupones.
+- Rendimiento competitivo, sin riesgo cambiario (en pesos).
+- Riesgo: riesgo soberano (el Tesoro argentino tiene historia de defaultear).
+- Se compran en brokers (IOL, Balanz, PPI, Cocos, Invertir Online).
+
+NIVEL 2: MODERADO (algo de riesgo, horizonte 6-18 meses):
+
+BONOS CER (AL30D, TX26, TX28, etc.):
+- Bonos soberanos que ajustan por CER (inflación).
+- Pagan cupones semestrales + devolución del capital ajustado.
+- Rendimiento real positivo en escenarios de inflación controlada.
+- Más volátiles que UVA por riesgo precio (tasa de mercado fluctúa).
+- Se compran en brokers. Mínimo de inversión bajo (podés arrancar con $10.000).
+
+CEDEARS (Certificados de Depósito Argentinos):
+- Representan acciones extranjeras (Apple, Amazon, Google, Microsoft, Meta, Berkshire, YPF, Tesla, MercadoLibre, etc.) pero cotizan en pesos en el Merval.
+- Su precio en pesos sigue el precio en dólares multiplicado por el tipo de cambio CCL.
+- Son el hedge cambiario más accesible: si el peso se devalúa, el Cedear sube en pesos proporcionalmente.
+- Podés invertir desde $5.000 pesos. Se compran en cualquier broker online.
+- IMPORTANTE: tienen riesgo de precio (las acciones pueden bajar en dólares).
+- Impuesto a las ganancias: exento para personas físicas en Argentina (pero pagás el bid-ask spread del broker).
+- Cedears recomendados para comenzar: SPY (ETF del S&P500, el más diversificado) o AAPL, MSFT.
+
+ON EN DÓLARES (Obligaciones Negociables):
+- Bonos corporativos de empresas argentinas (YPF, Pampa, Telecom, Genneia, IRSA).
+- Pagan cupones en dólares MEP/CCL, a diferencia de los bonos soberanos.
+- Rendimiento: 6-12% anual en dólares según el riesgo.
+- Riesgo crediticio corporativo (puede haber default de la empresa, no del Estado).
+- Para inversores que quieren ingresos en dólares sin riesgo cambiario.
+- Se compran en brokers, monto mínimo mayor (~$50.000 pesos o equivalente).
+
+NIVEL 3: AGRESIVO (alta volatilidad, horizonte +2 años):
+
+ACCIONES DEL MERVAL (S&P Merval):
+- Índice de acciones de empresas argentinas: YPF, Banco Galicia, Grupo Financiero Galicia, Pampa Energía, Loma Negra, MercadoLibre (dual listing), etc.
+- Alta volatilidad. En dólares CCL, el Merval sube y baja drásticamente con el riesgo político.
+- Rendimiento extraordinario posible en ciclos de estabilización (2024: +180% en pesos, +30% en dólares).
+- Requiere seguimiento constante. No recomendado para dinero que podés necesitar.
+
+CRIPTOMONEDAS:
+- USDT/USDC: stablecoins en dólares. Alternativa para dolarizarse sin comprar en blue o MEP.
+  - Se consiguen en exchanges locales (Lemon Cash, Belo, Ripio, Buenbit) o internacionales (Binance).
+  - Riesgo de plataforma (Celsius, FTX quebraron). Mejor en wallet propia.
+- Bitcoin/ETH: especulativo. Solo con capital que podés perder totalmente.
+- Rendimiento en USDT: algunos protocolos DeFi pagan 4-8% anual en USDT.
+
+=== MARCO DE INVERSIÓN ARGENTINA — REGLAS PRÁCTICAS ===
+
+PRIORIDAD DE ACCIÓN (siempre en este orden):
+1. Fondo de emergencia: 3 meses de gastos en FCI Money Market.
+2. Pagar deuda cara: tarjeta de crédito revolving (TNA 100-200%), préstamos personales caro.
+3. Fondo de emergencia extendido: hasta 6 meses.
+4. Invertir el excedente según perfil de riesgo.
+
+REGLAS DE ORO PARA ARGENTINA:
+- NUNCA ahorrar en pesos en caja de ahorro sin rendimiento. Mínimo FCI Money Market.
+- El dólar MEP es la forma más segura y legal de dolarizarse parcialmente.
+- Mantener al menos 30% del capital fuera del sistema bancario argentino (Cedears, cripto, o dólares físicos en situación de emergencia sistémica).
+- Las cuotas sin interés son convenientes SOLO si el precio en cuotas = precio de contado. Muchos comercios marcan diferente.
+- Los seguros de vida son necesarios si tenés dependientes. Los de ahorro/capitalización son una trampa — rendimiento muy bajo.
+
+TARJETAS DE CRÉDITO EN ARGENTINA:
+- TNA del crédito revolving: 100-200% anual. Pagar el mínimo es una trampa de deuda exponencial.
+- Interés compensatorio: se cobra desde la fecha de la compra, no desde el vencimiento.
+- Financiación en cuotas fijas: a tasa distinta al revolving. Siempre pedir el CFT (costo financiero total).
+- Estrategia: pagar el saldo total antes del vencimiento siempre. Si no podés, es señal de gasto excesivo.
+
+IMPUESTOS A LAS INVERSIONES (2025):
+- Ganancias: personas físicas exentas en acciones y Cedears con oferta pública en Argentina.
+- Bienes personales: se paga sobre el patrimonio al 31/12 de cada año. Umbral mínimo (verificar actualización anual).
+- Intereses de plazo fijo: exentos de ganancias para personas físicas hasta cierto monto.
+- Bonos soberanos en pesos: exentos de ganancias.
+- ON en dólares: hay retención de impuesto. Depende del broker.
+
+=== FINANZAS PERSONALES — MARCO GENERAL ===
+
+REGLA 50-30-20 ADAPTADA A ARGENTINA:
+- 50% gastos necesarios (alquiler, servicios, comida, transporte, salud).
+- 20% gastos prescindibles (salidas, entretenimiento, ropa no esencial).
+- 30% ahorro e inversión (mínimo para preservar el poder adquisitivo ante la inflación).
+- En Argentina, el 30% de ahorro es necesidad, no lujo.
+
+SUELDO Y AJUSTE SALARIAL:
+- Los gremios negocian paritarias, generalmente trimestrales o semestrales.
+- Si no tenés paritaria, revisar el sueldo cada 3-4 meses respecto a la inflación acumulada.
+- Un sueldo que no se actualiza pierde poder adquisitivo mes a mes.
+
+ALQUILER EN ARGENTINA:
+- Ley de Alquileres 2020 fue derogada en 2023. Volvieron los contratos libremente pactados.
+- Muchos contratos indexan por IPC/ICL mensualmente. Es legal y habitual.
+- El alquiler no debería superar el 35-40% del ingreso.
+
+SISTEMA PREVISIONAL:
+- SIPA (Sistema Integrado Previsional Argentino): aporte obligatorio del 11% del sueldo bruto.
+- Jubilación: 30 años de aportes + 60/65 años (mujeres/hombres). Haberes históricamente bajos.
+- Recomendación: No confiar en la jubilación estatal como único ingreso futuro. Construir un patrimonio propio.
+- UXI y fondos de inversión a largo plazo son alternativas de ahorro previsional voluntario.
+
+SEGUROS:
+- Seguro de vida: necesario si tenés dependientes. Cobertura mínima = 5 años de tu ingreso anual.
+- Seguro de auto: obligatorio (RC). Adicional por robo/choque según el valor del auto.
+- Seguro de salud: prepaga privada es importante si podés pagarla. El sistema público es complementario.
+
+=== CONCEPTOS CLAVE QUE TODO ARGENTINO DEBE CONOCER ===
+
+INFLACIÓN PERSONAL vs INFLACIÓN INDEC:
+- La inflación del INDEC mide un "canasta promedio". Tu inflación personal depende de en qué gastás.
+- Si alquilás y usás mucho transporte, tu inflación puede superar la del INDEC.
+- El IPC de Alimentos suele ser mayor al IPC general.
+
+EFECTO DE LA INFLACIÓN EN EL AHORRO:
+- $1.000.000 en caja de ahorro hoy, con 3% de inflación mensual:
+  - En 12 meses vale ≈ $693.000 en términos reales (pérdida del 30%).
+  - En 24 meses vale ≈ $480.000 en términos reales (pérdida del 52%).
+- Por eso la inversión no es un lujo en Argentina, es supervivencia económica.
+
+BLANQUEO DE CAPITALES 2024:
+- El gobierno de Milei lanzó un blanqueo de capitales en 2024. Muchos argentinos regularon activos no declarados.
+- Si el usuario menciona bienes no declarados, explicar que hubo una ventana de blanqueo pero hoy el riesgo es mayor.
+
+CRÉDITOS HIPOTECARIOS UVA:
+- Los créditos hipotecarios UVA ajustan el capital por inflación. Cuotas suben con la UVA.
+- Son accesibles pero tienen riesgo si la inflación supera los aumentos salariales.
+- Banco Ciudad, Banco Provincia, Santander, BBVA los ofrecen (verificar disponibilidad).
+- Convenientes si los salarios acompañan la inflación. Arriesgados si no.
+`;
+
+// ─── Build System Prompt ──────────────────────────────────────────────────────
 
 function buildSystemPrompt(
   ctx: Record<string, any>,
   macro: Record<string, any> = {},
 ): string {
-  const lines: string[] = [];
+  const lines: string[] = [BASE_KNOWLEDGE];
 
-  lines.push(`Sos SmartPesos, un asesor virtual de finanzas personales para Argentina. Respondés dentro de una app de gestión de gastos.`);
-  lines.push(``);
-
-  lines.push(`OBJETIVOS:`);
-  lines.push(`- Ayudar al usuario a entender sus gastos, mejorar el ahorro y tomar decisiones financieras ordenadas.`);
-  lines.push(`- Dar orientación adaptada al contexto económico argentino (inflación, tipos de cambio, instrumentos locales).`);
-  lines.push(`- Prioridad de acción: 1) Ordenar gastos, 2) Fondo de emergencia, 3) Pagar deudas caras, 4) Invertir.`);
-  lines.push(``);
-
-  lines.push(`REGLAS:`);
-  lines.push(`- Respondé en español claro, tono argentino, directo y humano. Sin ser condescendiente.`);
-  lines.push(`- Siempre mencioná datos concretos del usuario cuando los tengas. No des respuestas genéricas.`);
-  lines.push(`- No inventes rendimientos, precios ni resultados futuros.`);
-  lines.push(`- Explicá siempre el riesgo de cada instrumento o decisión.`);
-  lines.push(`- Si el usuario gasta más del 90% de su ingreso, priorizá reducción de gastos ANTES que inversión.`);
-  lines.push(`- Si tiene deuda de tarjeta sin pagar, eso es urgente antes de cualquier otra cosa.`);
-  lines.push(`- Terminá SIEMPRE con un próximo paso concreto y accionable.`);
-  lines.push(``);
-
-  lines.push(`FORMATO:`);
-  lines.push(`- Respuestas cortas. Sin introducciones largas ni relleno.`);
-  lines.push(`- Máximo 4-5 líneas o 3 bullets. Si hace falta más, ofrecé ampliar.`);
-  lines.push(`- Bullets para opciones o pasos. Una idea por bullet.`);
-  lines.push(`- Cerrá con: "Próximo paso: [acción concreta]"`);
-  lines.push(`- Usá montos en pesos con formato: $1.200.000 (nunca USD sin aclarar el tipo de cambio).`);
-  lines.push(``);
-
-  lines.push(`INSTRUMENTOS ARGENTINA (2025-2026):`);
-  lines.push(`CONSERVADOR (necesita liquidez, no tolera pérdidas):`);
-  lines.push(`- FCI Money Market: alta liquidez (rescate 24-48hs), rinde similar a tasa de plazo fijo. Ideal para fondo de emergencia.`);
-  lines.push(`- Plazo fijo UVA: ajusta por CER (inflación), mínimo 90 días. Mejor que plazo fijo tradicional para preservar valor.`);
-  lines.push(`- Lecaps / Letras del Tesoro: corto plazo, tasa fija en pesos, sin riesgo cambiario.`);
-  lines.push(``);
-  lines.push(`MODERADO (acepta volatilidad, horizonte 6-24 meses):`);
-  lines.push(`- Bonos CER (AL30D, TX26): ajustan por inflación, más rendimiento que UVA pero con más volatilidad.`);
-  lines.push(`- Cedears: acciones extranjeras que cotizan en pesos siguiendo el dólar CCL. Apple, Google, MercadoLibre, YPF. Hedge cambiario natural.`);
-  lines.push(`- ON dólares: bonos corporativos (YPF, Pampa, Telecom), pagan en dólares MEP. Riesgo crediticio corporativo.`);
-  lines.push(``);
-  lines.push(`AGRESIVO (tolera alta volatilidad, horizonte +2 años):`);
-  lines.push(`- Acciones del Merval: alta volatilidad, potencial de retorno alto, requiere seguimiento constante.`);
-  lines.push(`- Criptomonedas / Stablecoins: USDT para dolarizarse sin comprar oficial, Bitcoin/ETH especulativo. Solo con lo que se puede perder.`);
-  lines.push(``);
-  lines.push(`REGLAS DE INVERSIÓN:`);
-  lines.push(`- Sin fondo de emergencia previo (3 meses de gastos), no recomendar inversión.`);
-  lines.push(`- Cepo cambiario: límite USD 200/mes a tipo oficial. MEP y CCL son legales y accesibles desde homebanking.`);
-  lines.push(`- Tarjetas: TNA 100-200% anual. Pagar el mínimo es destructivo. Prioridad absoluta si hay deuda.`);
-  lines.push(`- Cuotas sin interés: convenientes solo si el precio en cuotas = precio contado.`);
-  lines.push(``);
-
-  lines.push(`CONTEXTO MACRO ARGENTINO:`);
-  lines.push(`- Inflación alta y crónica. Ahorrar en pesos sin inversión destruye el poder adquisitivo.`);
-  lines.push(`- Los salarios van detrás de la inflación real. Revisar el presupuesto cada vez que hay suba de sueldo o servicios.`);
-  lines.push(`- Las suscripciones acumuladas (streaming, apps, gimnasio) suman entre $30.000 y $100.000/mes sin que el usuario lo note.`);
-  lines.push(``);
-
-  // Datos macroeconómicos actualizados
+  // Datos macro en tiempo real
+  lines.push(`\n=== DATOS MACRO EN TIEMPO REAL (${new Date().toLocaleDateString('es-AR')}) ===`);
   if (macro.ipc_ultimo != null) {
-    lines.push(`=== DATOS MACRO ACTUALIZADOS (INDEC / datos.gob.ar) ===`);
-    lines.push(`- Inflación mensual más reciente: ${(macro.ipc_ultimo * 100).toFixed(1)}% (${macro.ipc_fecha ?? 'último período'})`);
-    if (macro.ipc_anterior != null) lines.push(`- Inflación mes anterior: ${(macro.ipc_anterior * 100).toFixed(1)}%`);
-    if (macro.ipc_hace2    != null) lines.push(`- Inflación hace 2 meses: ${(macro.ipc_hace2 * 100).toFixed(1)}%`);
-    if (macro.usd_oficial  != null) lines.push(`- TC oficial referencia: $${macro.usd_oficial.toFixed(2)}`);
-    lines.push(`Usá estos datos cuando el usuario pregunte por inflación, rendimiento real o poder adquisitivo.`);
-    lines.push(``);
+    lines.push(`- Inflación mensual más reciente: ${(macro.ipc_ultimo * 100).toFixed(1)}% (${macro.ipc_fecha ?? 'período reciente'})`);
+    if (macro.ipc_anterior != null) lines.push(`- Mes anterior: ${(macro.ipc_anterior * 100).toFixed(1)}%`);
+    if (macro.ipc_hace2    != null) lines.push(`- Hace 2 meses: ${(macro.ipc_hace2 * 100).toFixed(1)}%`);
+    const trend = macro.ipc_anterior != null ? (macro.ipc_ultimo < macro.ipc_anterior ? '📉 en baja' : macro.ipc_ultimo > macro.ipc_anterior ? '📈 en alza' : '→ estable') : '';
+    if (trend) lines.push(`  → Tendencia inflacionaria: ${trend}`);
+  } else {
+    lines.push(`- Inflación mensual: dato no disponible en este momento.`);
   }
+  if (macro.usd_blue       != null) lines.push(`- Dólar blue: $${Math.round(macro.usd_blue).toLocaleString('es-AR')}`);
+  if (macro.usd_mep        != null) lines.push(`- Dólar MEP: $${Math.round(macro.usd_mep).toLocaleString('es-AR')}`);
+  if (macro.usd_oficial    != null) lines.push(`- Dólar oficial BNA: $${macro.usd_oficial.toFixed(2)}`);
+  if (macro.usd_blue != null && macro.usd_oficial != null) {
+    const brecha = ((macro.usd_blue / macro.usd_oficial - 1) * 100).toFixed(1);
+    lines.push(`  → Brecha cambiaria: ${brecha}%`);
+  }
+  lines.push(`Usá estos datos cuando el usuario pregunte por inflación, dólar, o rendimiento real de inversiones.`);
 
   // Datos del usuario
-  if (ctx.has_data) {
-    lines.push(`=== DATOS FINANCIEROS DEL USUARIO — ESTE MES ===`);
+  lines.push(`\n=== PERFIL FINANCIERO DEL USUARIO ===`);
+  if (!ctx.has_data) {
+    lines.push(`Sin datos financieros cargados. Si el usuario pregunta por su situación, pedile que registre gastos en la app.`);
+  } else {
     if (ctx.name) lines.push(`- Nombre: ${ctx.name}`);
-
-    // Estado del mes
-    if (ctx.month_status) {
-      const statusLabel = ctx.month_status === 'good' ? '🟢 Buen manejo' : ctx.month_status === 'tight' ? '🟡 Ajustado' : '🔴 Te pasaste';
-      lines.push(`- Estado del mes: ${statusLabel}`);
-    }
-
+    if (ctx.risk_profile) lines.push(`- Perfil de riesgo: ${ctx.risk_profile}`);
     if (ctx.income)       lines.push(`- Ingreso estimado: ${fmt(ctx.income)}/mes`);
-    if (ctx.total_spent != null) lines.push(`- Total gastado: ${fmt(ctx.total_spent)}`);
-    if (ctx.income_pct  != null) lines.push(`  · ${ctx.income_pct}% del ingreso estimado`);
-    if (ctx.necessary)    lines.push(`  · Necesario: ${fmt(ctx.necessary)}`);
-    if (ctx.disposable)   lines.push(`  · Prescindible: ${fmt(ctx.disposable)}${ctx.disposable_pct ? ` (${ctx.disposable_pct}% del total)` : ''}`);
-    if (ctx.investable)   lines.push(`  · Invertible: ${fmt(ctx.investable)}`);
-    if (ctx.recoverable && ctx.recoverable > 0) {
-      lines.push(`- Dinero recuperable estimado (si ajusta prescindibles): ${fmt(ctx.recoverable)}/mes`);
+
+    lines.push(`\nMES ACTUAL:`);
+    if (ctx.month_status) {
+      const statusLabel = ctx.month_status === 'good' ? '🟢 Buen manejo' : ctx.month_status === 'tight' ? '🟡 Ajustado' : '🔴 Te pasaste del presupuesto';
+      lines.push(`- Estado: ${statusLabel}`);
     }
-    if (ctx.vs_prev_month != null) {
-      const sign = ctx.vs_prev_month > 0 ? '+' : '';
-      lines.push(`- Variación vs mes anterior: ${sign}${ctx.vs_prev_month}%`);
-    }
-    if (ctx.personal_inflation != null) {
-      lines.push(`- Inflación personal estimada: ${ctx.personal_inflation.toFixed(1)}%`);
-    }
-    if (ctx.top_cats?.length) {
-      lines.push(`- Top categorías: ${ctx.top_cats.map((c: any) => `${c.name} (${fmt(c.amount)})`).join(', ')}`);
-    }
+    if (ctx.total_spent != null) lines.push(`- Total gastado: ${fmt(ctx.total_spent)}${ctx.income_pct ? ` (${ctx.income_pct}% del ingreso)` : ''}`);
+    if (ctx.necessary)           lines.push(`  · Necesarios: ${fmt(ctx.necessary)}`);
+    if (ctx.disposable)          lines.push(`  · Prescindibles: ${fmt(ctx.disposable)}${ctx.disposable_pct ? ` (${ctx.disposable_pct}%)` : ''}`);
+    if (ctx.investable)          lines.push(`  · Invertibles: ${fmt(ctx.investable)}`);
+    if (ctx.recoverable && ctx.recoverable > 0) lines.push(`- Potencial de ahorro mensual: ${fmt(ctx.recoverable)}`);
+    if (ctx.vs_prev_month != null) lines.push(`- Variación vs mes anterior: ${ctx.vs_prev_month > 0 ? '+' : ''}${ctx.vs_prev_month}%`);
+    if (ctx.personal_inflation != null) lines.push(`- Inflación personal estimada: ${ctx.personal_inflation.toFixed(1)}%`);
+    if (ctx.top_cats?.length) lines.push(`- Top categorías: ${ctx.top_cats.map((c: any) => `${c.name} ${fmt(c.amount)}`).join(' · ')}`);
     if (ctx.subscriptions?.length) {
       const subTotal = ctx.subscriptions.reduce((s: number, x: any) => s + x.avg, 0);
-      lines.push(`- Suscripciones recurrentes (~${fmt(subTotal)}/mes): ${ctx.subscriptions.map((s: any) => s.description).join(', ')}`);
+      lines.push(`- Suscripciones (~${fmt(subTotal)}/mes): ${ctx.subscriptions.map((s: any) => s.description).join(', ')}`);
     }
 
-    // Reglas de análisis activadas por los datos
-    lines.push(``);
-    lines.push(`ANÁLISIS ACTIVADO POR LOS DATOS:`);
-    if (ctx.income && ctx.total_spent && ctx.total_spent > ctx.income) {
-      lines.push(`⚠️ Usuario gasta más de lo que gana. Déficit de ${fmt(ctx.total_spent - ctx.income)}. Priorizá reducción de gastos URGENTE.`);
+    if (ctx.savings_summary) {
+      lines.push(`\nCAPITAL E INVERSIONES:`);
+      lines.push(ctx.savings_summary);
     }
-    if (ctx.disposable_pct && ctx.disposable_pct > 25) {
-      lines.push(`⚠️ Prescindibles sobre el 25%. Alta exposición. Identificá y sugerí recortes específicos.`);
+    if (ctx.goals_summary) {
+      lines.push(`\nMETAS DE AHORRO:`);
+      lines.push(ctx.goals_summary);
+    }
+
+    // Alertas automáticas basadas en datos
+    lines.push(`\nALERTAS DETECTADAS:`);
+    let hasAlerts = false;
+    if (ctx.income && ctx.total_spent && ctx.total_spent > ctx.income) {
+      lines.push(`⛔ DÉFICIT: gasta ${fmt(ctx.total_spent - ctx.income)} más de lo que gana. Prioridad urgente.`);
+      hasAlerts = true;
+    }
+    if (ctx.disposable_pct && ctx.disposable_pct > 30) {
+      lines.push(`⚠️ PRESCINDIBLES ALTOS: ${ctx.disposable_pct}% del gasto es prescindible. Potencial de optimización.`);
+      hasAlerts = true;
     }
     if (ctx.income_pct && ctx.income_pct > 85 && ctx.income_pct <= 100) {
-      lines.push(`⚠️ Más del 85% del ingreso gastado. Hay poco margen. Antes de invertir, fijá un techo de gasto.`);
+      lines.push(`⚠️ POCO MARGEN: gasta el ${ctx.income_pct}% del ingreso. Sin capacidad de ahorro real.`);
+      hasAlerts = true;
     }
-    if (ctx.total_spent && ctx.total_spent > 50000 && ctx.investable === 0) {
-      lines.push(`ℹ️ Sin gastos invertibles. Pensá si hay algo que podría reclasificarse.`);
+    if (ctx.month_status === 'good' && ctx.recoverable > 5000) {
+      lines.push(`✅ MES POSITIVO: ${fmt(ctx.recoverable)} disponibles para invertir este mes.`);
+      hasAlerts = true;
     }
-    if (ctx.month_status === 'good' && ctx.recoverable > 0) {
-      lines.push(`✅ Mes positivo. Recomendá invertir el excedente: ${fmt(ctx.recoverable)} disponibles.`);
-    }
-  } else {
-    lines.push(`=== DATOS DEL USUARIO ===`);
-    lines.push(`No hay datos financieros cargados. Si el usuario pregunta por su situación, pedile que cargue gastos en la app primero.`);
+    if (!hasAlerts) lines.push(`Sin alertas críticas.`);
   }
 
   return lines.join('\n');
 }
 
-// ─── Prompt de bienvenida ─────────────────────────────────────────────────────
+// ─── Mensaje de bienvenida ────────────────────────────────────────────────────
 
 function buildWelcomeUserMessage(ctx: Record<string, any>, initialContext: string | null): string {
   if (initialContext) {
-    // El usuario llegó desde una acción específica del Informe
-    return `${initialContext}\n\nRespondé con contexto financiero concreto de Argentina. Máximo 3-4 frases, directo y accionable. Sin introducción larga.`;
+    return `${initialContext}\n\nRespondé en 3-4 frases, directo, con datos concretos de Argentina. Sin introducción.`;
   }
-
-  // Bienvenida genérica basada en datos del mes
-  const parts: string[] = [];
-
   if (ctx.has_data && ctx.total_spent != null) {
-    parts.push('Basándote en mis datos financieros de este mes');
-    if (ctx.month_status) parts.push(`(estado: ${ctx.month_status === 'good' ? 'bueno' : ctx.month_status === 'tight' ? 'ajustado' : 'excedido'})`);
-    parts.push(', resumí mi situación en 2-3 frases. Destacá el punto más importante que debería atender. Sin introducción larga, directo al dato clave.');
-  } else {
-    parts.push('Presentate brevemente y decime cómo podés ayudarme con mis finanzas personales en Argentina. Máximo 2 frases.');
+    const estado = ctx.month_status === 'good' ? 'positivo' : ctx.month_status === 'tight' ? 'ajustado' : 'en déficit';
+    return `Mis finanzas este mes están ${estado}. Total gastado: ${fmt(ctx.total_spent)}${ctx.income ? `, ingreso estimado ${fmt(ctx.income)}` : ''}. Resumí mi situación en 2-3 frases y decime el punto más importante que debería atender hoy. Sin introducción.`;
   }
-
-  return parts.join(' ');
+  return `Presentate brevemente como SmartPesos y decime 2 maneras concretas en que podés ayudarme con mis finanzas en Argentina hoy. Máximo 2 frases.`;
 }
 
 // ─── Servidor ────────────────────────────────────────────────────────────────
@@ -202,9 +372,11 @@ serve(async (req) => {
       message,
       history,
       user_id,
-      generate_welcome  = false,
-      client_context    = null,   // contexto pre-computado en el frontend
-      initial_context   = null,   // string contextual desde reports.tsx
+      generate_welcome = false,
+      client_context   = null,
+      initial_context  = null,
+      savings_context  = null,
+      bot_focus        = 'general', // 'general' | 'inversiones' | 'ahorro' | 'gastos'
     } = body;
 
     if (!generate_welcome && !message) {
@@ -213,22 +385,36 @@ serve(async (req) => {
       });
     }
 
-    // ── Datos macroeconómicos (opcional) ─────────────────────────────────────
+    // ── Datos macroeconómicos en paralelo (con timeout de 4s cada uno) ──────────
+    function fetchWithTimeout(url: string, ms = 4000, init?: RequestInit): Promise<Response> {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+    }
+
     let macro: Record<string, any> = {};
+    const [ipcResult, usdOficialResult, bluelyticsResult] = await Promise.allSettled([
+      fetchWithTimeout('https://apis.datos.gob.ar/series/api/series/?ids=148.3_INIVELNAL_DICI_M_26&limit=3&format=json'),
+      fetchWithTimeout('https://apis.datos.gob.ar/series/api/series/?ids=168.1_T_CAMBIOR_D_0_0_26&limit=1&format=json'),
+      fetchWithTimeout('https://api.bluelytics.com.ar/v2/latest'),
+    ]);
+
     try {
-      const [ipcRes, usdRes] = await Promise.all([
-        fetch('https://apis.datos.gob.ar/series/api/series/?ids=148.3_INIVELNAL_DICI_M_26&limit=3&format=json'),
-        fetch('https://apis.datos.gob.ar/series/api/series/?ids=168.1_T_CAMBIOR_D_0_0_26&limit=3&format=json'),
-      ]);
-      if (ipcRes.ok) {
-        const d = (await ipcRes.json())?.data ?? [];
+      if (ipcResult.status === 'fulfilled' && ipcResult.value.ok) {
+        const d = (await ipcResult.value.json())?.data ?? [];
         if (d[0]) { macro.ipc_ultimo = d[0][1]; macro.ipc_fecha = d[0][0]; }
         if (d[1]) macro.ipc_anterior = d[1][1];
         if (d[2]) macro.ipc_hace2    = d[2][1];
       }
-      if (usdRes.ok) {
-        const d = (await usdRes.json())?.data ?? [];
+      if (usdOficialResult.status === 'fulfilled' && usdOficialResult.value.ok) {
+        const d = (await usdOficialResult.value.json())?.data ?? [];
         if (d[0]) macro.usd_oficial = d[0][1];
+      }
+      if (bluelyticsResult.status === 'fulfilled' && bluelyticsResult.value.ok) {
+        const bl = await bluelyticsResult.value.json();
+        if (bl?.blue?.value_sell)    macro.usd_blue   = bl.blue.value_sell;
+        if (bl?.oficial?.value_sell) macro.usd_oficial = macro.usd_oficial ?? bl.oficial.value_sell;
+        if (bl?.ev?.value_sell)      macro.usd_mep    = bl.ev.value_sell;
       }
     } catch { /* macro no crítico */ }
 
@@ -247,9 +433,10 @@ serve(async (req) => {
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
         const since90    = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
 
-        const [profileRes, financialRes, expensesRes, expCatRes, sub90Res] = await Promise.all([
+        const [profileRes, financialRes, riskRes, expensesRes, expCatRes, sub90Res] = await Promise.all([
           sb.from('profiles').select('full_name').eq('id', user_id).single(),
           sb.from('financial_profiles').select('income_range').eq('user_id', user_id).single(),
+          sb.from('risk_profiles').select('risk_level').eq('user_id', user_id).maybeSingle(),
           sb.from('expenses').select('amount, classification').eq('user_id', user_id).is('deleted_at', null).gte('date', monthStart),
           sb.from('expenses').select('amount, category:expense_categories(name_es)').eq('user_id', user_id).is('deleted_at', null).gte('date', monthStart),
           sb.from('expenses').select('description, amount, date').eq('user_id', user_id).is('deleted_at', null).gte('date', since90),
@@ -282,26 +469,26 @@ serve(async (req) => {
             avg: Math.round(v.amounts.reduce((a: number, b: number) => a + b, 0) / v.amounts.length),
           }));
 
-        const income    = financialRes.data?.income_range ? (INCOME_RANGE_MAP[financialRes.data.income_range] ?? null) : null;
-        const subTotal  = subscriptions.reduce((s, x) => s + x.avg, 0);
-        const projected = income != null ? income - totalSpent - subTotal : null;
+        const income   = financialRes.data?.income_range ? (INCOME_RANGE_MAP[financialRes.data.income_range] ?? null) : null;
+        const subTotal = subscriptions.reduce((s, x) => s + x.avg, 0);
 
         ctx = {
-          has_data:    totalSpent > 0 || income != null,
-          name:        profileRes.data?.full_name,
+          has_data:     totalSpent > 0 || income != null,
+          name:         profileRes.data?.full_name,
+          risk_profile: riskRes.data?.risk_level ?? null,
           income,
-          total_spent: totalSpent,
+          total_spent:  totalSpent,
           necessary,
           disposable,
           investable,
-          projected,
           top_cats,
           subscriptions,
+          subTotal,
         };
       } catch { /* contexto DB no crítico */ }
     }
 
-    // ── Validar límite de mensajes (defensa en profundidad, no solo frontend) ──
+    // ── Validar límite de mensajes ────────────────────────────────────────────
     if (!generate_welcome && user_id) {
       try {
         const sb = createClient(
@@ -309,37 +496,23 @@ serve(async (req) => {
           Deno.env.get('SUPABASE_ANON_KEY')!,
           { global: { headers: { Authorization: authHeader } } },
         );
-
         const { data: planRow } = await sb
-          .from('profiles')
-          .select('subscription_plan, subscription_status, plan_expires_at')
-          .eq('id', user_id)
-          .single();
+          .from('profiles').select('subscription_plan, subscription_status, plan_expires_at').eq('id', user_id).single();
 
         if (planRow) {
-          const raw     = planRow.subscription_plan ?? 'free';
-          const status  = planRow.subscription_status ?? 'inactive';
+          const raw    = planRow.subscription_plan ?? 'free';
+          const status = planRow.subscription_status ?? 'inactive';
           const expires = planRow.plan_expires_at;
-
           let effective = 'free';
           if (raw !== 'free') {
             if (status === 'active') effective = raw;
             else if (status === 'trial' && expires && new Date(expires) > new Date()) effective = raw;
           }
-
           const LIMITS: Record<string, number | null> = { free: 15, pro: 100, premium: null };
           const limit = LIMITS[effective] ?? 15;
-
           if (limit !== null) {
-            const now   = new Date();
-            const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-            const { data: usage } = await sb
-              .from('ai_usage')
-              .select('msg_count')
-              .eq('user_id', user_id)
-              .eq('month', month)
-              .maybeSingle();
-
+            const month = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+            const { data: usage } = await sb.from('ai_usage').select('msg_count').eq('user_id', user_id).eq('month', month).maybeSingle();
             if ((usage?.msg_count ?? 0) >= limit) {
               return new Response(
                 JSON.stringify({ error: 'limit_reached', plan: effective, limit }),
@@ -354,32 +527,48 @@ serve(async (req) => {
     // ── Fusionar contexto del cliente (más preciso para el mes actual) ────────
     if (client_context) {
       ctx.has_data = true;
-      if (client_context.month_total    != null) ctx.total_spent      = client_context.month_total;
-      if (client_context.income         != null && !ctx.income) ctx.income = client_context.income;
-      if (client_context.income_pct     != null) ctx.income_pct       = client_context.income_pct;
-      if (client_context.month_status   != null) ctx.month_status     = client_context.month_status;
-      if (client_context.necessary      != null) ctx.necessary        = client_context.necessary;
-      if (client_context.disposable     != null) ctx.disposable       = client_context.disposable;
-      if (client_context.disposable_pct != null) ctx.disposable_pct   = client_context.disposable_pct;
-      if (client_context.investable     != null) ctx.investable       = client_context.investable;
-      if (client_context.recoverable    != null) ctx.recoverable      = client_context.recoverable;
-      if (client_context.vs_prev_month  != null) ctx.vs_prev_month    = client_context.vs_prev_month;
-      if (client_context.personal_inflation != null) ctx.personal_inflation = client_context.personal_inflation;
+      if (client_context.month_total       != null) ctx.total_spent       = client_context.month_total;
+      if (client_context.income            != null && !ctx.income) ctx.income = client_context.income;
+      if (client_context.income_pct        != null) ctx.income_pct        = client_context.income_pct;
+      if (client_context.month_status      != null) ctx.month_status      = client_context.month_status;
+      if (client_context.necessary         != null) ctx.necessary         = client_context.necessary;
+      if (client_context.disposable        != null) ctx.disposable        = client_context.disposable;
+      if (client_context.disposable_pct    != null) ctx.disposable_pct    = client_context.disposable_pct;
+      if (client_context.investable        != null) ctx.investable        = client_context.investable;
+      if (client_context.recoverable       != null) ctx.recoverable       = client_context.recoverable;
+      if (client_context.vs_prev_month     != null) ctx.vs_prev_month     = client_context.vs_prev_month;
+      if (client_context.personal_inflation!= null) ctx.personal_inflation = client_context.personal_inflation;
     }
 
+    // ── Contexto de ahorros/metas (enviado desde savings.tsx si disponible) ──
+    if (savings_context) {
+      if (savings_context.savings_summary) ctx.savings_summary = savings_context.savings_summary;
+      if (savings_context.goals_summary)   ctx.goals_summary   = savings_context.goals_summary;
+      ctx.has_data = true;
+    }
+
+    // ── Foco del bot ─────────────────────────────────────────────────────────
+    const BOT_FOCUS_PROMPTS: Record<string, string> = {
+      inversiones: `\n=== FOCO DE ESTE CHAT: INVERSIONES ===\nEste bot es especialista en inversiones. Cuando el usuario pregunte algo general, enfocate en el ángulo inversor. Priorizá: Cedears, FCI, bonos CER, ON en dólares, Lecaps, acciones del Merval, dólar MEP/CCL. Siempre mencioná el riesgo y el horizonte temporal recomendado para cada instrumento. Si el usuario tiene prescindibles altos, sugerí usarlos para invertir.`,
+      ahorro: `\n=== FOCO DE ESTE CHAT: AHORRO Y PRESUPUESTO ===\nEste bot es especialista en ahorro y metas financieras. Cuando el usuario pregunte algo general, enfocate en: cómo ahorrar más, cómo estructurar un presupuesto, fondo de emergencia, metas de ahorro concretas, reducción de gastos no esenciales. Usá los datos de metas del usuario si están disponibles. Dá sugerencias de cuánto ahorrar por mes y en cuánto tiempo se logra una meta.`,
+      gastos: `\n=== FOCO DE ESTE CHAT: ANÁLISIS DE GASTOS ===\nEste bot es especialista en análisis y optimización de gastos. Cuando el usuario pregunte algo general, enfocate en: qué gastos puede reducir, cómo clasificar mejor sus gastos (necesario/prescindible/invertible), suscripciones que no usa, análisis de patrones de gasto, comparación con meses anteriores. Usá los datos concretos de gastos del usuario. Sé específico: mencioná categorías y montos reales.`,
+      general: '',
+    };
+    const focusAddition = BOT_FOCUS_PROMPTS[bot_focus] ?? '';
+
     // ── Llamar a Groq ─────────────────────────────────────────────────────────
-    const systemPrompt  = buildSystemPrompt(ctx, macro);
-    const chatHistory   = Array.isArray(history) ? history.slice(-8) : [];
+    const systemPrompt = buildSystemPrompt(ctx, macro) + focusAddition;
+    const chatHistory  = Array.isArray(history) ? history.slice(-10) : [];
 
     let userContent: string;
     let maxTokens: number;
 
     if (generate_welcome) {
       userContent = buildWelcomeUserMessage(ctx, initial_context ?? null);
-      maxTokens   = 200; // bienvenida corta
+      maxTokens   = 250;
     } else {
       userContent = message;
-      maxTokens   = 600;
+      maxTokens   = 700;
     }
 
     const messages = [
@@ -388,22 +577,33 @@ serve(async (req) => {
       { role: 'user', content: userContent },
     ];
 
-    const groqRes = await fetch(GROQ_API_URL, {
+    const groqRes = await fetchWithTimeout(GROQ_API_URL, 25000, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${groqApiKey}` },
-      body:    JSON.stringify({
-        model:        'llama-3.3-70b-versatile',
+      body: JSON.stringify({
+        model:       'llama-3.3-70b-versatile',
         messages,
-        max_tokens:   maxTokens,
-        temperature:  generate_welcome ? 0.65 : 0.7,
+        max_tokens:  maxTokens,
+        temperature: generate_welcome ? 0.6 : 0.65,
       }),
     });
 
     if (!groqRes.ok) throw new Error(`Groq: ${await groqRes.text()}`);
 
     const groqData = await groqRes.json();
-    const reply    = groqData.choices?.[0]?.message?.content
-      ?? 'No pude procesar esa pregunta. Probá de nuevo.';
+    const reply    = groqData.choices?.[0]?.message?.content ?? 'No pude procesar esa pregunta. Probá de nuevo.';
+
+    // ── Incrementar uso ───────────────────────────────────────────────────────
+    if (!generate_welcome && user_id) {
+      try {
+        const sb = createClient(
+          Deno.env.get('SUPABASE_URL')!,
+          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY')!,
+        );
+        const month = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+        await sb.rpc('increment_ai_usage', { p_user_id: user_id, p_month: month });
+      } catch { /* no crítico */ }
+    }
 
     return new Response(JSON.stringify({ message: reply }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

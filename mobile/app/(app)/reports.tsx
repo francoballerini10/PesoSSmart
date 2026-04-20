@@ -135,8 +135,9 @@ export default function ReportsScreen() {
       setRows(result);
 
       const histMap: Record<string, MonthSummary> = {};
-      for (const exp of histRes.data ?? []) {
-        const key = (exp.date as string).slice(0, 7);
+      type HistRow = { amount: number; date: string; classification: string | null };
+      for (const exp of (histRes.data ?? []) as HistRow[]) {
+        const key = exp.date.slice(0, 7);
         if (!histMap[key]) {
           const [y, m] = key.split('-').map(Number);
           histMap[key] = { monthKey: key, label: MONTH_NAMES[m - 1].slice(0, 3), total: 0, disposable: 0, necessary: 0, investable: 0 };

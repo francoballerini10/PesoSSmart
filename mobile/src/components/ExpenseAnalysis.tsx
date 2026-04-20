@@ -239,13 +239,14 @@ export function ExpenseAnalysis({ userId }: { userId: string }) {
     setSelectedIdx(null);
     setExpandedId(null);
     try {
-      const { data, error } = await supabase
+      const { data: rawData, error } = await (supabase as any)
         .from('expenses')
         .select('id, amount, description, date, category:expense_categories(id, name_es, color)')
         .eq('user_id', userId)
         .is('deleted_at', null)
         .gte('date', startDate)
         .lt('date', endDate);
+      const data = rawData as { id: string; amount: number; description: string; date: string; category: any }[] | null;
 
       if (error) throw error;
 

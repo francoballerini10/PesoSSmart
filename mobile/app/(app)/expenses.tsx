@@ -3,7 +3,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
   View,
   ScrollView,
-  FlatList,
+  SectionList,
   TextInput,
   StyleSheet,
   TouchableOpacity,
@@ -22,7 +22,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { colors, spacing, layout } from '@/theme';
-import { Text, Card, PressableCard, Button, Input, Badge } from '@/components/ui';
+import { Text, Button, Input, Badge } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
 import { useExpensesStore } from '@/store/expensesStore';
 import type { DetectedSubscription } from '@/store/expensesStore';
@@ -53,6 +53,11 @@ import {
   ObjetivoCard,
   AdvisorCTA,
 } from '@/components/ReportCards';
+
+const PM_LABELS: Record<string, string> = {
+  cash: 'Efectivo', debit: 'Débito', credit: 'Crédito',
+  transfer: 'Transferencia', digital_wallet: 'Billetera', other: 'Otro',
+};
 
 const expenseSchema = z.object({
   description: z.string().min(1, 'Describí el gasto.').max(100),
@@ -317,10 +322,11 @@ export default function ExpensesScreen() {
       .is('deleted_at', null)
       .gte('date', histStart)
       .lt('date', startDate)
-      .then(({ data }) => {
+      .then(({ data: rawData }) => {
+        const data = rawData as { amount: number; date: string; classification: string | null }[] | null;
         const histMap: Record<string, MonthSummary> = {};
         for (const exp of data ?? []) {
-          const key = (exp.date as string).slice(0, 7);
+          const key = exp.date.slice(0, 7);
           if (!histMap[key]) {
             const [y, m] = key.split('-').map(Number);
             histMap[key] = { monthKey: key, label: MONTH_NAMES[m - 1].slice(0, 3), total: 0, disposable: 0, necessary: 0, investable: 0 };
@@ -397,6 +403,18 @@ export default function ExpensesScreen() {
     return Object.values(map)
       .map(r => ({ ...r, pct: total > 0 ? r.amount / total : 0 }))
       .sort((a, b) => b.amount - a.amount);
+  }, [expenses]);
+
+  const expenseSections = useMemo(() => {
+    const grouped: Record<string, { date: string; items: Expense[]; total: number }> = {};
+    for (const e of expenses) {
+      if (!grouped[e.date]) grouped[e.date] = { date: e.date, items: [], total: 0 };
+      grouped[e.date].items.push(e);
+      grouped[e.date].total += e.amount;
+    }
+    return Object.values(grouped)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map(g => ({ title: g.date, data: g.items, total: g.total }));
   }, [expenses]);
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -577,7 +595,7 @@ export default function ExpensesScreen() {
   }, [user?.id, filter]);
 
   const checkCoupleMode = async (userId: string) => {
-    const { data } = await supabase
+    const { data } = await (supabase as any)
       .from('family_members')
       .select('role, family_groups!inner(group_type)')
       .eq('user_id', userId)
@@ -928,6 +946,19 @@ export default function ExpensesScreen() {
             </View>
           ) : (
             <>
+              {/* Quick stats row */}
+              <View style={styles.analysisStatsRow}>
+                {[
+                  { label: 'Total', value: formatCurrency(totalThisMonth), color: colors.text.primary },
+                  { label: 'Necesario', value: formatCurrency(totalNecessary), color: colors.accent },
+                  { label: 'Prescindible', value: formatCurrency(totalDisposable), color: colors.red },
+                ].map((s) => (
+                  <View key={s.label} style={styles.analysisStatItem}>
+                    <Text variant="caption" color={colors.text.tertiary}>{s.label}</Text>
+                    <Text variant="labelMd" color={s.color} numberOfLines={1} adjustsFontSizeToFit>{s.value}</Text>
+                  </View>
+                ))}
+              </View>
               <CategoryBreakdown rows={analysisRows} total={totalThisMonth} />
               <MonthStatusBanner data={analysisStatusData} />
               {user?.id && (
@@ -945,14 +976,16 @@ export default function ExpensesScreen() {
         </ScrollView>
       ) : (
 
-      <FlatList
+      <SectionList
         style={styles.flatList}
-        data={expenses}
+        sections={expenseSections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => <ExpenseItem expense={item} onPress={() => openEditExpense(item)} />}
+        renderSectionHeader={({ section }) => <DayHeader date={section.title} total={section.total} />}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={listHeader}
+        stickySectionHeadersEnabled={false}
         onEndReached={() => { if (user?.id && hasMore) fetchMoreExpenses(user.id); }}
         onEndReachedThreshold={0.3}
         ListFooterComponent={isLoadingMore ? <ActivityIndicator size="small" color={colors.neon} style={{ paddingVertical: spacing[4] }} /> : null}
@@ -1095,6 +1128,76 @@ export default function ExpensesScreen() {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
+              {/* ── Monto prominente ── */}
+              <Controller
+                control={control}
+                name="amount"
+                render={({ field: { onChange, onBlur, value } }) => {
+                  const raw  = parseFloat(value.replace(',', '.'));
+                  const rate = rates[dolarType];
+                  const ars  = currency === 'USD' && rate && !isNaN(raw)
+                    ? Math.round(raw * rate)
+                    : null;
+                  return (
+                    <View style={styles.amountBlock}>
+                      <View style={styles.amountRow}>
+                        <Text style={styles.amountPrefix}>{currency === 'USD' ? 'U$D' : '$'}</Text>
+                        <TextInput
+                          style={styles.amountInput}
+                          placeholder="0"
+                          placeholderTextColor={colors.text.tertiary}
+                          value={value}
+                          onChangeText={onChange}
+                          onBlur={onBlur}
+                          keyboardType="decimal-pad"
+                          autoFocus
+                        />
+                      </View>
+                      {errors.amount?.message && (
+                        <Text variant="caption" color={colors.red}>{errors.amount.message}</Text>
+                      )}
+                      {ars !== null && (
+                        <View style={styles.fxPreview}>
+                          <Ionicons name="swap-horizontal" size={12} color={colors.text.tertiary} />
+                          <Text variant="caption" color={colors.text.tertiary}>
+                            = ${ars.toLocaleString('es-AR')} ARS al {dolarLabels[dolarType]}
+                          </Text>
+                        </View>
+                      )}
+                      {/* Moneda inline */}
+                      <View style={[styles.currencyRow, { marginTop: spacing[2] }]}>
+                        {(['ARS', 'USD'] as const).map((c) => (
+                          <TouchableOpacity
+                            key={c}
+                            style={[styles.currencyChip, currency === c && styles.currencyChipActive]}
+                            onPress={() => setCurrency(c)}
+                          >
+                            <Text variant="label" color={currency === c ? colors.neon : colors.text.secondary}>{c}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      {currency === 'USD' && (
+                        <View style={styles.dolarRow}>
+                          {(['oficial', 'blue', 'mep'] as DolarType[]).map((t) => {
+                            const r = rates[t];
+                            return (
+                              <TouchableOpacity
+                                key={t}
+                                style={[styles.dolarChip, dolarType === t && styles.dolarChipActive]}
+                                onPress={() => setDolarType(t)}
+                              >
+                                <Text variant="caption" color={dolarType === t ? colors.white : colors.text.secondary}>{dolarLabels[t]}</Text>
+                                <Text variant="caption" color={dolarType === t ? colors.white : colors.text.tertiary}>{r ? `$${r.toLocaleString('es-AR')}` : '...'}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      )}
+                    </View>
+                  );
+                }}
+              />
+
               <Controller
                 control={control}
                 name="description"
@@ -1109,97 +1212,6 @@ export default function ExpensesScreen() {
                     autoCapitalize="sentences"
                   />
                 )}
-              />
-
-              {/* Selector de moneda */}
-              <View>
-                <Text variant="label" color={colors.text.secondary} style={styles.inputLabel}>
-                  MONEDA
-                </Text>
-                <View style={styles.currencyRow}>
-                  {(['ARS', 'USD'] as const).map((c) => (
-                    <TouchableOpacity
-                      key={c}
-                      style={[styles.currencyChip, currency === c && styles.currencyChipActive]}
-                      onPress={() => setCurrency(c)}
-                    >
-                      <Text
-                        variant="label"
-                        color={currency === c ? colors.neon : colors.text.secondary}
-                      >
-                        {c}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {/* Selector de tipo de dólar */}
-                {currency === 'USD' && (
-                  <View style={styles.dolarRow}>
-                    {(['oficial', 'blue', 'mep'] as DolarType[]).map((t) => {
-                      const rate = rates[t];
-                      return (
-                        <TouchableOpacity
-                          key={t}
-                          style={[styles.dolarChip, dolarType === t && styles.dolarChipActive]}
-                          onPress={() => setDolarType(t)}
-                        >
-                          <Text
-                            variant="caption"
-                            color={dolarType === t ? colors.white : colors.text.secondary}
-                          >
-                            {dolarLabels[t]}
-                          </Text>
-                          <Text
-                            variant="caption"
-                            color={dolarType === t ? colors.white : colors.text.tertiary}
-                          >
-                            {rate ? `$${rate.toLocaleString('es-AR')}` : '...'}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-              </View>
-
-              <Controller
-                control={control}
-                name="amount"
-                render={({ field: { onChange, onBlur, value } }) => {
-                  const raw  = parseFloat(value.replace(',', '.'));
-                  const rate = rates[dolarType];
-                  const ars  = currency === 'USD' && rate && !isNaN(raw)
-                    ? Math.round(raw * rate)
-                    : null;
-
-                  return (
-                    <View>
-                      <Input
-                        label={currency === 'USD' ? 'MONTO (USD)' : 'MONTO (ARS)'}
-                        placeholder="0"
-                        value={value}
-                        onChangeText={onChange}
-                        onBlur={onBlur}
-                        error={errors.amount?.message}
-                        keyboardType="decimal-pad"
-                        leftIcon={
-                          <Text variant="body" color={colors.text.secondary}>
-                            {currency === 'USD' ? 'U$D' : '$'}
-                          </Text>
-                        }
-                      />
-                      {ars !== null && (
-                        <View style={styles.fxPreview}>
-                          <Ionicons name="swap-horizontal" size={12} color={colors.text.tertiary} />
-                          <Text variant="caption" color={colors.text.tertiary}>
-                            = ${ars.toLocaleString('es-AR')} ARS al {dolarLabels[dolarType]}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  );
-                }}
               />
 
               {/* Categorías */}
@@ -1458,39 +1470,59 @@ const CLASSIFICATION_COLOR: Record<string, string> = {
   investable: colors.neon,
 };
 
+function DayHeader({ date, total }: { date: string; total: number }) {
+  const d = new Date(date + 'T12:00:00');
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const isToday = d.toDateString() === today.toDateString();
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  const label = isToday ? 'Hoy'
+    : isYesterday ? 'Ayer'
+    : d.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
+  return (
+    <View style={styles.dayHeader}>
+      <Text variant="label" color={colors.text.tertiary} style={{ textTransform: 'capitalize' }}>{label}</Text>
+      <Text variant="label" color={colors.text.tertiary}>{formatCurrency(total)}</Text>
+    </View>
+  );
+}
+
 function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => void }) {
-  const accentColor =
+  const catColor =
     (expense.category as any)?.color ??
     (expense.classification ? CLASSIFICATION_COLOR[expense.classification] : colors.border.default);
+  const catIcon = (expense.category as any)?.icon ?? 'receipt-outline';
 
   return (
-    <PressableCard style={styles.expenseItem} onPress={onPress}>
-      <View style={[styles.expenseAccent, { backgroundColor: accentColor }]} />
-      <View style={styles.expenseRow}>
-        <View style={styles.expenseLeft}>
-          <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
-            {expense.description}
-          </Text>
-          <View style={styles.expenseMeta}>
-            <Text variant="caption" color={colors.text.tertiary}>{formatDate(expense.date)}</Text>
-            {expense.category && (
-              <>
-                <Text variant="caption" color={colors.text.tertiary}> · </Text>
-                <Text variant="caption" color={colors.text.tertiary}>{expense.category.name_es}</Text>
-              </>
-            )}
-          </View>
-        </View>
-        <View style={{ alignItems: 'flex-end', gap: 4 }}>
-          <Text variant="labelMd" color={colors.text.primary}>
-            {formatCurrency(expense.amount)}
-          </Text>
-          {expense.classification && (
-            <Badge classification={expense.classification} label={expense.classification} small animated />
+    <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.expenseIconCircle, { backgroundColor: catColor + '22' }]}>
+        <Ionicons name={catIcon as any} size={18} color={catColor} />
+      </View>
+      <View style={styles.expenseLeft}>
+        <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
+          {expense.description}
+        </Text>
+        <View style={styles.expenseMeta}>
+          {expense.category && (
+            <Text variant="caption" color={colors.text.tertiary}>{expense.category.name_es}</Text>
+          )}
+          {expense.payment_method && (
+            <Text variant="caption" color={colors.text.tertiary}>
+              {expense.category ? ' · ' : ''}{PM_LABELS[expense.payment_method] ?? expense.payment_method}
+            </Text>
           )}
         </View>
       </View>
-    </PressableCard>
+      <View style={styles.expenseRight}>
+        <Text variant="labelMd" color={colors.text.primary}>
+          -{formatCurrency(expense.amount)}
+        </Text>
+        {expense.classification && (
+          <Badge classification={expense.classification} label={expense.classification} small animated />
+        )}
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -1633,6 +1665,7 @@ const styles = StyleSheet.create({
     borderWidth:       1,
     borderColor:       colors.border.default,
     backgroundColor:   colors.bg.elevated,
+    borderRadius:      10,
   },
   searchInput: {
     flex:       1,
@@ -1657,25 +1690,86 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom: layout.tabBarHeight + spacing[4],
-    gap: spacing[2],
+    gap: spacing[1],
   },
   empty: {
     paddingVertical: spacing[16],
     alignItems: 'center',
     gap: spacing[4],
   },
-  expenseItem: { padding: 0, overflow: 'hidden', flexDirection: 'row' },
-  expenseAccent: { width: 3, alignSelf: 'stretch' },
-  expenseRow: {
-    flex:          1,
+  // Day header
+  dayHeader: {
     flexDirection: 'row',
-    alignItems:    'center',
     justifyContent: 'space-between',
-    padding:       spacing[4],
-    gap:           spacing[3],
+    alignItems: 'center',
+    paddingHorizontal: spacing[1],
+    paddingTop: spacing[4],
+    paddingBottom: spacing[2],
+  },
+  // Expense item
+  expenseItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: colors.bg.card,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    borderRadius: 12,
+    padding: spacing[4],
+  },
+  expenseIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   expenseLeft: { flex: 1, gap: spacing[1] },
   expenseMeta: { flexDirection: 'row', alignItems: 'center' },
+  expenseRight: { alignItems: 'flex-end', gap: 4 },
+  // Analysis stats row
+  analysisStatsRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+  },
+  analysisStatItem: {
+    flex: 1,
+    backgroundColor: colors.bg.card,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    borderRadius: 12,
+    padding: spacing[3],
+    gap: spacing[1],
+    alignItems: 'center',
+  },
+  // Amount block (add modal)
+  amountBlock: {
+    backgroundColor: colors.bg.elevated,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    borderRadius: 16,
+    padding: spacing[5],
+    gap: spacing[1],
+    alignItems: 'center',
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  amountPrefix: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 32,
+    color: colors.text.tertiary,
+  },
+  amountInput: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 40,
+    color: colors.text.primary,
+    minWidth: 80,
+    textAlign: 'center',
+  },
   subsHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
