@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Dimensions,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -19,6 +20,7 @@ import { Text, Card, PressableCard, AmountDisplay, Badge } from '@/components/ui
 import { useAuthStore } from '@/store/authStore';
 import { useExpensesStore } from '@/store/expensesStore';
 import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
+import { useSavingsStore } from '@/store/savingsStore';
 import type { Expense } from '@/types';
 import type { DetectedSubscription } from '@/store/expensesStore';
 import { GoalsSection } from '@/components/GoalsSection';
@@ -508,23 +510,28 @@ async function fetchMarketData(): Promise<MarketData> {
 const SCREEN_W = require('react-native').Dimensions.get('window').width;
 
 function MarketTicker({
-  market, totalInvestable, totalDisposable,
+  market, totalInvestable, totalDisposable, inflationRate, fciRate,
 }: {
   market:          MarketData;
   totalInvestable: number;
   totalDisposable: number;
+  inflationRate:   number;
+  fciRate:         number;
 }) {
   const fmt = (n: number) => n >= 1_000_000
     ? `$${(n / 1_000_000).toFixed(1)}M`
     : n >= 1_000 ? `$${Math.round(n / 1_000)}K` : `$${Math.round(n)}`;
 
+  const now = new Date();
+  const monthLabel = now.toLocaleDateString('es-AR', { month: 'long' }).toUpperCase();
+
   const items = [
-    { label: 'DÓLAR BLUE',        value: market.blue ? `$${Math.round(market.blue).toLocaleString('es-AR')}` : '--',  sub: 'venta hoy', color: colors.neon },
-    { label: 'DÓLAR MEP',         value: market.mep  ? `$${Math.round(market.mep).toLocaleString('es-AR')}`  : '--',  sub: 'venta hoy', color: colors.neon },
-    { label: 'INFLACIÓN MARZO',    value: '3.4%',                                                                       sub: 'INDEC mar-26', color: colors.yellow },
-    { label: 'FCI CER EST./MES',  value: '3.2%',                                                                       sub: 'rendimiento', color: colors.primary },
-    { label: 'DISPONIBLE',        value: fmt(totalInvestable),                                                          sub: 'para invertir', color: '#A78BFA' },
-    { label: 'PRESCINDIBLE/MES',  value: fmt(totalDisposable),                                                          sub: 'podrías recortar', color: colors.red },
+    { label: 'DÓLAR BLUE',           value: market.blue ? `$${Math.round(market.blue).toLocaleString('es-AR')}` : '--', sub: 'venta hoy',       color: colors.neon },
+    { label: 'DÓLAR MEP',            value: market.mep  ? `$${Math.round(market.mep).toLocaleString('es-AR')}`  : '--', sub: 'venta hoy',       color: colors.neon },
+    { label: `INFLACIÓN ${monthLabel}`, value: `${inflationRate.toFixed(1)}%`,                                           sub: 'INDEC mensual',   color: colors.yellow },
+    { label: 'FCI MM EST./MES',      value: `${fciRate.toFixed(1)}%`,                                                   sub: 'rendimiento',     color: colors.primary },
+    { label: 'DISPONIBLE',           value: fmt(totalInvestable),                                                        sub: 'para invertir',   color: '#A78BFA' },
+    { label: 'PRESCINDIBLE/MES',     value: fmt(totalDisposable),                                                        sub: 'podrías recortar', color: colors.red },
   ];
 
   const scrollRef  = useRef<ScrollView>(null);
@@ -598,7 +605,7 @@ interface DataInsight {
 
 function buildKeyInsights({
   expenses, subscriptions, totalThisMonth, totalDisposable,
-  totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal,
+  totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
 }: {
   expenses:        Expense[];
   subscriptions:   DetectedSubscription[];
@@ -609,6 +616,7 @@ function buildKeyInsights({
   goals:           SavingsGoal[];
   prevMonthCats:   Record<string, { name: string; amount: number }>;
   prevMonthTotal:  number;
+  inflationRate:   number;
 }): DataInsight[] {
   const items: DataInsight[] = [];
   const now         = new Date();
@@ -799,7 +807,7 @@ function buildKeyInsights({
   // ── 11. INFLACIÓN PERSONAL (gasto vs mes pasado) ───────────────────────────
   if (prevMonthTotal > 0 && totalThisMonth > 0 && dayOfMonth >= 25) {
     const growth       = ((totalThisMonth - prevMonthTotal) / prevMonthTotal) * 100;
-    const INDEC_CPI    = 3.4; // % mensual — INDEC marzo 2026
+    const INDEC_CPI    = inflationRate;
     if (growth > INDEC_CPI) {
       const growthStr = growth.toFixed(1);
       items.push({
@@ -1189,6 +1197,104 @@ const carouselStyles = StyleSheet.create({
   dotActive: { width: 20, height: 6, borderRadius: 3, backgroundColor: colors.primary },
 });
 
+// ─── QuickStartCard ───────────────────────────────────────────────────────────
+
+const QS_KEY = '@smartpesos/quickstart_dismissed';
+
+function QuickStartCard({
+  hasExpenses,
+  hasGmail,
+  hasInvestments,
+  onConnectGmail,
+  onAddExpense,
+  onSetIncome,
+  onDismiss,
+}: {
+  hasExpenses:    boolean;
+  hasGmail:       boolean;
+  hasInvestments: boolean;
+  onConnectGmail: () => void;
+  onAddExpense:   () => void;
+  onSetIncome:    () => void;
+  onDismiss:      () => void;
+}) {
+  const steps = [
+    { label: 'Conectar Gmail',         done: hasGmail,       action: onConnectGmail, cta: 'Conectar' },
+    { label: 'Cargar tu primer gasto', done: hasExpenses,    action: onAddExpense,   cta: 'Agregar'  },
+    { label: 'Configurar tu ingreso',  done: hasInvestments, action: onSetIncome,    cta: 'Configurar' },
+  ];
+  const completedCount = steps.filter(s => s.done).length;
+  const pct            = Math.round((completedCount / steps.length) * 100);
+
+  return (
+    <View style={qsStyles.card}>
+      <View style={qsStyles.header}>
+        <View style={{ flex: 1 }}>
+          <Text variant="label" color={colors.neon}>PRIMEROS PASOS</Text>
+          <Text variant="subtitle" color={colors.text.primary}>Activá tu diagnóstico financiero</Text>
+        </View>
+        <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="close" size={18} color={colors.text.tertiary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Barra de progreso */}
+      <View style={qsStyles.progressTrack}>
+        <View style={[qsStyles.progressFill, { width: `${pct}%` }]} />
+      </View>
+      <Text variant="caption" color={colors.text.tertiary}>{completedCount} de {steps.length} completados</Text>
+
+      {/* Steps */}
+      <View style={qsStyles.steps}>
+        {steps.map((step, i) => (
+          <View key={i} style={qsStyles.step}>
+            <View style={[qsStyles.checkbox, step.done && qsStyles.checkboxDone]}>
+              {step.done && <Ionicons name="checkmark" size={12} color={colors.bg.primary} />}
+            </View>
+            <Text
+              variant="bodySmall"
+              color={step.done ? colors.text.tertiary : colors.text.primary}
+              style={[{ flex: 1 }, step.done && { textDecorationLine: 'line-through' }]}
+            >
+              {step.label}
+            </Text>
+            {!step.done && (
+              <TouchableOpacity style={qsStyles.ctaBtn} onPress={step.action} activeOpacity={0.8}>
+                <Text variant="label" color={colors.neon}>{step.cta}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const qsStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.neon + '30',
+    borderLeftWidth: 3, borderLeftColor: colors.neon,
+    borderRadius: 16, padding: spacing[5], gap: spacing[4],
+  },
+  header:        { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
+  progressTrack: { height: 4, backgroundColor: colors.border.subtle, borderRadius: 2, overflow: 'hidden' },
+  progressFill:  { height: '100%', backgroundColor: colors.neon, borderRadius: 2 },
+  steps:         { gap: spacing[3] },
+  step:          { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  checkbox: {
+    width: 20, height: 20, borderRadius: 10,
+    borderWidth: 1.5, borderColor: colors.border.default,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  checkboxDone:  { backgroundColor: colors.neon, borderColor: colors.neon },
+  ctaBtn: {
+    paddingHorizontal: spacing[3], paddingVertical: spacing[1],
+    borderRadius: 8, borderWidth: 1, borderColor: colors.neon + '50',
+    backgroundColor: colors.neon + '0A',
+  },
+});
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
@@ -1206,12 +1312,17 @@ export default function HomeScreen() {
     isLoading,
     subscriptions,
   } = useExpensesStore();
-  const { goals, fetchGoals } = useGoalsStore();
+  const { goals, fetchGoals }                = useGoalsStore();
+  const { investments, load: loadSavings }   = useSavingsStore();
   const streakStore  = useStreakStore();
   const roundUpStore = useRoundUpStore();
   const [showRoundUpConfig,   setShowRoundUpConfig]   = useState(false);
   const [showDatosClaveModal, setShowDatosClaveModal] = useState(false);
-  const [market, setMarket] = useState<MarketData>({ blue: null, mep: null });
+  const [market,        setMarket]        = useState<MarketData>({ blue: null, mep: null });
+  const [inflationRate, setInflationRate] = useState(3.4);
+  const [fciRate,       setFciRate]       = useState(3.0);
+  const [gmailConnected,    setGmailConnected]    = useState(false);
+  const [showQuickStart,    setShowQuickStart]    = useState(false);
 
   const [prevMonthCats,  setPrevMonthCats]  = useState<Record<string, { name: string; amount: number }>>({});
   const [prevMonthTotal, setPrevMonthTotal] = useState(0);
@@ -1221,11 +1332,40 @@ export default function HomeScreen() {
       fetchExpenses(user.id);
       fetchSubscriptionsAndProjection(user.id);
       fetchGoals(user.id);
+      loadSavings(user.id);
     }
     streakStore.load();
     roundUpStore.load();
     roundUpStore.checkReset();
     fetchMarketData().then(setMarket);
+
+    // Fetch dynamic market rates from DB
+    supabase
+      .from('market_rates')
+      .select('instrument, rate_monthly')
+      .in('instrument', ['inflation', 'fci_mm'])
+      .then(({ data }) => {
+        if (!data) return;
+        for (const row of data) {
+          if (row.instrument === 'inflation') setInflationRate(Number(row.rate_monthly));
+          if (row.instrument === 'fci_mm')    setFciRate(Number(row.rate_monthly));
+        }
+      });
+
+    // Gmail connection check
+    if (user?.id) {
+      (supabase as any)
+        .from('gmail_connections')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle()
+        .then(({ data }: { data: { id: string } | null }) => setGmailConnected(!!data));
+    }
+
+    // QuickStart: show unless dismissed
+    AsyncStorage.getItem(QS_KEY).then(val => {
+      if (val !== 'true') setShowQuickStart(true);
+    });
   }, [user?.id]);
 
   useEffect(() => {
@@ -1280,7 +1420,7 @@ export default function HomeScreen() {
 
   const keyInsights = buildKeyInsights({
     expenses, subscriptions, totalThisMonth, totalDisposable,
-    totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal,
+    totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
   });
 
   // ── Editar ingreso ──────────────────────────────────────────────────────────
@@ -1324,13 +1464,32 @@ export default function HomeScreen() {
     }
   };
 
+  // ── QuickStart: auto-dismiss cuando todo está completo ──────────────────────
+  const qsHasExpenses    = expenses.length > 0;
+  const qsHasInvestments = investments.length > 0;
+
+  useEffect(() => {
+    if (qsHasExpenses && gmailConnected && qsHasInvestments) {
+      AsyncStorage.setItem(QS_KEY, 'true');
+      setShowQuickStart(false);
+    }
+  }, [qsHasExpenses, gmailConnected, qsHasInvestments]);
+
+  const dismissQuickStart = useCallback(() => {
+    AsyncStorage.setItem(QS_KEY, 'true');
+    setShowQuickStart(false);
+  }, []);
+
   // ── Health Score ────────────────────────────────────────────────────────────
+  const totalInvested   = investments.reduce((sum, inv) => sum + inv.amount, 0);
+  const investmentTypes = new Set(investments.map(inv => inv.instrument_type)).size;
+
   const healthScore = computeHealthScore({
     totalThisMonth,
     totalDisposable,
-    totalInvested:      0,  // se podría conectar a savingsStore cuando esté disponible
-    investmentTypes:    0,
-    hasSavings:         false,
+    totalInvested,
+    investmentTypes,
+    hasSavings:         totalInvested > 0,
     weekStreak:         streakStore.weekStreak,
     noDisposableStreak: streakStore.noDisposableStreak,
     goals,
@@ -1413,6 +1572,28 @@ export default function HomeScreen() {
         {/* ── Acciones rápidas ────────────────────────────────────────────────── */}
         <QuickActions healthScore={healthScore} />
 
+        {/* ── Ticker de mercado ──────────────────────────────────────────────── */}
+        <MarketTicker
+          market={market}
+          totalInvestable={totalInvestable}
+          totalDisposable={totalDisposable}
+          inflationRate={inflationRate}
+          fciRate={fciRate}
+        />
+
+        {/* ── Quick Start ────────────────────────────────────────────────────── */}
+        {showQuickStart && (
+          <QuickStartCard
+            hasExpenses={qsHasExpenses}
+            hasGmail={gmailConnected}
+            hasInvestments={qsHasInvestments}
+            onConnectGmail={() => router.push('/(app)/profile')}
+            onAddExpense={() => router.push('/(app)/expenses')}
+            onSetIncome={openIncomeModal}
+            onDismiss={dismissQuickStart}
+          />
+        )}
+
         {/* ── Radar financiero ───────────────────────────────────────────────── */}
         <HomeHighlightCarousel highlights={highlights} />
 
@@ -1442,9 +1623,9 @@ export default function HomeScreen() {
           input={{
             totalThisMonth,
             totalDisposable,
-            totalInvested:      0,
-            investmentTypes:    0,
-            hasSavings:         false,
+            totalInvested,
+            investmentTypes,
+            hasSavings:         totalInvested > 0,
             weekStreak:         streakStore.weekStreak,
             noDisposableStreak: streakStore.noDisposableStreak,
             goals,

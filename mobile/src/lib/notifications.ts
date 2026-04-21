@@ -11,6 +11,8 @@
  */
 
 import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─── Handler global ───────────────────────────────────────────────────────────
@@ -35,6 +37,40 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return status === 'granted';
   } catch {
     return false;
+  }
+}
+
+// ─── Push Token (remote) ──────────────────────────────────────────────────────
+
+export async function registerPushToken(
+  supabaseClient: any,
+  userId: string,
+): Promise<string | null> {
+  try {
+    if (!Device.isDevice) return null; // simulador no soporta push real
+
+    const granted = await requestNotificationPermission();
+    if (!granted) return null;
+
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ??
+      Constants.easConfig?.projectId;
+
+    const tokenData = projectId
+      ? await Notifications.getExpoPushTokenAsync({ projectId })
+      : await Notifications.getExpoPushTokenAsync();
+
+    const token = tokenData.data;
+
+    await supabaseClient
+      .from('profiles')
+      .update({ push_token: token })
+      .eq('id', userId);
+
+    return token;
+  } catch (err) {
+    console.warn('[notifications] registerPushToken error:', err);
+    return null;
   }
 }
 

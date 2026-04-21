@@ -159,9 +159,12 @@ export const INDEC_IPC: IndecMonthEntry[] = [
     year: 2026, month: 3, general: 3.4,
     divisions: { food: 3.0,  restaurants: 3.5,  clothing: 3.0,  housing: 3.8,  equipment: 2.8,  health: 3.1,  transport: 4.1,  comms: 2.5,  recreation: 3.0,  education: 12.1, misc: 3.0  },
   },
+  {
+    // Estimado abril 2026 — INDEC aún no publicó (se publica ~15/05/2026). Dato: market_rates.
+    year: 2026, month: 4, general: 3.4,
+    divisions: { food: 3.2, restaurants: 3.6, clothing: 3.1, housing: 3.5, equipment: 2.9, health: 3.2, transport: 3.8, comms: 2.4, recreation: 3.1, education: 2.0, misc: 3.0 },
+  },
   // ACTUALIZAR: agregar meses siguientes cuando el INDEC los publique
-  // Template:
-  // { year: 2026, month: 4, general: 0.0, divisions: { food: 0.0, restaurants: 0.0, clothing: 0.0, housing: 0.0, equipment: 0.0, health: 0.0, transport: 0.0, comms: 0.0, recreation: 0.0, education: 0.0, misc: 0.0 } },
 ];
 
 // ─── Abstracción de fuente de datos ───────────────────────────────────────────

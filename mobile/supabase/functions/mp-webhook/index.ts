@@ -59,15 +59,8 @@ serve(async (req) => {
 
   const payment = await mpRes.json();
 
-  // Solo procesar pagos aprobados
-  if (payment.status !== 'approved') {
-    return new Response('OK', { status: 200 });
-  }
-
-  const userId  = payment.external_reference; // user.id guardado en la preferencia
-  const planId  = payment.metadata?.plan_id as string;
-  const days    = PLAN_DURATION_DAYS[planId] ?? 30;
-  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  const userId = payment.external_reference;
+  const planId = payment.metadata?.plan_id as string;
 
   if (!userId || !planId) {
     console.error('[mp-webhook] Faltan userId o planId en metadata');
@@ -75,6 +68,65 @@ serve(async (req) => {
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET);
+
+  // ── Pago rechazado / fallido → grace period de 3 días ─────────────────────
+  if (payment.status !== 'approved') {
+    const GRACE_DAYS = 3;
+    const failedStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
+    if (!failedStatuses.includes(payment.status)) {
+      return new Response('OK', { status: 200 }); // pendiente, ignorar
+    }
+
+    // Solo aplicar grace period si el usuario tenía suscripción activa
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('subscription_status, plan_expires_at')
+      .eq('id', userId)
+      .single();
+
+    if (profile?.subscription_status === 'active') {
+      const currentExpiry = profile.plan_expires_at
+        ? new Date(profile.plan_expires_at)
+        : new Date();
+      const graceExpiry = new Date(
+        Math.max(currentExpiry.getTime(), Date.now()) + GRACE_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
+
+      await supabase
+        .from('profiles')
+        .update({ subscription_status: 'grace', plan_expires_at: graceExpiry })
+        .eq('id', userId);
+
+      // Notificar al usuario por push
+      await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_SECRET}` },
+        body: JSON.stringify({
+          userId,
+          title: '⚠️ Problema con tu pago',
+          body:  `No pudimos procesar tu renovación. Tenés ${GRACE_DAYS} días para actualizar tu método de pago.`,
+          data:  { route: '/(app)/plans' },
+        }),
+      }).catch(() => {});
+
+      console.log(`[mp-webhook] Grace period aplicado para user ${userId}: ${graceExpiry}`);
+    }
+
+    await supabase.from('payment_logs').insert({
+      user_id:    userId,
+      payment_id: String(paymentId),
+      plan_id:    planId,
+      amount:     payment.transaction_amount,
+      currency:   payment.currency_id,
+      status:     payment.status,
+      mp_data:    payment,
+    }).catch(() => {});
+
+    return new Response('OK', { status: 200 });
+  }
+
+  const days      = PLAN_DURATION_DAYS[planId] ?? 30;
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
   // ── Actualizar perfil del usuario ─────────────────────────────────────────
   const { error } = await supabase

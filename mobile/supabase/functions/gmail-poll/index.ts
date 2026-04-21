@@ -141,16 +141,18 @@ Asunto: ${subject}
 Contenido: ${body}
 
 REGLAS:
-- Si hay un monto de dinero que SALIÓ de la cuenta (compra, pago, transferencia enviada), es un movimiento válido → es_movimiento: true
-- Avisos de transferencias bancarias (aunque digan "no válido como comprobante") SÍ son movimientos válidos
+- Si hay un monto de dinero que SALIÓ de la cuenta (compra, pago, transferencia enviada a TERCEROS), es un movimiento válido → es_movimiento: true
+- Avisos de transferencias bancarias (aunque digan "no válido como comprobante") SÍ son movimientos válidos si van a un tercero
 - Para transferencias, usá el nombre del destinatario como "comercio". Si es el propio usuario quien envía, indicalo
 - Para compras, usá el nombre del comercio
+- IMPORTANTE: Si la transferencia es entre cuentas PROPIAS del mismo usuario (ej: de banco a billetera virtual, de cuenta a cuenta propia, recarga de MercadoPago desde cuenta bancaria, traspaso a cuenta de ahorro propia, envío de fondos a sí mismo), NO es un gasto → es_movimiento: false
+- Señales de transferencia propia: el destinatario tiene el mismo nombre/CUIT, el asunto dice "recarga", "traspaso a tu cuenta", "fondos enviados a tu cuenta", el email confirma un ingreso no un egreso
 - Si el email es solo informativo sin monto claro → es_movimiento: false
 
 clasificacion:
 - "necessary": supermercado, farmacia, servicios (luz/gas/agua/internet), alquiler, transporte público, combustible, salud, educación
 - "disposable": restaurant, bar, café, delivery, entretenimiento, ropa, electrónica, viajes, streaming, suscripciones no esenciales
-- "investable": transferencias a brokers/inversiones (Balanz, IOL, PPI, Lemoine), compra de dólares/crypto/cedears, plazo fijo
+- "investable": transferencias a brokers/inversiones (Balanz, IOL, PPI, Lemoine), compra de dólares/crypto/cedears, plazo fijo, recarga de billeteras de inversión
 
 Formato exacto:
 {
@@ -495,6 +497,26 @@ serve(async (req) => {
     }
 
     console.log('[gmail-poll] Nuevos auto-registrados:', newPending);
+
+    // ── Push notification si hay nuevos gastos ─────────────────────────────
+    if (newPending > 0) {
+      const supabaseServiceUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const plural = newPending > 1 ? `${newPending} gastos nuevos` : `1 gasto nuevo`;
+      await fetch(`${supabaseServiceUrl}/functions/v1/send-push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${serviceKey}`,
+        },
+        body: JSON.stringify({
+          userId,
+          title: `🔍 Detectamos ${plural} de tu Gmail`,
+          body:  'Tu presupuesto se actualizó automáticamente. Tocá para revisar.',
+          data:  { route: '/(app)/expenses' },
+        }),
+      }).catch(err => console.warn('[gmail-poll] push error:', err));
+    }
 
     // Retornar gastos auto-registrados en las últimas 24h para mostrar al usuario
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();

@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, layout } from '@/theme';
 import { Text, Card } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
+import { usePlanStore } from '@/store/planStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
 
@@ -65,8 +66,54 @@ const badgeStyles = StyleSheet.create({
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
+function FamilyPaywall() {
+  return (
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
+        </TouchableOpacity>
+        <Text variant="h4">Grupo Familia</Text>
+        <View style={{ width: 24 }} />
+      </View>
+      <View style={styles.paywallContainer}>
+        <View style={styles.paywallIcon}>
+          <Text style={{ fontSize: 52 }}>👨‍👩‍👧‍👦</Text>
+        </View>
+        <Text variant="h4" align="center">Finanzas en familia</Text>
+        <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
+          Controlá los gastos de todo tu hogar en un solo lugar. Invitá a tu pareja, hijos o familiares y visualizá quién gasta qué.
+        </Text>
+        <View style={styles.paywallBenefits}>
+          {[
+            '👥  Hasta 6 miembros por grupo',
+            '📊  Gastos separados por persona',
+            '🔗  Código de invitación compartible',
+            '🔔  Alertas de gasto compartido',
+          ].map(b => (
+            <View key={b} style={styles.paywallBenefit}>
+              <Text variant="bodySmall" color={colors.text.secondary}>{b}</Text>
+            </View>
+          ))}
+        </View>
+        <TouchableOpacity
+          style={styles.paywallBtn}
+          onPress={() => router.push('/(app)/plans')}
+          activeOpacity={0.85}
+        >
+          <Text variant="label" color={colors.bg.primary}>⚡ MEJORAR AHORA</Text>
+        </TouchableOpacity>
+        <Text variant="caption" color={colors.text.tertiary} align="center">
+          Disponible en Plan Pro y Premium
+        </Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 export default function GrupoFamiliaScreen() {
   const { user } = useAuthStore();
+  const { effectivePlan, isTrialActive } = usePlanStore();
 
   const [group,     setGroup]     = useState<GroupInfo | null>(null);
   const [members,   setMembers]   = useState<Member[]>([]);
@@ -74,7 +121,10 @@ export default function GrupoFamiliaScreen() {
   const [loading,   setLoading]   = useState(true);
   const [refreshing,setRefreshing]= useState(false);
 
-  const isAdmin = myRole === 'parent' || myRole === 'partner';
+  const isAdmin   = myRole === 'parent' || myRole === 'partner';
+  const isFree    = effectivePlan === 'free' && !isTrialActive();
+
+  if (isFree) return <FamilyPaywall />;
 
   // ── Carga ─────────────────────────────────────────────────────────────────
 
@@ -522,5 +572,30 @@ const styles = StyleSheet.create({
   backToFamilyBtn: {
     paddingVertical: spacing[3], paddingHorizontal: spacing[5],
     borderWidth: 1, borderColor: colors.primary, borderRadius: 8,
+  },
+
+  // Paywall
+  paywallContainer: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: layout.screenPadding, gap: spacing[5],
+  },
+  paywallIcon: {
+    width: 96, height: 96, borderRadius: 48,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: spacing[2],
+  },
+  paywallBenefits: {
+    width: '100%', gap: spacing[2],
+    backgroundColor: colors.bg.elevated,
+    borderRadius: 12, padding: spacing[4],
+  },
+  paywallBenefit: {
+    paddingVertical: spacing[1],
+  },
+  paywallBtn: {
+    backgroundColor: colors.neon,
+    paddingVertical: spacing[4], paddingHorizontal: spacing[8],
+    borderRadius: 8, alignItems: 'center', width: '100%',
   },
 });

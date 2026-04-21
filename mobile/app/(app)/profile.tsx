@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import * as LocalAuth from 'expo-local-authentication';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Linking } from 'react-native';
@@ -26,6 +27,9 @@ import { useRoundUpStore } from '@/store/roundUpStore';
 import type { RoundTo, RoundDest } from '@/store/roundUpStore';
 import { PLANS } from '@/lib/plans';
 import { supabase } from '@/lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const BIOMETRIC_KEY = '@smartpesos/biometric_enabled';
 
 const editSchema = z.object({
   full_name: z.string().min(1, 'Ingresá tu nombre.').max(80),
@@ -70,6 +74,7 @@ export default function ProfileScreen() {
     msgLimit,
     isTrialActive,
     daysLeftInTrial,
+    planExpiresAt,
     load: loadPlan,
   } = usePlanStore();
 
@@ -84,11 +89,16 @@ export default function ProfileScreen() {
     roundUp.checkReset();
   }, []);
 
-  const trialActive = isTrialActive();
-  const daysLeft    = daysLeftInTrial();
-  const plan        = PLANS[effectivePlan];
-  const [showEditModal,   setShowEditModal]   = useState(false);
+  const trialActive   = isTrialActive();
+  const daysLeft      = daysLeftInTrial();
+  const plan          = PLANS[effectivePlan];
+  const renewalDate   = !trialActive && planExpiresAt
+    ? new Date(planExpiresAt).toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })
+    : null;
+  const [showEditModal,    setShowEditModal]    = useState(false);
   const [showRoundUpModal, setShowRoundUpModal] = useState(false);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [gmailEmail,   setGmailEmail]   = useState<string | null>(null);
   const [gmailExpired, setGmailExpired] = useState(false);
   const [gmailLoading, setGmailLoading] = useState(false);
@@ -126,6 +136,65 @@ export default function ProfileScreen() {
         }
       });
   }, [user?.id]);
+
+  // ── Biometría ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    LocalAuth.hasHardwareAsync().then(has => {
+      if (!has) return;
+      LocalAuth.isEnrolledAsync().then(enrolled => {
+        setBiometricAvailable(enrolled);
+      });
+    });
+    AsyncStorage.getItem(BIOMETRIC_KEY).then(v => setBiometricEnabled(v === 'true'));
+  }, []);
+
+  const toggleBiometric = useCallback(async (value: boolean) => {
+    if (value) {
+      const result = await LocalAuth.authenticateAsync({
+        promptMessage: 'Confirmá tu identidad para activar la seguridad biométrica',
+        fallbackLabel:  'Usar contraseña',
+      });
+      if (!result.success) return;
+    }
+    setBiometricEnabled(value);
+    await AsyncStorage.setItem(BIOMETRIC_KEY, String(value));
+  }, []);
+
+  // ── Eliminar cuenta ────────────────────────────────────────────────────────
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Eliminar cuenta',
+      'Esta acción eliminará permanentemente tu cuenta y todos tus datos. No se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: () =>
+            Alert.alert(
+              '¿Estás seguro?',
+              'Se borrarán todos tus gastos, metas, inversiones y datos personales.',
+              [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                  text: 'Sí, eliminar todo',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await (supabase as any).rpc('delete_user_account', { p_user_id: user?.id });
+                      await supabase.auth.signOut();
+                      router.replace('/(auth)/login');
+                    } catch (err) {
+                      Alert.alert('Error', 'No se pudo eliminar la cuenta. Contactá a soporte@smartpesos.app');
+                    }
+                  },
+                },
+              ],
+            ),
+        },
+      ],
+    );
+  };
 
   const connectGmail = async () => {
     if (!user?.id) return;
@@ -316,14 +385,28 @@ export default function ProfileScreen() {
               </View>
             </View>
             <TouchableOpacity
-              style={styles.planBtn}
+              style={[
+                styles.planBtn,
+                (effectivePlan === 'free' || trialActive) && styles.planBtnUpgrade,
+              ]}
               onPress={() => router.push('/(app)/plans')}
             >
-              <Text variant="caption" color={colors.white} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                {effectivePlan === 'premium' && !trialActive ? 'GESTIONAR' : 'VER PLANES'}
+              <Text
+                variant="caption"
+                color={(effectivePlan === 'free' || trialActive) ? colors.bg.primary : colors.white}
+                style={{ fontFamily: 'Montserrat_700Bold' }}
+              >
+                {effectivePlan === 'premium' && !trialActive ? 'GESTIONAR' : '⚡ MEJORAR'}
               </Text>
             </TouchableOpacity>
           </View>
+
+          {/* Fecha de renovación para planes pagos */}
+          {renewalDate && (
+            <Text variant="caption" color={colors.text.secondary}>
+              Vence el {renewalDate}
+            </Text>
+          )}
 
           {/* Barra de uso de mensajes */}
           {msgLimit !== null && (
@@ -459,6 +542,32 @@ export default function ProfileScreen() {
               label="Notificaciones"
               onPress={() => Alert.alert('Próximamente', 'Gestión de notificaciones en camino.')}
             />
+            {biometricAvailable && (
+              <>
+                <View style={styles.menuDivider} />
+                <View style={styles.menuItem}>
+                  <View style={styles.menuIcon}>
+                    <Ionicons
+                      name="finger-print-outline"
+                      size={20}
+                      color={biometricEnabled ? colors.neon : colors.text.secondary}
+                    />
+                  </View>
+                  <View style={styles.menuText}>
+                    <Text variant="bodySmall" color={colors.text.primary}>Seguridad biométrica</Text>
+                    <Text variant="caption" color={biometricEnabled ? colors.neon : colors.text.secondary}>
+                      {biometricEnabled ? 'Face ID / Huella activado' : 'Protegé el acceso con Face ID o huella'}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={biometricEnabled}
+                    onValueChange={toggleBiometric}
+                    trackColor={{ false: colors.border.default, true: colors.neon + '60' }}
+                    thumbColor={biometricEnabled ? colors.neon : colors.text.tertiary}
+                  />
+                </View>
+              </>
+            )}
             <View style={styles.menuDivider} />
             <MenuItem
               icon="lock-closed-outline"
@@ -495,12 +604,21 @@ export default function ProfileScreen() {
           </Card>
         </View>
 
-        {/* Cerrar sesión */}
+        {/* Cerrar sesión + Eliminar cuenta */}
         <Card style={styles.menuCard}>
           <MenuItem
             icon="log-out-outline"
             label="Cerrar sesión"
             onPress={handleSignOut}
+            color={colors.red}
+            showArrow={false}
+          />
+          <View style={styles.menuDivider} />
+          <MenuItem
+            icon="trash-outline"
+            label="Eliminar mi cuenta y datos"
+            description="Acción permanente, no reversible"
+            onPress={handleDeleteAccount}
             color={colors.red}
             showArrow={false}
           />
@@ -751,6 +869,9 @@ const styles = StyleSheet.create({
   planBtn: {
     backgroundColor: colors.primary, borderRadius: 6,
     paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+  },
+  planBtnUpgrade: {
+    backgroundColor: colors.neon,
   },
   planUsage: { gap: spacing[2] },
   planUsageInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
