@@ -32,12 +32,21 @@ export const radius = {
 
 // Layout constants
 export const layout = {
-  screenPadding: spacing[5],
-  cardPadding: spacing[4],
-  sectionSpacing: spacing[8],
+  screenPadding: spacing[4],   // 16px — mockup spec
+  cardPadding:   spacing[4],   // 16px
+  sectionSpacing: spacing[6],  // 24px
   headerHeight: 56,
   tabBarHeight: 64,
-  inputHeight: 52,
-  buttonHeight: 52,
-  buttonHeightSm: 40,
+  inputHeight: 48,
+  buttonHeight: 48,            // 48px — mockup spec
+  buttonHeightSm: 36,
+
+  // Card shadow (usado via StyleSheet en cada pantalla)
+  cardShadow: {
+    shadowColor:   '#000',
+    shadowOffset:  { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius:  8,
+    elevation:     3,
+  },
 } as const;

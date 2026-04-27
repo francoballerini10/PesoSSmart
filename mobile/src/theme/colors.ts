@@ -1,71 +1,74 @@
 export const colors = {
   // Base
-  black:        '#1A1A1A',
+  black:        '#212121',
   blackSoft:    '#2A2A2A',
   darkGray:     '#4A4A4A',
   mediumGray:   '#9E9E9E',
-  textSecondary:'#5C5C5C',
+  textSecondary:'#757575',
   white:        '#FFFFFF',
 
-  // ── Paleta de marca — verde bosque del logo ───────────────────────────────
-  // Botones, acciones principales, highlights
-  primary:    '#1D6E47',   // Verde bosque profundo (CTA principal)
-  primaryDim: '#165838',   // Versión más oscura (pressed/disabled)
+  // ── Paleta de marca — verde principal mockup ──────────────────────────────
+  primary:    '#2E7D32',
+  primaryDim: '#1B5E20',
 
   secondary: '#FFFFFF',
   tertiary:  '#7B61FF',    // Violeta (accent secundario)
-  accent:    '#1978E5',    // Azul (info / gastos necesarios / links)
+  accent:    '#1976D2',    // Azul info
 
-  red:    '#E53935',       // Error / gastos prescindibles
+  red:    '#EF4444',       // Rojo alerta
   yellow: '#F59E0B',       // Advertencia / ajustado
 
-  // Alias para compatibilidad con screens existentes
-  neon:    '#1D6E47',
-  neonDim: '#165838',
+  // Alias
+  neon:    '#2E7D32',
+  neonDim: '#1B5E20',
 
   // Semantic
-  success: '#1D6E47',
-  error:   '#E53935',
-  warning: '#F59E0B',
-  info:    '#1978E5',
+  success: '#2E7D32',
+  error:   '#EF4444',
+  warning: '#F9A825',
+  info:    '#1976D2',
 
-  // ── Fondos — blanco cálido con tinte crema ───────────────────────────────
+  // Verde suaves para fondos de card
+  greenLight: '#E8F5E9',
+  greenSoft:  '#C8E6C9',
+
+  // ── Fondos ────────────────────────────────────────────────────────────────
   bg: {
-    primary:      '#F8F7F4',   // Fondo principal — blanco crema cálido
-    secondary:    '#F1F0EC',   // Fondo secundario
-    card:         '#FFFFFF',   // Cards — blanco puro para contraste vs fondo
-    elevated:     '#F4F3EF',   // Superficie elevada
-    input:        '#EDECEA',   // Input background
-    inputFocused: '#E5E3E0',   // Input focused
+    primary:      '#F6F7F9',   // Fondo general
+    secondary:    '#EEEEF2',
+    card:         '#FFFFFF',   // Cards blanco puro
+    elevated:     '#F2F2F2',   // Superficie elevada
+    input:        '#F2F2F2',
+    inputFocused: '#E8E8E8',
   },
 
   // ── Texto ─────────────────────────────────────────────────────────────────
   text: {
-    primary:       '#1A1A1A',  // Texto principal
-    secondary:     '#5A5A5A',  // Texto secundario
-    tertiary:      '#9A9A9A',  // Texto terciario / hint
-    inverse:       '#FFFFFF',  // Texto sobre fondos oscuros/brand
-    accent:        '#1D6E47',  // Texto brand (verde)
-    primary_brand: '#1D6E47',
-    error:         '#E53935',
-    warning:       '#F59E0B',
+    primary:       '#212121',
+    secondary:     '#757575',
+    tertiary:      '#9E9E9E',
+    inverse:       '#FFFFFF',
+    accent:        '#2E7D32',
+    primary_brand: '#2E7D32',
+    error:         '#EF4444',
+    warning:       '#F9A825',
   },
 
-  // ── Bordes — gris cálido ──────────────────────────────────────────────────
+  // ── Bordes ────────────────────────────────────────────────────────────────
   border: {
-    default: '#E0DDD7',   // Borde estándar — gris cálido
-    subtle:  '#ECEAE6',   // Borde sutil
-    primary: '#1D6E47',   // Borde brand (verde)
-    neon:    '#1D6E47',
-    accent:  '#1978E5',   // Borde azul (info)
-    error:   '#E53935',
+    default: '#E0E0E0',
+    subtle:  '#EEEEEE',
+    primary: '#2E7D32',
+    neon:    '#2E7D32',
+    accent:  '#1976D2',
+    error:   '#EF4444',
   },
 
-  // ── Clasificación de gastos (colores semánticos — no cambiar) ─────────────
+  // ── Clasificación de gastos ───────────────────────────────────────────────
   expense: {
-    necessary:  '#1978E5',   // Azul — gastos necesarios
-    disposable: '#E53935',   // Rojo — gastos prescindibles
-    investable: '#1D6E47',   // Verde bosque — gastos invertibles
+    necessary:  '#1976D2',
+    disposable: '#EF4444',
+    investable: '#2E7D32',
   },
 
   transparent:  'transparent',

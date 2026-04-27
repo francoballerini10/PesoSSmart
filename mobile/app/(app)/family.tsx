@@ -606,23 +606,29 @@ export default function FamilyScreen() {
     );
   }
 
-  const children     = members.filter((m) => m.role === 'child');
+  const children      = members.filter((m) => m.role === 'child');
   const selectedChild = members.find((m) => m.user_id === selectedChildId);
+  const hasGroup      = viewState !== 'empty' && group !== null;
+  const roleLabel     = myRole === 'parent' ? 'Admin' : myRole === 'partner' ? 'Admin' : 'Miembro';
+  const groupEmoji    = myRole === 'partner' ? '💑' : '👨‍👩‍👧‍👦';
+  const sharingDesc   = myRole === 'partner'
+    ? 'Compartimos todo (dividir gastos)'
+    : myRole === 'parent'
+      ? 'Compartimos categorías y montos totales'
+      : 'Solo ves tus propios gastos';
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <View style={styles.header}>
-        <Text variant="h4">Grupo Familiar</Text>
-        {group && (
-          <TouchableOpacity
-            onPress={handleLeave}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="ellipsis-horizontal" size={22} color={colors.text.secondary} />
-          </TouchableOpacity>
-        )}
+        <Text variant="h4">Grupos</Text>
+        <TouchableOpacity
+          style={styles.addHeaderBtn}
+          onPress={() => { setCreatingCoupleMode(false); setShowCreateModal(true); }}
+        >
+          <Ionicons name="add" size={22} color={colors.primary} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -630,84 +636,82 @@ export default function FamilyScreen() {
         showsVerticalScrollIndicator={false}
       >
 
-        {/* ════════════════════════════════════════════════════════════════
-            EMPTY STATE — sin grupo
-        ════════════════════════════════════════════════════════════════ */}
-        {viewState === 'empty' && (
-          <>
-            {/* Hero */}
-            <View style={styles.emptyHero}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="people" size={40} color={colors.neon} />
+        {/* ── Privacidad card (siempre visible) ─────────────────────────── */}
+        <View style={styles.privacyHeroCard}>
+          <Text variant="subtitle" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+            Vos decidís qué compartir
+          </Text>
+          <Text variant="bodySmall" color={colors.text.secondary} style={{ lineHeight: 20, marginTop: spacing[1] }}>
+            Compartí gastos y coordiná sin perder privacidad. Elegí qué información ve cada miembro.
+          </Text>
+          {!hasGroup && (
+            <TouchableOpacity
+              style={styles.createGroupBtn}
+              onPress={() => { setCreatingCoupleMode(false); setShowCreateModal(true); }}
+              activeOpacity={0.8}
+            >
+              <Text variant="label" color={colors.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                Crear grupo →
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* ── Mis grupos ────────────────────────────────────────────────── */}
+        <View style={styles.sectionHeader}>
+          <Text variant="label" color={colors.text.tertiary}>MIS GRUPOS</Text>
+        </View>
+
+        {!hasGroup ? (
+          <View style={styles.emptyGroupsCard}>
+            <Ionicons name="people-outline" size={32} color={colors.text.tertiary} />
+            <Text variant="bodySmall" color={colors.text.tertiary} style={{ textAlign: 'center', marginTop: spacing[2] }}>
+              Todavía no tenés grupos.{'\n'}Creá uno o uníte con un código.
+            </Text>
+            <TouchableOpacity
+              style={styles.joinBtn}
+              onPress={() => setShowJoinModal(true)}
+              activeOpacity={0.8}
+            >
+              <Text variant="label" color={colors.text.secondary}>Unirme con código →</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.groupRow}
+            onPress={group?.invite_code ? () => {
+              Alert.alert(
+                group.name,
+                `Código de invitación: ${group.invite_code}\n\nMiembros: ${members.length}`,
+                [
+                  { text: 'Salir del grupo', style: 'destructive', onPress: handleLeave },
+                  { text: 'Cerrar', style: 'cancel' },
+                ],
+              );
+            } : undefined}
+            activeOpacity={0.8}
+          >
+            <View style={styles.groupRowEmoji}>
+              <Text style={{ fontSize: 22 }}>{groupEmoji}</Text>
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                  {group.name}
+                </Text>
+                <View style={styles.roleBadge}>
+                  <Text style={styles.roleBadgeText}>{roleLabel}</Text>
+                </View>
               </View>
-              <Text variant="h4" align="center">Grupo Familiar</Text>
-              <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
-                Gestioná los gastos de toda tu familia{'\n'}desde un solo lugar.
+              <Text variant="caption" color={colors.text.tertiary}>
+                {members.length} miembro{members.length !== 1 ? 's' : ''} · {sharingDesc}
               </Text>
             </View>
-
-            {/* Acciones */}
-            <View style={styles.emptyActions}>
-              <Button
-                label="MODO PAREJA"
-                variant="neon"
-                size="lg"
-                fullWidth
-                leftIcon={<Ionicons name="heart-outline" size={18} color={colors.white} />}
-                onPress={() => { setCreatingCoupleMode(true); setShowCreateModal(true); }}
-              />
-
-              <Button
-                label="GRUPO FAMILIAR"
-                variant="ghost"
-                size="lg"
-                fullWidth
-                leftIcon={<Ionicons name="people-outline" size={18} color={colors.text.primary} />}
-                onPress={() => { setCreatingCoupleMode(false); setShowCreateModal(true); }}
-              />
-
-              <View style={styles.orDivider}>
-                <View style={styles.orLine} />
-                <Text variant="caption" color={colors.text.tertiary} style={{ marginHorizontal: spacing[3] }}>
-                  O
-                </Text>
-                <View style={styles.orLine} />
-              </View>
-
-              <Button
-                label="UNIRME CON CÓDIGO"
-                variant="ghost"
-                size="lg"
-                fullWidth
-                leftIcon={<Ionicons name="enter-outline" size={18} color={colors.text.primary} />}
-                onPress={() => setShowJoinModal(true)}
-              />
-            </View>
-
-            {/* Feature list */}
-            <View style={styles.featureList}>
-              {[
-                { icon: 'eye-outline',        text: 'Papá/mamá ve los gastos de todos los hijos' },
-                { icon: 'lock-closed-outline', text: 'Los hijos solo ven sus propios gastos' },
-                { icon: 'bar-chart-outline',   text: 'Identificá cuánto gasta cada hijo por mes' },
-                { icon: 'person-add-outline',  text: 'Invitá con un código de 6 letras' },
-              ].map((f, i) => (
-                <View key={i} style={styles.featureRow}>
-                  <View style={styles.featureIconWrap}>
-                    <Ionicons name={f.icon as any} size={15} color={colors.neon} />
-                  </View>
-                  <Text variant="bodySmall" color={colors.text.secondary} style={{ flex: 1, lineHeight: 20 }}>
-                    {f.text}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </>
+            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+          </TouchableOpacity>
         )}
 
-        {/* ════════════════════════════════════════════════════════════════
-            PARENT VIEW — padre / madre
-        ════════════════════════════════════════════════════════════════ */}
+        {/* ── OLD PARENT VIEW INLINE (kept for data display) ─────────────── */}
         {viewState === 'parent' && group && (
           <>
             {/* Group header */}
@@ -949,6 +953,29 @@ export default function FamilyScreen() {
             />
           </>
         )}
+
+        {/* ── Privacidad en grupos ──────────────────────────────────────── */}
+        <View style={styles.sectionHeader}>
+          <Text variant="label" color={colors.text.tertiary}>PRIVACIDAD EN GRUPOS</Text>
+        </View>
+        {[
+          { icon: 'shield-outline',      title: 'Elegí qué compartís',     desc: 'Montos, categorías, comercios o nada' },
+          { icon: 'person-outline',      title: 'Roles y permisos',         desc: 'Admin, miembro o invitado' },
+          { icon: 'lock-closed-outline', title: 'Tus datos, tuyos siempre', desc: 'Nadie ve lo que no decidís compartir' },
+        ].map((item, i) => (
+          <View key={i} style={styles.privacyFeatureRow}>
+            <View style={styles.privacyFeatureIcon}>
+              <Ionicons name={item.icon as any} size={18} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                {item.title}
+              </Text>
+              <Text variant="caption" color={colors.text.tertiary}>{item.desc}</Text>
+            </View>
+          </View>
+        ))}
+
       </ScrollView>
 
       {/* ── MODAL: Crear grupo ────────────────────────────────────────────── */}
@@ -1102,11 +1129,64 @@ const styles = StyleSheet.create({
     paddingTop:       spacing[4],
     paddingBottom:    spacing[3],
   },
+  addHeaderBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    borderWidth: 1.5, borderColor: colors.primary + '50',
+    backgroundColor: colors.primary + '10',
+    alignItems: 'center', justifyContent: 'center',
+  },
 
   scroll: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom:    layout.tabBarHeight + spacing[8],
-    gap:              spacing[5],
+    gap:              spacing[4],
+  },
+
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginTop: spacing[2] },
+
+  // ── Privacy hero card ──────────────────────────────────────────────────
+  privacyHeroCard: {
+    backgroundColor: colors.primary + '0D',
+    borderWidth: 1, borderColor: colors.primary + '25',
+    borderRadius: 16, padding: spacing[5], gap: spacing[2],
+  },
+  createGroupBtn: { alignSelf: 'flex-start', marginTop: spacing[2] },
+
+  // ── Groups list ────────────────────────────────────────────────────────
+  emptyGroupsCard: {
+    backgroundColor: colors.bg.card, borderWidth: 1,
+    borderColor: colors.border.default, borderRadius: 14,
+    padding: spacing[6], alignItems: 'center', gap: spacing[2],
+  },
+  joinBtn: { marginTop: spacing[2] },
+  groupRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: colors.bg.card, borderWidth: 1,
+    borderColor: colors.border.default, borderRadius: 14, padding: spacing[4],
+  },
+  groupRowEmoji: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: colors.primary + '12',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  roleBadge: {
+    backgroundColor: colors.primary + '18', borderRadius: 6,
+    paddingHorizontal: spacing[2], paddingVertical: 2,
+  },
+  roleBadgeText: {
+    fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.primary,
+  },
+
+  // ── Privacy features ──────────────────────────────────────────────────
+  privacyFeatureRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: colors.bg.card, borderWidth: 1,
+    borderColor: colors.border.default, borderRadius: 12, padding: spacing[4],
+  },
+  privacyFeatureIcon: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: colors.primary + '12',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
 
   // ── Empty ──────────────────────────────────────────────────────────────

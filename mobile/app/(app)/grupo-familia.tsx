@@ -78,21 +78,22 @@ function FamilyPaywall() {
       </View>
       <View style={styles.paywallContainer}>
         <View style={styles.paywallIcon}>
-          <Text style={{ fontSize: 52 }}>👨‍👩‍👧‍👦</Text>
+          <Ionicons name="people-outline" size={48} color={colors.primary} />
         </View>
-        <Text variant="h4" align="center">Finanzas en familia</Text>
+        <Text variant="h4" align="center">Coordinación financiera compartida</Text>
         <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
-          Controlá los gastos de todo tu hogar en un solo lugar. Invitá a tu pareja, hijos o familiares y visualizá quién gasta qué.
+          Ideal para parejas, familias o viajes. Dividí gastos sin perder privacidad — vos decidís qué compartir.
         </Text>
         <View style={styles.paywallBenefits}>
           {[
-            '👥  Hasta 6 miembros por grupo',
-            '📊  Gastos separados por persona',
-            '🔗  Código de invitación compartible',
-            '🔔  Alertas de gasto compartido',
-          ].map(b => (
-            <View key={b} style={styles.paywallBenefit}>
-              <Text variant="bodySmall" color={colors.text.secondary}>{b}</Text>
+            { icon: 'people-outline',      text: 'Hasta 6 miembros por grupo' },
+            { icon: 'eye-off-outline',      text: 'Vos decidís qué gastos compartir' },
+            { icon: 'pie-chart-outline',    text: 'Compartí categorías sin mostrar comercios' },
+            { icon: 'notifications-outline',text: 'Alertas de gasto sin vigilancia' },
+          ].map(({ icon, text }) => (
+            <View key={text} style={styles.paywallBenefit}>
+              <Ionicons name={icon as any} size={15} color={colors.primary} />
+              <Text variant="bodySmall" color={colors.text.secondary}>{text}</Text>
             </View>
           ))}
         </View>
@@ -101,7 +102,8 @@ function FamilyPaywall() {
           onPress={() => router.push('/(app)/plans')}
           activeOpacity={0.85}
         >
-          <Text variant="label" color={colors.bg.primary}>⚡ MEJORAR AHORA</Text>
+          <Ionicons name="flash-outline" size={14} color={colors.bg.primary} />
+          <Text variant="label" color={colors.bg.primary}>MEJORAR AHORA</Text>
         </TouchableOpacity>
         <Text variant="caption" color={colors.text.tertiary} align="center">
           Disponible en Plan Pro y Premium
@@ -591,11 +593,14 @@ const styles = StyleSheet.create({
     borderRadius: 12, padding: spacing[4],
   },
   paywallBenefit: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
     paddingVertical: spacing[1],
   },
   paywallBtn: {
     backgroundColor: colors.neon,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: spacing[2],
     paddingVertical: spacing[4], paddingHorizontal: spacing[8],
-    borderRadius: 8, alignItems: 'center', width: '100%',
+    borderRadius: 8, width: '100%',
   },
 });

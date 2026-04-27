@@ -27,11 +27,17 @@ import { GoalsSection } from '@/components/GoalsSection';
 import { StreakCard } from '@/components/StreakCard';
 import { HealthScoreCard, computeHealthScore } from '@/components/HealthScore';
 import { DecisionHistorySection, buildOpportunities } from '@/components/DecisionHistory';
+import { MoneyBagIcon } from '@/components/MoneyBagIcon';
 import { RoundUpSummary } from '@/components/RoundUpSummary';
 import { useStreakStore } from '@/store/streakStore';
 import { useRoundUpStore } from '@/store/roundUpStore';
 import { scheduleBudgetAlert } from '@/lib/notifications';
 import { getGreeting, formatCurrency } from '@/utils/format';
+import { useFirstVisit } from '@/hooks/useFirstVisit';
+import { FirstVisitSheet } from '@/components/FirstVisitSheet';
+import Svg, { Path as SvgPath } from 'react-native-svg';
+import { calculatePersonalInflation } from '@/utils/inflationCalc';
+import { HomeSkeletonLoader } from '@/components/ui/SkeletonLoader';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -75,16 +81,16 @@ function buildInsight(
 ): string {
   const recoverable = Math.round(totalDisposable * 0.5);
   if (status === 'over' && estimatedIncome) {
-    return `Superaste el ingreso por ${formatCurrency(totalThisMonth - estimatedIncome)}. Enfocate en recortar primero.`;
+    return `Este gasto te está frenando — te pasaste ${formatCurrency(totalThisMonth - estimatedIncome)}. Recortá hoy.`;
   }
   if (status === 'tight' && estimatedIncome) {
     const pct = Math.round((totalThisMonth / estimatedIncome) * 100);
-    return `Usaste el ${pct}% del ingreso. Poco margen — revisá los prescindibles.`;
+    return `Usaste el ${pct}% del ingreso. Tu mayor fuga puede costar caro este mes.`;
   }
   if (status === 'good' && recoverable > 0) {
-    return `Mes positivo. Podrías destinar ~${formatCurrency(recoverable)} a inversión este mes.`;
+    return `Mes positivo. Podés convertir ~${formatCurrency(recoverable)} en inversión ahora mismo.`;
   }
-  return 'Tu mes viene bien. Seguí así.';
+  return 'Tu mes viene bien. Mantené tu racha.';
 }
 
 // ─── SpendingMiniChart ───────────────────────────────────────────────────────
@@ -313,21 +319,21 @@ function RecoverableCard({
       <View style={recStyles.labelRow}>
         <View style={recStyles.labelDot} />
         <Text variant="label" color={colors.text.secondary} style={{ fontSize: 10 }}>
-          DINERO QUE PODÉS RECUPERAR
+          POTENCIAL DE INVERSIÓN ESTE MES
         </Text>
       </View>
 
       {/* Número protagonista */}
       <Text style={recStyles.amount}>{formatCurrency(recoverable)}</Text>
       <Text variant="caption" color={colors.text.secondary}>
-        Ajustando la mitad de tus gastos prescindibles ({formatCurrency(totalDisposable)}/mes)
+        Podés recuperar hasta este monto recortando prescindibles ({formatCurrency(totalDisposable)}/mes)
       </Text>
 
       {/* FCI hint */}
       <View style={recStyles.hintRow}>
         <Ionicons name="trending-up-outline" size={13} color={colors.neon} />
         <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }}>
-          Invertido en FCI Money Market: ~
+          Convertilo en FCI Money Market y generá ~
           <Text variant="caption" color={colors.neon}>+{formatCurrency(fciEstimate)}/mes</Text>
           {' '}sin hacer nada más.
         </Text>
@@ -335,7 +341,7 @@ function RecoverableCard({
 
       {/* CTA */}
       <View style={recStyles.cta}>
-        <Text style={recStyles.ctaText}>¿Cómo lo recorto?</Text>
+        <Text style={recStyles.ctaText}>Convertí este ahorro en inversión</Text>
         <Ionicons name="arrow-forward" size={13} color={colors.white} />
       </View>
     </TouchableOpacity>
@@ -369,21 +375,24 @@ const recStyles = StyleSheet.create({
 
 // ─── TopCategoriesCard ────────────────────────────────────────────────────────
 
+const CAT_ICONS_TOP: Record<string, string> = {
+  'Entretenimiento': 'game-controller-outline', 'Comida y restaurantes': 'restaurant-outline',
+  'Transporte': 'car-outline', 'Supermercado': 'cart-outline', 'Salud': 'medical-outline',
+  'Ropa y calzado': 'shirt-outline', 'Viajes': 'airplane-outline', 'Educación': 'school-outline',
+  'Hogar y servicios': 'home-outline', 'Tecnología': 'phone-portrait-outline',
+  'Otros': 'ellipsis-horizontal-circle-outline',
+};
+
 function TopCategoriesCard({ expenses }: { expenses: Expense[] }) {
   if (expenses.length === 0) return null;
 
   const catMap: Record<string, { amount: number; color: string }> = {};
+  const totalAmt = expenses.reduce((s, e) => s + e.amount, 0);
+  if (totalAmt === 0) return null;
+
   expenses.forEach(e => {
-    const name  = e.category?.name_es
-      ?? (e.classification === 'necessary'  ? 'Necesarios'
-        : e.classification === 'disposable' ? 'Prescindibles'
-        : e.classification === 'investable' ? 'Invertibles'
-        : 'Sin clasificar');
-    const color = e.category?.color
-      ?? (e.classification === 'necessary'  ? colors.primary
-        : e.classification === 'disposable' ? colors.red
-        : e.classification === 'investable' ? colors.neon
-        : colors.text.tertiary);
+    const name  = (e as any).category?.name_es ?? 'Otros';
+    const color = (e as any).category?.color   ?? '#7C3AED';
     if (!catMap[name]) catMap[name] = { amount: 0, color };
     catMap[name].amount += e.amount;
   });
@@ -392,54 +401,63 @@ function TopCategoriesCard({ expenses }: { expenses: Expense[] }) {
     .sort((a, b) => b[1].amount - a[1].amount)
     .slice(0, 4);
 
-  const maxAmt = sorted[0]?.[1].amount ?? 1;
-
   return (
-    <View style={topCatStyles.card}>
-      <View style={topCatStyles.header}>
-        <Text variant="label" color={colors.text.secondary}>TOP CATEGORÍAS</Text>
-        <TouchableOpacity onPress={() => router.push('/(app)/expenses?tab=analisis' as any)}>
-          <Text variant="label" color={colors.neon}>Ver análisis →</Text>
+    <View style={tcS.wrap}>
+      <View style={tcS.header}>
+        <Text style={tcS.title}>Top categorías</Text>
+        <TouchableOpacity onPress={() => router.push('/(app)/reports' as any)}>
+          <Text style={tcS.link}>Ver análisis</Text>
         </TouchableOpacity>
       </View>
-
-      {sorted.map(([name, { amount, color }]) => (
-        <View key={name} style={topCatStyles.row}>
-          <View style={[topCatStyles.dot, { backgroundColor: color }]} />
-          <Text variant="caption" color={colors.text.primary} style={topCatStyles.catName} numberOfLines={1}>
-            {name}
-          </Text>
-          <View style={topCatStyles.barTrack}>
-            <View style={[topCatStyles.barFill, {
-              width: `${Math.round((amount / maxAmt) * 100)}%`,
-              backgroundColor: color + '70',
-            }]} />
-          </View>
-          <Text variant="caption" color={colors.text.secondary} style={topCatStyles.amount}>
-            {formatCurrency(amount)}
-          </Text>
-        </View>
-      ))}
+      <View style={tcS.card}>
+        {sorted.map(([name, { amount, color }], idx) => {
+          const pct = Math.round((amount / totalAmt) * 100);
+          const iconName = (CAT_ICONS_TOP[name] ?? 'receipt-outline') as any;
+          return (
+            <React.Fragment key={name}>
+              {idx > 0 && <View style={tcS.divider} />}
+              <View style={tcS.row}>
+                <View style={[tcS.iconWrap, { backgroundColor: color + '22' }]}>
+                  <Ionicons name={iconName} size={18} color={color} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={tcS.rowTop}>
+                    <Text style={tcS.catName} numberOfLines={1}>{name}</Text>
+                    <Text style={tcS.pct}>{pct}%</Text>
+                    <Text style={tcS.amt}>{formatCurrency(amount)}</Text>
+                  </View>
+                  <View style={tcS.barTrack}>
+                    <View style={[tcS.barFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                  </View>
+                </View>
+              </View>
+            </React.Fragment>
+          );
+        })}
+      </View>
     </View>
   );
 }
 
-const topCatStyles = StyleSheet.create({
+const tcS = StyleSheet.create({
+  wrap:    { gap: 10 },
+  header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  title:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 16, color: '#212121' },
+  link:    { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: '#2E7D32' },
   card: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1, borderColor: colors.border.default,
-    borderRadius: 16, padding: spacing[5], gap: spacing[4],
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0',
+    borderRadius: 16, padding: 16, gap: 0,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  dot:  { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  catName: { width: 90, flexShrink: 0 },
-  barTrack: {
-    flex: 1, height: 6, backgroundColor: colors.border.subtle,
-    borderRadius: 3, overflow: 'hidden',
-  },
+  divider: { height: 1, backgroundColor: '#E0E0E0', marginVertical: 10 },
+  row:     { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  iconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3E8FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
+  rowTop:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  catName: { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#212121', marginRight: 4 },
+  pct:     { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#757575', minWidth: 32, textAlign: 'right', flexShrink: 0 },
+  amt:     { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#212121', minWidth: 80, textAlign: 'right', flexShrink: 0 },
+  barTrack: { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, overflow: 'hidden', marginTop: 6 },
   barFill:  { height: '100%', borderRadius: 3 },
-  amount: { width: 80, textAlign: 'right', flexShrink: 0 },
 });
 
 // ─── QuickActions ─────────────────────────────────────────────────────────────
@@ -1197,6 +1215,120 @@ const carouselStyles = StyleSheet.create({
   dotActive: { width: 20, height: 6, borderRadius: 3, backgroundColor: colors.primary },
 });
 
+// ─── GmailPendingBanner ───────────────────────────────────────────────────────
+
+function GmailPendingBanner({ count, onPress }: { count: number; onPress: () => void }) {
+  if (count === 0) return null;
+  return (
+    <TouchableOpacity style={gpStyles.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={gpStyles.left}>
+        <View style={gpStyles.iconWrap}>
+          <Ionicons name="mail-outline" size={18} color={colors.neon} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text variant="label" color={colors.neon} style={{ fontSize: 11 }}>
+            GMAIL DETECTÓ {count} GASTO{count > 1 ? 'S' : ''}
+          </Text>
+          <Text variant="caption" color={colors.text.secondary} numberOfLines={1}>
+            Revisá y confirmá en tu sección de gastos
+          </Text>
+        </View>
+      </View>
+      <View style={gpStyles.badge}>
+        <Text style={gpStyles.badgeText}>{count}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+    </TouchableOpacity>
+  );
+}
+
+const gpStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: colors.neon + '0A',
+    borderWidth: 1, borderColor: colors.neon + '35',
+    borderLeftWidth: 3, borderLeftColor: colors.neon,
+    borderRadius: 14, padding: spacing[4],
+  },
+  left:     { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  iconWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.neon + '15', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  badge:    { backgroundColor: colors.neon, borderRadius: 10, minWidth: 22, height: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[1] },
+  badgeText:{ fontFamily: 'Montserrat_700Bold', fontSize: 11, color: colors.bg.primary },
+});
+
+// ─── CompactWidgetsRow ────────────────────────────────────────────────────────
+
+function CompactWidgetsRow({
+  totalDisposable,
+  healthScore,
+  onRecoverablePress,
+}: {
+  totalDisposable:    number;
+  healthScore:        number;
+  onRecoverablePress: () => void;
+}) {
+  const recoverable = Math.round(totalDisposable * 0.5);
+  const scoreColor  = healthScore >= 85 ? colors.neon
+    : healthScore >= 70 ? colors.primary
+    : healthScore >= 50 ? colors.yellow
+    : healthScore >= 30 ? '#FF6D00'
+    : colors.red;
+  const scoreLabel  = healthScore >= 85 ? 'excelente'
+    : healthScore >= 70 ? 'en buen camino'
+    : healthScore >= 50 ? 'hay margen'
+    : 'a mejorar';
+
+  return (
+    <View style={{ flexDirection: 'row', gap: spacing[3] }}>
+      {totalDisposable > 0 && (
+        <TouchableOpacity style={[cwStyles.card, { flex: 1 }]} onPress={onRecoverablePress} activeOpacity={0.85}>
+          <View style={cwStyles.labelRow}>
+            <View style={[cwStyles.dot, { backgroundColor: colors.red }]} />
+            <Text variant="label" color={colors.text.tertiary} style={{ fontSize: 9 }}>RECUPERABLE</Text>
+          </View>
+          <Text style={[cwStyles.bigNum, { color: colors.neon }]}>{formatCurrency(recoverable)}</Text>
+          <Text variant="caption" color={colors.text.tertiary} numberOfLines={1} style={{ fontSize: 10 }}>
+            recortando prescindibles
+          </Text>
+          <View style={cwStyles.ctaRow}>
+            <Text variant="label" color={colors.neon} style={{ fontSize: 10 }}>¿Cómo? →</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
+      <TouchableOpacity
+        style={[cwStyles.card, { flex: 1 }]}
+        onPress={() => router.push('/(app)/reports' as any)}
+        activeOpacity={0.85}
+      >
+        <View style={cwStyles.labelRow}>
+          <View style={[cwStyles.dot, { backgroundColor: scoreColor }]} />
+          <Text variant="label" color={colors.text.tertiary} style={{ fontSize: 9 }}>SALUD FINANCIERA</Text>
+        </View>
+        <Text style={[cwStyles.bigNum, { color: scoreColor }]}>{healthScore}%</Text>
+        <Text variant="caption" color={colors.text.tertiary} numberOfLines={1} style={{ fontSize: 10 }}>
+          {scoreLabel}
+        </Text>
+        <View style={cwStyles.ctaRow}>
+          <Text variant="label" color={scoreColor} style={{ fontSize: 10 }}>Ver informe →</Text>
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const cwStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 14, padding: spacing[4], gap: spacing[2],
+  },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  dot:      { width: 5, height: 5, borderRadius: 3, flexShrink: 0 },
+  bigNum:   { fontFamily: 'Montserrat_700Bold', fontSize: 22, lineHeight: 28, letterSpacing: -0.5 },
+  ctaRow:   { marginTop: spacing[1] },
+});
+
 // ─── QuickStartCard ───────────────────────────────────────────────────────────
 
 const QS_KEY = '@smartpesos/quickstart_dismissed';
@@ -1295,6 +1427,370 @@ const qsStyles = StyleSheet.create({
   },
 });
 
+// ─── MiniLineChart ────────────────────────────────────────────────────────────
+
+function MiniLineChart({ data, color }: { data: number[]; color: string }) {
+  const W = 88; const H = 44;
+  const nonZero = data.filter(v => v > 0);
+  if (nonZero.length < 2) return <View style={{ width: W, height: H, flexShrink: 0 }} />;
+  const max = Math.max(...data, 1);
+  const pts = data.map((v, i) => ({
+    x: (i / (data.length - 1)) * W,
+    y: H - (v / max) * (H - 6) - 3,
+  }));
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  return (
+    <View style={{ width: W, height: H, flexShrink: 0 }}>
+      <Svg width={W} height={H}>
+        <SvgPath d={d} stroke={color} strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      </Svg>
+    </View>
+  );
+}
+
+// ─── OpportunityHeroCard ──────────────────────────────────────────────────────
+
+function OpportunityHeroCard({
+  recoverable, hasExpenses, onPress, onNoData,
+}: {
+  recoverable: number;
+  hasExpenses: boolean;
+  onPress: () => void;
+  onNoData: () => void;
+}) {
+  if (!hasExpenses) {
+    return (
+      <TouchableOpacity style={oppStyles.noData} onPress={onNoData} activeOpacity={0.85}>
+        <View style={oppStyles.noDataIcon}>
+          <Ionicons name="sparkles-outline" size={22} color={colors.primary} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text variant="labelMd" color={colors.text.primary}>Registrá tu primer gasto</Text>
+          <Text variant="caption" color={colors.text.secondary}>Configurá tu ingreso para ver tu oportunidad del mes</Text>
+        </View>
+        <Ionicons name="arrow-forward" size={16} color={colors.text.tertiary} />
+      </TouchableOpacity>
+    );
+  }
+  if (recoverable <= 0) return null;
+
+  return (
+    <TouchableOpacity style={oppStyles.card} onPress={onPress} activeOpacity={0.9}>
+      <View style={oppStyles.content}>
+        <Text style={oppStyles.label}>Tu oportunidad este mes</Text>
+        <Text style={oppStyles.sublabel}>Podés recuperar</Text>
+        <Text style={oppStyles.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{formatCurrency(recoverable)}</Text>
+        <Text style={oppStyles.sub}>Si ajustás estos gastos</Text>
+        <View style={oppStyles.btn}>
+          <Text style={oppStyles.btnText}>Ver cómo</Text>
+          <Ionicons name="arrow-forward" size={13} color={colors.white} />
+        </View>
+      </View>
+      <View style={oppStyles.deco}>
+        <MoneyBagIcon size={96} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const oppStyles = StyleSheet.create({
+  card: {
+    backgroundColor: '#2E7D32',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    overflow: 'visible',
+  },
+  content: { flex: 1, gap: spacing[1], paddingRight: 12 },
+  label: { color: 'rgba(255,255,255,0.75)', fontFamily: 'Montserrat_600SemiBold', fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  sublabel: { color: 'rgba(255,255,255,0.9)', fontFamily: 'Montserrat_400Regular', fontSize: 14, marginTop: spacing[1] },
+  amount: { color: '#FFFFFF', fontFamily: 'Montserrat_700Bold', fontSize: 28, letterSpacing: -0.5, lineHeight: 34 },
+  sub: { color: 'rgba(255,255,255,0.8)', fontFamily: 'Montserrat_400Regular', fontSize: 14 },
+  btn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderRadius: 12, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+    alignSelf: 'flex-start', marginTop: spacing[3], height: 48,
+  },
+  btnText: { color: '#FFFFFF', fontFamily: 'Montserrat_600SemiBold', fontSize: 14 },
+  deco: {
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 96,
+    height: 96,
+  },
+  noData: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 16, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  noDataIcon: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: colors.primary + '15',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+});
+
+// ─── CompactInflationRow ──────────────────────────────────────────────────────
+
+function CompactInflationRow({
+  personalRate, officialRate, onPress,
+}: {
+  personalRate: number;
+  officialRate: number;
+  onPress: () => void;
+}) {
+  const diff = personalRate - officialRate;
+  const won  = diff <= 0;
+  const stateColor = won ? '#2E7D32' : '#EF4444';
+  const ratio = officialRate > 0 ? Math.min(personalRate / officialRate, 1.2) : 0;
+
+  return (
+    <TouchableOpacity style={inflS.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={inflS.titleRow}>
+        <Text style={inflS.cardTitle}>Inflación personal vs. oficial</Text>
+        <Ionicons name="information-circle-outline" size={16} color="#9E9E9E" />
+      </View>
+      <View style={inflS.valuesRow}>
+        <View style={inflS.valBlock}>
+          <Text style={inflS.valLabel}>Tu inflación</Text>
+          <Text style={inflS.valNum}>{personalRate.toFixed(1).replace('.', ',')}%</Text>
+        </View>
+        <View style={inflS.valCenter}>
+          <Text style={[inflS.valLabel, { color: stateColor, textAlign: 'center' }]} numberOfLines={2}>
+            {won ? 'Le ganaste por' : 'Superaste por'}
+          </Text>
+          <Text style={[inflS.valNumBig, { color: stateColor }]}>
+            {Math.abs(diff).toFixed(1).replace('.', ',')}%
+          </Text>
+        </View>
+        <View style={[inflS.valBlock, inflS.valRight]}>
+          <Text style={[inflS.valLabel, { textAlign: 'right' }]}>INDEC</Text>
+          <Text style={[inflS.valNum, { textAlign: 'right' }]}>{officialRate.toFixed(1).replace('.', ',')}%</Text>
+        </View>
+      </View>
+      <View style={inflS.barTrack}>
+        <View style={[inflS.barFill, { width: `${Math.min(ratio * 100, 100)}%` as any, backgroundColor: stateColor }]} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const inflS = StyleSheet.create({
+  card: {
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0',
+    borderRadius: 16, padding: 16, gap: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  titleRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cardTitle:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#212121' },
+  valuesRow:  { flexDirection: 'row', alignItems: 'center' },
+  valBlock:   { flex: 1, gap: 2 },
+  valLabel:   { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#757575' },
+  valNum:     { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: '#212121', lineHeight: 28 },
+  valNumBig:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 22, lineHeight: 38, textAlign: 'center' },
+  valCenter:  { flex: 1, gap: 2, alignItems: 'stretch' },
+  valRight:   { alignItems: 'flex-end' },
+  barTrack:   { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, overflow: 'hidden' },
+  barFill:    { height: '100%', borderRadius: 3 },
+});
+
+// ─── ProjectedBalanceCard ─────────────────────────────────────────────────────
+
+function ProjectedBalanceCard({
+  expenses, estimatedIncome, onPress,
+}: {
+  expenses: Expense[];
+  estimatedIncome: number | null;
+  onPress: () => void;
+}) {
+  const now        = new Date();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const totalSoFar = expenses.reduce((s, e) => s + e.amount, 0);
+
+  if (totalSoFar === 0 && !estimatedIncome) return null;
+
+  const projectedSpend = dayOfMonth > 0 ? Math.round((totalSoFar / dayOfMonth) * daysInMonth) : 0;
+  const projectedFree  = estimatedIncome ? estimatedIncome - projectedSpend : 0;
+
+  // Daily cumulative for mini chart (last 14 days)
+  const dailyMap: Record<string, number> = {};
+  expenses.forEach(e => { dailyMap[e.date] = (dailyMap[e.date] ?? 0) + e.amount; });
+  const days = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date(now);
+    d.setDate(now.getDate() - (13 - i));
+    return dailyMap[d.toISOString().slice(0, 10)] ?? 0;
+  });
+
+  const color = !estimatedIncome ? colors.primary : projectedFree >= 0 ? colors.primary : colors.red;
+
+  return (
+    <TouchableOpacity style={pbCard.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={pbCard.top}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={pbCard.titleRow}>
+            <Text variant="label" color={colors.text.secondary}>Saldo proyectado a fin de mes</Text>
+            <Ionicons name="information-circle-outline" size={13} color={colors.text.tertiary} />
+          </View>
+          <Text variant="caption" color={colors.text.tertiary}>Si mantenés este ritmo</Text>
+        </View>
+        <MiniLineChart data={days} color={color} />
+      </View>
+      <Text style={[pbCard.amount, { color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        {projectedFree < 0 ? '-' : ''}{formatCurrency(Math.abs(estimatedIncome ? projectedFree : totalSoFar))}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const pbCard = StyleSheet.create({
+  card: {
+    backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 16, padding: 16, gap: 8,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  top: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  amount: { fontFamily: 'Montserrat_700Bold', fontSize: 28, letterSpacing: -0.5, lineHeight: 34 },
+});
+
+// ─── TopLeakCard ──────────────────────────────────────────────────────────────
+
+const CAT_ICONS: Record<string, string> = {
+  'Entretenimiento': 'musical-notes', 'Comida y restaurantes': 'restaurant',
+  'Transporte': 'car', 'Supermercado': 'cart', 'Salud': 'medical',
+  'Ropa y calzado': 'shirt', 'Viajes': 'airplane', 'Educación': 'school',
+  'Hogar y servicios': 'home-outline', 'Tecnología': 'phone-portrait',
+};
+
+const CAT_EMOJIS: Record<string, string> = {
+  'Entretenimiento': '🍿',
+};
+
+function TopLeakCard({
+  expenses, totalThisMonth, onPress,
+}: {
+  expenses: Expense[];
+  totalThisMonth: number;
+  onPress: () => void;
+}) {
+  if (expenses.length === 0 || totalThisMonth === 0) return null;
+
+  const catMap: Record<string, number> = {};
+  expenses.forEach(e => {
+    const name = (e as any).category?.name_es ?? 'Sin clasificar';
+    catMap[name] = (catMap[name] ?? 0) + e.amount;
+  });
+
+  const sorted = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
+  const [topName, topAmt] = sorted[0] ?? ['', 0];
+  const pct = Math.round((topAmt / totalThisMonth) * 100);
+
+  if (!topName || pct < 10) return null;
+
+  const iconName = (CAT_ICONS[topName] ?? 'receipt') as any;
+  const catEmoji = CAT_EMOJIS[topName];
+
+  return (
+    <TouchableOpacity style={leakCard.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={leakCard.iconWrap}>
+        <Ionicons name={iconName} size={18} color="#7C3AED" />
+      </View>
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text variant="labelMd" color={colors.text.primary} numberOfLines={2} ellipsizeMode="tail">
+          Tu mayor fuga: {topName}
+        </Text>
+        <Text variant="caption" color={colors.text.secondary}>
+          Representa el {pct}% de tus gastos
+        </Text>
+        <View style={leakCard.cta}>
+          <Text style={leakCard.ctaText}>Ver detalles</Text>
+          <Ionicons name="arrow-forward" size={12} color="#2E7D32" />
+        </View>
+      </View>
+      {catEmoji ? (
+        <View style={{ width: 52, height: 52, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Text style={{ fontSize: 40 }}>{catEmoji}</Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+const leakCard = StyleSheet.create({
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0',
+    borderRadius: 16, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  iconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3E8FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  cta:      { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  ctaText:  { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: '#2E7D32' },
+});
+
+// ─── QuickActionsSection ──────────────────────────────────────────────────────
+
+function QuickActionsSection({
+  expenses, onEditIncome,
+}: {
+  expenses: Expense[];
+  onEditIncome: () => void;
+}) {
+  const catMap: Record<string, number> = {};
+  expenses.forEach(e => {
+    const name = (e as any).category?.name_es ?? 'Sin clasificar';
+    catMap[name] = (catMap[name] ?? 0) + e.amount;
+  });
+  const topCatName = Object.entries(catMap).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const shortName  = topCatName?.split(' ')[0].toLowerCase() ?? 'gastos';
+
+  const actions = [
+    { label: `Limitar\n${shortName}`,   icon: 'time-outline' as const,         onPress: () => router.push('/(app)/advisor' as any) },
+    { label: 'Crear meta\nde ahorro',   icon: 'flag-outline' as const,         onPress: () => router.push('/(app)/savings' as any) },
+    { label: 'Invertir\neste mes',      icon: 'bar-chart-outline' as const,    onPress: () => router.push('/(app)/simulator' as any) },
+    { label: 'Ver todos\nlos gastos',   icon: 'receipt-outline' as const,      onPress: () => router.push('/(app)/expenses' as any) },
+  ];
+
+  return (
+    <View style={qaNewStyles.wrap}>
+      <View style={qaNewStyles.header}>
+        <Text style={qaNewStyles.title}>Acciones rápidas</Text>
+        <TouchableOpacity onPress={() => router.push('/(app)/expenses' as any)}>
+          <Text style={qaNewStyles.headerLink}>Ver todas</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={qaNewStyles.grid}>
+        {actions.map(a => (
+          <TouchableOpacity key={a.label} style={qaNewStyles.item} onPress={a.onPress} activeOpacity={0.75}>
+            <View style={qaNewStyles.circle}>
+              <Ionicons name={a.icon} size={22} color="#424242" />
+            </View>
+            <Text style={qaNewStyles.label} numberOfLines={2}>{a.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const qaNewStyles = StyleSheet.create({
+  wrap:       { gap: spacing[3] },
+  header:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  title:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 16, color: '#212121' },
+  headerLink: { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: '#2E7D32' },
+  grid:       { flexDirection: 'row', gap: spacing[2] },
+  item:       { flex: 1, alignItems: 'center', gap: spacing[2] },
+  circle:     { width: 56, height: 56, borderRadius: 28, backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
+  label:      { fontSize: 11, fontFamily: 'Montserrat_500Medium', textAlign: 'center', lineHeight: 15, color: '#424242' },
+});
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
@@ -1313,16 +1809,16 @@ export default function HomeScreen() {
     subscriptions,
   } = useExpensesStore();
   const { goals, fetchGoals }                = useGoalsStore();
-  const { investments, load: loadSavings }   = useSavingsStore();
+  const { investments, fetchAll: loadSavings } = useSavingsStore();
   const streakStore  = useStreakStore();
   const roundUpStore = useRoundUpStore();
-  const [showRoundUpConfig,   setShowRoundUpConfig]   = useState(false);
-  const [showDatosClaveModal, setShowDatosClaveModal] = useState(false);
-  const [market,        setMarket]        = useState<MarketData>({ blue: null, mep: null });
-  const [inflationRate, setInflationRate] = useState(3.4);
-  const [fciRate,       setFciRate]       = useState(3.0);
-  const [gmailConnected,    setGmailConnected]    = useState(false);
-  const [showQuickStart,    setShowQuickStart]    = useState(false);
+  const [inflationRate,  setInflationRate]  = useState(3.4);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [showQuickStart, setShowQuickStart] = useState(false);
+  const [pendingCount,   setPendingCount]   = useState(0);
+  const [inflationData,  setInflationData]  = useState<{ personal: number; official: number } | null>(null);
+
+  const { isFirstVisit, markVisited } = useFirstVisit('home');
 
   const [prevMonthCats,  setPrevMonthCats]  = useState<Record<string, { name: string; amount: number }>>({});
   const [prevMonthTotal, setPrevMonthTotal] = useState(0);
@@ -1337,22 +1833,16 @@ export default function HomeScreen() {
     streakStore.load();
     roundUpStore.load();
     roundUpStore.checkReset();
-    fetchMarketData().then(setMarket);
 
-    // Fetch dynamic market rates from DB
+    // Inflación del mes desde DB (para insights)
     supabase
       .from('market_rates')
-      .select('instrument, rate_monthly')
-      .in('instrument', ['inflation', 'fci_mm'])
-      .then(({ data }) => {
-        if (!data) return;
-        for (const row of data) {
-          if (row.instrument === 'inflation') setInflationRate(Number(row.rate_monthly));
-          if (row.instrument === 'fci_mm')    setFciRate(Number(row.rate_monthly));
-        }
-      });
+      .select('rate_monthly')
+      .eq('instrument', 'inflation')
+      .single()
+      .then(({ data }) => { if (data) setInflationRate(Number(data.rate_monthly)); });
 
-    // Gmail connection check
+    // Gmail connection check + pending transaction count
     if (user?.id) {
       (supabase as any)
         .from('gmail_connections')
@@ -1360,6 +1850,12 @@ export default function HomeScreen() {
         .eq('user_id', user.id)
         .maybeSingle()
         .then(({ data }: { data: { id: string } | null }) => setGmailConnected(!!data));
+
+      (supabase as any)
+        .from('pending_transactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .then(({ count }: { count: number | null }) => setPendingCount(count ?? 0));
     }
 
     // QuickStart: show unless dismissed
@@ -1407,6 +1903,26 @@ export default function HomeScreen() {
     scheduleBudgetAlert(totalThisMonth / estimatedIncome, estimatedIncome - totalThisMonth, daysLeft).catch(() => {});
   }, [totalThisMonth, estimatedIncome]);
 
+  // Inflación personal
+  useEffect(() => {
+    if (expenses.length === 0) return;
+    const now = new Date();
+    const grouped: Record<string, { categoryNameEs: string; categoryColor: string; amount: number }> = {};
+    for (const e of expenses) {
+      const cat  = (e as any).category;
+      const name = cat?.name_es ?? 'Otros';
+      if (!grouped[name]) grouped[name] = { categoryNameEs: name, categoryColor: cat?.color ?? '#888888', amount: 0 };
+      grouped[name].amount += e.amount;
+    }
+    const inputs = Object.values(grouped).filter(x => x.amount > 0);
+    if (inputs.length > 0) {
+      try {
+        const result = calculatePersonalInflation(inputs, now.getFullYear(), now.getMonth() + 1);
+        if (result) setInflationData({ personal: result.personalInflation, official: result.officialInflation });
+      } catch {}
+    }
+  }, [expenses]);
+
   const recentExpenses = expenses.slice(0, 4);
 
   const highlights = buildHomeHighlights({
@@ -1422,6 +1938,9 @@ export default function HomeScreen() {
     expenses, subscriptions, totalThisMonth, totalDisposable,
     totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
   });
+
+  // ── Datos clave del mes ─────────────────────────────────────────────────────
+  const [showDatosClaveModal, setShowDatosClaveModal] = useState(false);
 
   // ── Editar ingreso ──────────────────────────────────────────────────────────
   const [showIncomeModal, setShowIncomeModal] = useState(false);
@@ -1465,15 +1984,15 @@ export default function HomeScreen() {
   };
 
   // ── QuickStart: auto-dismiss cuando todo está completo ──────────────────────
-  const qsHasExpenses    = expenses.length > 0;
-  const qsHasInvestments = investments.length > 0;
+  const qsHasExpenses = expenses.length > 0;
+  const qsHasIncome   = !!estimatedIncome && estimatedIncome > 0;
 
   useEffect(() => {
-    if (qsHasExpenses && gmailConnected && qsHasInvestments) {
+    if (qsHasExpenses && gmailConnected && qsHasIncome) {
       AsyncStorage.setItem(QS_KEY, 'true');
       setShowQuickStart(false);
     }
-  }, [qsHasExpenses, gmailConnected, qsHasInvestments]);
+  }, [qsHasExpenses, gmailConnected, qsHasIncome]);
 
   const dismissQuickStart = useCallback(() => {
     AsyncStorage.setItem(QS_KEY, 'true');
@@ -1499,13 +2018,15 @@ export default function HomeScreen() {
   const pastOpportunities = buildOpportunities(
     expenses
       .filter(e => e.classification === 'disposable')
-      .reduce<{ monthKey: string; disposable: number }[]>((acc, e) => {
-        const mk = e.date.slice(0, 7); // YYYY-MM
+      .reduce<{ monthKey: string; disposable: number; categories: Record<string, number> }[]>((acc, e) => {
+        const mk      = e.date.slice(0, 7);
+        const catName = (e as any).category?.name_es ?? 'Prescindibles';
         const existing = acc.find(x => x.monthKey === mk);
         if (existing) {
           existing.disposable += e.amount;
+          existing.categories[catName] = (existing.categories[catName] ?? 0) + e.amount;
         } else {
-          acc.push({ monthKey: mk, disposable: e.amount });
+          acc.push({ monthKey: mk, disposable: e.amount, categories: { [catName]: e.amount } });
         }
         return acc;
       }, [])
@@ -1519,6 +2040,8 @@ export default function HomeScreen() {
         `¿En qué instrumento lo meto y cuánto podría ganar por mes?`,
       ].join(' ')
     : undefined;
+
+  const firstName = profile?.full_name?.split(' ')[0] ?? 'Ahí vamos';
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -1535,58 +2058,81 @@ export default function HomeScreen() {
       >
         {/* ── Header ─────────────────────────────────────────────────────────── */}
         <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Image
-              source={require('../../assets/icon.png')}
-              style={styles.logo}
-              resizeMode="contain"
-            />
-            <View>
-              <Text variant="caption" color={colors.text.tertiary}>
-                {getGreeting(profile?.full_name ?? undefined).split(',')[0].toUpperCase()}
-              </Text>
-              <Text variant="h4" color={colors.text.primary}>
-                {profile?.full_name?.split(' ')[0] ?? 'Ahí vamos'} 👋
-              </Text>
+          <View style={{ gap: 3 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ fontSize: 22 }}>👋</Text>
+              <Text style={styles.greetingName}>Buen día, {firstName}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <Text style={styles.eyeLabel}>Eyé</Text>
+              <Text style={styles.eyeSub}>Este es tu resumen de hoy</Text>
             </View>
           </View>
-          <TouchableOpacity
-            onPress={() => router.push('/(app)/profile')}
-            style={styles.avatarBtn}
-          >
-            <Ionicons name="person-circle-outline" size={36} color={colors.text.secondary} />
+          <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/profile')}>
+            <Ionicons name="notifications-outline" size={22} color="#212121" />
           </TouchableOpacity>
         </View>
 
-        {/* ── Hero: estado del mes ────────────────────────────────────────────── */}
-        <MonthHeroCard
-          totalThisMonth={totalThisMonth}
-          totalNecessary={totalNecessary}
-          totalDisposable={totalDisposable}
-          totalInvestable={totalInvestable}
+        {/* ── Skeleton while loading ──────────────────────────────────────────── */}
+        {isLoading && expenses.length === 0 && <HomeSkeletonLoader />}
+
+        {/* ── Gmail pending ───────────────────────────────────────────────────── */}
+        {!isLoading && (
+        <GmailPendingBanner
+          count={pendingCount}
+          onPress={() => router.push('/(app)/expenses' as any)}
+        />
+        )}
+
+        {/* ── Oportunidad principal ────────────────────────────────────────────── */}
+        <OpportunityHeroCard
+          recoverable={Math.round(totalDisposable * 0.5)}
+          hasExpenses={expenses.length > 0}
+          onPress={() => router.push({
+            pathname: '/(app)/advisor',
+            params: recoverableCtx ? { initialContext: recoverableCtx } : {},
+          } as any)}
+          onNoData={openIncomeModal}
+        />
+
+        {/* ── Inflación personal compacta ──────────────────────────────────────── */}
+        {inflationData !== null && (
+          <CompactInflationRow
+            personalRate={inflationData.personal}
+            officialRate={inflationData.official}
+            onPress={() => router.push('/(app)/reports' as any)}
+          />
+        )}
+
+        {/* ── Saldo proyectado ─────────────────────────────────────────────────── */}
+        <ProjectedBalanceCard
+          expenses={expenses}
           estimatedIncome={estimatedIncome}
+          onPress={() => router.push('/(app)/reports' as any)}
+        />
+
+        {/* ── Mayor fuga ───────────────────────────────────────────────────────── */}
+        <TopLeakCard
+          expenses={expenses}
+          totalThisMonth={totalThisMonth}
+          onPress={() => router.push('/(app)/reports' as any)}
+        />
+
+        {/* ── Acciones rápidas ─────────────────────────────────────────────────── */}
+        <QuickActionsSection
           expenses={expenses}
           onEditIncome={openIncomeModal}
         />
 
-        {/* ── Acciones rápidas ────────────────────────────────────────────────── */}
-        <QuickActions healthScore={healthScore} />
+        {/* ── Top categorías ───────────────────────────────────────────────────── */}
+        <TopCategoriesCard expenses={expenses} />
 
-        {/* ── Ticker de mercado ──────────────────────────────────────────────── */}
-        <MarketTicker
-          market={market}
-          totalInvestable={totalInvestable}
-          totalDisposable={totalDisposable}
-          inflationRate={inflationRate}
-          fciRate={fciRate}
-        />
-
-        {/* ── Quick Start ────────────────────────────────────────────────────── */}
-        {showQuickStart && (
+        {/* ── QuickStart (sólo sin datos) ──────────────────────────────────────── */}
+        {showQuickStart && expenses.length === 0 && (
           <QuickStartCard
             hasExpenses={qsHasExpenses}
             hasGmail={gmailConnected}
-            hasInvestments={qsHasInvestments}
+            hasInvestments={qsHasIncome}
             onConnectGmail={() => router.push('/(app)/profile')}
             onAddExpense={() => router.push('/(app)/expenses')}
             onSetIncome={openIncomeModal}
@@ -1594,120 +2140,22 @@ export default function HomeScreen() {
           />
         )}
 
-        {/* ── Radar financiero ───────────────────────────────────────────────── */}
-        <HomeHighlightCarousel highlights={highlights} />
-
-        {/* ── Datos clave del mes (modal desde header) ────────────────────────── */}
-        <DatosClaveCard
-          insights={keyInsights}
-          open={showDatosClaveModal}
-          onOpen={() => setShowDatosClaveModal(true)}
-          onClose={() => setShowDatosClaveModal(false)}
-        />
-
-        {/* ── Top categorías ─────────────────────────────────────────────────── */}
-        <TopCategoriesCard expenses={expenses} />
-
-        {/* ── Dinero recuperable ──────────────────────────────────────────────── */}
-        <RecoverableCard
-          totalDisposable={totalDisposable}
-          onPress={() => router.push({
-            pathname: '/(app)/advisor',
-            params: recoverableCtx ? { initialContext: recoverableCtx } : {},
-          } as any)}
-        />
-
-        {/* ── Score de salud financiera ───────────────────────────────────────── */}
-        <HealthScoreCard
-          score={healthScore}
-          input={{
-            totalThisMonth,
-            totalDisposable,
-            totalInvested,
-            investmentTypes,
-            hasSavings:         totalInvested > 0,
-            weekStreak:         streakStore.weekStreak,
-            noDisposableStreak: streakStore.noDisposableStreak,
-            goals,
-          }}
-        />
-
-        {/* ── Rachas activas ──────────────────────────────────────────────────── */}
-        <StreakCard
-          weekStreak={streakStore.weekStreak}
-          noDisposableStreak={streakStore.noDisposableStreak}
-          bestWeekStreak={streakStore.bestWeekStreak}
-          monthsUnderBudget={streakStore.monthsUnderBudget}
-        />
-
-        {/* ── Redondeo automático ─────────────────────────────────────────────── */}
-        <RoundUpSummary
-          enabled={roundUpStore.enabled}
-          roundTo={roundUpStore.roundTo}
-          destination={roundUpStore.destination}
-          totalThisWeek={roundUpStore.totalThisWeek}
-          totalThisMonth={roundUpStore.totalThisMonth}
-          totalAllTime={roundUpStore.totalAllTime}
-          onConfigure={() => router.push('/(app)/profile')}
-        />
-
-        {/* ── Historial de decisiones ─────────────────────────────────────────── */}
-        <DecisionHistorySection opportunities={pastOpportunities} />
-
-        {/* ── Metas de ahorro ────────────────────────────────────────────────── */}
-        {user?.id && (
-          <GoalsSection userId={user.id} projectedMonthlyFree={projectedBalance} />
-        )}
-
-        {/* ── Últimos gastos ──────────────────────────────────────────────────── */}
-        <View style={styles.sectionHeader}>
-          <Text variant="label" color={colors.text.secondary}>ÚLTIMOS GASTOS</Text>
-          <TouchableOpacity onPress={() => router.push('/(app)/expenses')}>
-            <Text variant="label" color={colors.neon}>VER TODOS</Text>
-          </TouchableOpacity>
-        </View>
-
-        {recentExpenses.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <Ionicons name="wallet-outline" size={36} color={colors.text.tertiary} />
-            <Text variant="body" color={colors.text.secondary} align="center">
-              Todavía no cargaste gastos este mes.
-            </Text>
-            <TouchableOpacity onPress={() => router.push('/(app)/expenses')}>
-              <Text variant="bodySmall" color={colors.neon}>+ Agregar primer gasto</Text>
-            </TouchableOpacity>
-          </Card>
-        ) : (
-          <View style={styles.expenseList}>
-            {recentExpenses.map((expense) => (
-              <TouchableOpacity
-                key={expense.id}
-                style={styles.expenseItem}
-                onPress={() => router.push('/(app)/expenses')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.expenseLeft}>
-                  <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
-                    {expense.description}
-                  </Text>
-                  <View style={styles.expenseMeta}>
-                    <Text variant="caption" color={colors.text.tertiary}>{expense.date}</Text>
-                    {expense.classification && <Badge classification={expense.classification} label={expense.classification} small />}
-                  </View>
-                </View>
-                <Text variant="labelMd" color={colors.text.primary}>
-                  {formatCurrency(expense.amount)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.seeAllRow} onPress={() => router.push('/(app)/expenses')}>
-              <Text variant="label" color={colors.text.secondary}>Ver todos los gastos</Text>
-              <Ionicons name="arrow-forward" size={14} color={colors.text.secondary} />
-            </TouchableOpacity>
-          </View>
-        )}
 
       </ScrollView>
+
+      {/* ── Tour primera visita ─────────────────────────────────────────────── */}
+      <FirstVisitSheet
+        visible={isFirstVisit}
+        screenTitle="Tu dashboard financiero"
+        screenIcon="home-outline"
+        iconColor={colors.neon}
+        features={[
+          { icon: 'cash-outline', color: colors.primary, title: 'Tu oportunidad del mes', body: 'Ves cuánto podrías recuperar ajustando tus gastos prescindibles y cómo invertirlo hoy.' },
+          { icon: 'thermometer-outline', color: colors.yellow, title: 'Tu inflación real', body: 'Comparamos tu inflación personal contra el INDEC para que sepas si estás ganando o perdiendo poder adquisitivo.' },
+          { icon: 'mail-outline', color: colors.neon, title: 'Gmail detecta tus gastos', body: 'Si conectás Gmail, detectamos automáticamente las compras de tus resúmenes bancarios y billeteras.' },
+        ]}
+        onDismiss={markVisited}
+      />
 
       {/* ── Modal editar ingreso ────────────────────────────────────────────── */}
       <Modal
@@ -1781,10 +2229,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingBottom: spacing[2],
   },
-  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  logo:        { width: 36, height: 36, borderRadius: 8 },
-  avatarBtn:   { padding: spacing[1] },
+  headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  headerRight:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  greetingName: { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: '#212121', lineHeight: 24 },
+  eyeLabel:     { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#7C3AED' },
+  eyeSub:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#757575' },
+  bellBtn:      { padding: spacing[2] },
   insightBtn:  { padding: spacing[1], position: 'relative' },
   insightBadge: {
     position: 'absolute', top: 0, right: 0,

@@ -457,8 +457,8 @@ const styles = StyleSheet.create({
 
   // Monto
   amountRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[2], borderBottomWidth: 2, borderBottomColor: colors.neon, paddingBottom: spacing[2] },
-  currencySign: { fontFamily: 'Montserrat_700Bold', fontSize: 28, color: colors.text.tertiary },
-  amountInput:  { flex: 1, fontFamily: 'Montserrat_700Bold', fontSize: 36, color: colors.text.primary, padding: 0 },
+  currencySign: { fontFamily: 'Montserrat_700Bold', fontSize: 30, color: colors.text.tertiary },
+  amountInput:  { flex: 1, fontFamily: 'Montserrat_700Bold', fontSize: 34, color: colors.text.primary, padding: 0 },
 
   // Instrumento
   instrGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },

@@ -39,7 +39,7 @@ export function StreakCard({ weekStreak, noDisposableStreak, bestWeekStreak, mon
             color={colors.primary}
             value={weekStreak}
             unit="sem."
-            label="dentro del presupuesto"
+            label={weekStreak >= 4 ? "¡Estás por encima de tu objetivo!" : "dentro del presupuesto"}
           />
         )}
         {noDisposableStreak > 0 && (
@@ -48,7 +48,7 @@ export function StreakCard({ weekStreak, noDisposableStreak, bestWeekStreak, mon
             color={colors.yellow}
             value={noDisposableStreak}
             unit="días"
-            label="sin prescindibles"
+            label="Mantené tu racha sin prescindibles"
           />
         )}
         {monthsUnderBudget >= 2 && (
@@ -57,7 +57,7 @@ export function StreakCard({ weekStreak, noDisposableStreak, bestWeekStreak, mon
             color={colors.neon}
             value={monthsUnderBudget}
             unit="meses"
-            label="bajo el presupuesto"
+            label="consecutivos bajo el presupuesto"
           />
         )}
       </View>
@@ -66,7 +66,7 @@ export function StreakCard({ weekStreak, noDisposableStreak, bestWeekStreak, mon
         <View style={styles.achievementBanner}>
           <Ionicons name="ribbon-outline" size={14} color={colors.neon} />
           <Text variant="caption" color={colors.neon} style={{ flex: 1 }}>
-            {monthsUnderBudget} meses seguidos bajo el presupuesto. ¡Excelente racha!
+            {monthsUnderBudget} meses seguidos bajo el presupuesto. Convertí ese ahorro en inversión.
           </Text>
         </View>
       )}

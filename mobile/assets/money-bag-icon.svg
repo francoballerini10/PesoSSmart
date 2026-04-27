@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+
+    <!-- ── Bag body: warm beige, light from top-left ── -->
+    <radialGradient id="bagBody" cx="36%" cy="30%" r="68%" fx="32%" fy="26%">
+      <stop offset="0%"   stop-color="#FDF3E0"/>
+      <stop offset="40%"  stop-color="#F5E1C8"/>
+      <stop offset="80%"  stop-color="#E5C49A"/>
+      <stop offset="100%" stop-color="#D4AA7A"/>
+    </radialGradient>
+
+    <!-- ── Bag neck: slightly darker beige ── -->
+    <linearGradient id="bagNeck" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#D8B882"/>
+      <stop offset="40%"  stop-color="#EDD09A"/>
+      <stop offset="60%"  stop-color="#EDD09A"/>
+      <stop offset="100%" stop-color="#C8A870"/>
+    </linearGradient>
+
+    <!-- ── Knot: green, 3D shading ── -->
+    <radialGradient id="knotGrad" cx="38%" cy="30%" r="65%">
+      <stop offset="0%"   stop-color="#81C784"/>
+      <stop offset="55%"  stop-color="#388E3C"/>
+      <stop offset="100%" stop-color="#1B5E20"/>
+    </radialGradient>
+    <radialGradient id="knotLoop" cx="40%" cy="30%" r="65%">
+      <stop offset="0%"   stop-color="#66BB6A"/>
+      <stop offset="60%"  stop-color="#2E7D32"/>
+      <stop offset="100%" stop-color="#1B5E20"/>
+    </radialGradient>
+
+    <!-- ── Coin face: golden, 3D shading ── -->
+    <radialGradient id="coinFace" cx="38%" cy="28%" r="68%">
+      <stop offset="0%"   stop-color="#FFE97A"/>
+      <stop offset="40%"  stop-color="#F4C542"/>
+      <stop offset="75%"  stop-color="#DBA020"/>
+      <stop offset="100%" stop-color="#C08A10"/>
+    </radialGradient>
+    <!-- Coin edge (darker gold for thickness illusion) -->
+    <linearGradient id="coinEdge" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#C89010"/>
+      <stop offset="100%" stop-color="#8A5E00"/>
+    </linearGradient>
+
+    <!-- ── Drop shadow filter for bag ── -->
+    <filter id="bagShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="20" flood-color="#3D2200" flood-opacity="0.22"/>
+    </filter>
+
+    <!-- ── Drop shadow filter for coins ── -->
+    <filter id="coinShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="3" dy="6" stdDeviation="10" flood-color="#3D2200" flood-opacity="0.20"/>
+    </filter>
+
+    <!-- ── Soft glow/blur for ground shadow ── -->
+    <filter id="groundShadow">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+
+  </defs>
+
+  <!-- ══════════════════════════════════════════════
+       GROUND SHADOW
+  ══════════════════════════════════════════════ -->
+  <ellipse cx="262" cy="452" rx="158" ry="20"
+           fill="rgba(0,0,0,0.12)" filter="url(#groundShadow)"/>
+
+  <!-- ══════════════════════════════════════════════
+       COINS  (drawn first so bag overlaps them)
+  ══════════════════════════════════════════════ -->
+  <g filter="url(#coinShadow)">
+
+    <!-- COIN 1 — back-left -->
+    <!-- edge / thickness -->
+    <ellipse cx="158" cy="406" rx="56" ry="56" fill="url(#coinEdge)"/>
+    <!-- face -->
+    <ellipse cx="158" cy="394" rx="56" ry="56" fill="url(#coinFace)"/>
+    <!-- specular highlight -->
+    <ellipse cx="142" cy="378" rx="20" ry="14"
+             fill="rgba(255,255,255,0.34)" transform="rotate(-20,142,378)"/>
+
+    <!-- COIN 2 — middle -->
+    <ellipse cx="194" cy="418" rx="56" ry="56" fill="url(#coinEdge)"/>
+    <ellipse cx="194" cy="406" rx="56" ry="56" fill="url(#coinFace)"/>
+    <ellipse cx="178" cy="390" rx="20" ry="14"
+             fill="rgba(255,255,255,0.34)" transform="rotate(-20,178,390)"/>
+
+    <!-- COIN 3 — front-right -->
+    <ellipse cx="230" cy="430" rx="56" ry="56" fill="url(#coinEdge)"/>
+    <ellipse cx="230" cy="418" rx="56" ry="56" fill="url(#coinFace)"/>
+    <ellipse cx="214" cy="402" rx="20" ry="14"
+             fill="rgba(255,255,255,0.34)" transform="rotate(-20,214,402)"/>
+
+  </g>
+
+  <!-- ══════════════════════════════════════════════
+       MONEY BAG BODY
+  ══════════════════════════════════════════════ -->
+  <g filter="url(#bagShadow)">
+
+    <!-- Dark base outline for depth -->
+    <path d="
+      M 256 158
+      C 192 158, 114 196, 99 278
+      C 86 349, 118 420, 185 444
+      C 213 455, 238 460, 256 460
+      C 274 460, 300 455, 328 444
+      C 396 418, 428 347, 415 276
+      C 400 194, 322 158, 256 158 Z
+    " fill="#C8A068"/>
+
+    <!-- Main bag body — lifted 6px above dark base -->
+    <path d="
+      M 256 152
+      C 192 152, 114 190, 99 272
+      C 86 343, 118 414, 185 438
+      C 213 449, 238 454, 256 454
+      C 274 454, 300 449, 328 438
+      C 396 412, 428 341, 415 270
+      C 400 188, 322 152, 256 152 Z
+    " fill="url(#bagBody)"/>
+
+    <!-- Soft specular highlight (top-left lighting) -->
+    <ellipse cx="208" cy="248" rx="62" ry="78"
+             fill="rgba(255,255,255,0.17)"
+             transform="rotate(-22,208,248)"/>
+
+    <!-- Bottom volume shadow inside bag -->
+    <path d="
+      M 138 390 C 130 430, 170 458, 256 460
+      C 342 462, 385 432, 378 390
+      C 365 425, 325 450, 256 452
+      C 188 454, 150 422, 138 390 Z
+    " fill="rgba(0,0,0,0.07)"/>
+
+  </g>
+
+  <!-- ══════════════════════════════════════════════
+       BAG NECK  (fruncida / gathered fabric)
+  ══════════════════════════════════════════════ -->
+  <!-- Neck body connecting bag to knot -->
+  <path d="
+    M 224 152
+    C 222 138, 224 122, 230 110
+    C 237 98,  246 90,  256 88
+    C 266 90,  275 98,  282 110
+    C 288 122, 290 138, 288 152
+    C 278 144, 268 140, 256 140
+    C 244 140, 234 144, 224 152 Z
+  " fill="url(#bagNeck)"/>
+
+  <!-- Gathered fabric fold lines -->
+  <path d="M 232 150 C 236 128, 246 110, 256 106"
+        fill="none" stroke="#B8904A" stroke-width="2.2" stroke-linecap="round" opacity="0.50"/>
+  <path d="M 244 148 C 247 122, 252 108, 256 106"
+        fill="none" stroke="#B8904A" stroke-width="1.5" stroke-linecap="round" opacity="0.35"/>
+  <path d="M 280 150 C 276 128, 266 110, 256 106"
+        fill="none" stroke="#B8904A" stroke-width="2.2" stroke-linecap="round" opacity="0.50"/>
+  <path d="M 268 148 C 265 122, 260 108, 256 106"
+        fill="none" stroke="#B8904A" stroke-width="1.5" stroke-linecap="round" opacity="0.35"/>
+
+  <!-- ══════════════════════════════════════════════
+       GREEN KNOT / BOW
+  ══════════════════════════════════════════════ -->
+  <!-- Left loop of bow -->
+  <ellipse cx="232" cy="88" rx="22" ry="13"
+           fill="url(#knotLoop)"
+           transform="rotate(-30,232,88)"/>
+  <ellipse cx="228" cy="83" rx="9" ry="5"
+           fill="rgba(255,255,255,0.20)"
+           transform="rotate(-30,228,83)"/>
+
+  <!-- Right loop of bow -->
+  <ellipse cx="280" cy="88" rx="22" ry="13"
+           fill="url(#knotLoop)"
+           transform="rotate(30,280,88)"/>
+  <ellipse cx="284" cy="83" rx="9" ry="5"
+           fill="rgba(255,255,255,0.20)"
+           transform="rotate(30,284,83)"/>
+
+  <!-- Center knot (covers where loops cross) -->
+  <ellipse cx="256" cy="90" rx="18" ry="14" fill="url(#knotGrad)"/>
+  <!-- Highlight on center knot -->
+  <ellipse cx="250" cy="84" rx="8" ry="5"
+           fill="rgba(255,255,255,0.25)"
+           transform="rotate(-10,250,84)"/>
+  <!-- Shadow at base of knot -->
+  <ellipse cx="256" cy="100" rx="15" ry="5" fill="rgba(0,0,0,0.10)"/>
+
+  <!-- ══════════════════════════════════════════════
+       DOLLAR SIGN
+  ══════════════════════════════════════════════ -->
+  <text
+    x="258" y="322"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="172"
+    font-weight="600"
+    fill="#6D4C41"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    opacity="0.90"
+  >$</text>
+
+  <!-- Subtle inner shadow below $ to anchor it visually -->
+  <ellipse cx="256" cy="358" rx="52" ry="8"
+           fill="rgba(0,0,0,0.06)"/>
+
+</svg>

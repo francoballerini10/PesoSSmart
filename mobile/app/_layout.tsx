@@ -11,8 +11,7 @@ import { colors } from '@/theme';
 import { LoadingScreen } from '@/components/ui';
 import * as Notifications from 'expo-notifications';
 import { requestNotificationPermission, registerPushToken } from '@/lib/notifications';
-import { onSessionExpired } from '@/lib/supabase';
-import { supabase } from '@/lib/supabase';
+import { onSessionExpired, supabase } from '@/lib/supabase';
 import {
   useFonts,
   Montserrat_400Regular,

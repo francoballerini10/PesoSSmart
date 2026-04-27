@@ -25,6 +25,8 @@ import { useSavingsStore } from '@/store/savingsStore';
 import { useGoalsStore } from '@/store/goalsStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
+import { useFirstVisit } from '@/hooks/useFirstVisit';
+import { FirstVisitSheet } from '@/components/FirstVisitSheet';
 import { useLocalSearchParams, router } from 'expo-router';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -166,6 +168,7 @@ function timeAgo(dateStr: string): string {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function AdvisorScreen() {
+  const { isFirstVisit, markVisited } = useFirstVisit('advisor');
   const { user }                                                                  = useAuthStore();
   const { totalThisMonth, totalNecessary, totalDisposable, totalInvestable,
           estimatedIncome }                                                       = useExpensesStore();
@@ -1032,6 +1035,19 @@ export default function AdvisorScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      <FirstVisitSheet
+        visible={isFirstVisit}
+        screenTitle="Asesor financiero IA"
+        screenIcon="chatbubble-ellipses-outline"
+        iconColor={colors.yellow}
+        features={[
+          { icon: 'sparkles-outline', color: colors.yellow, title: 'Tu asesor financiero personal', body: 'Hacele cualquier pregunta sobre tus gastos, inversiones o cómo mejorar tu situación financiera en Argentina.' },
+          { icon: 'analytics-outline', color: colors.primary, title: 'Contexto personalizado', body: 'El asesor ve tus gastos del mes, tus metas y tu perfil para darte recomendaciones específicas para vos, no genéricas.' },
+          { icon: 'flash-outline', color: colors.neon, title: 'Acciones rápidas', body: 'Usá los botones de acceso rápido para consultas frecuentes: qué hacer con el sueldo, cómo recortar, dónde invertir.' },
+        ]}
+        onDismiss={markVisited}
+      />
     </SafeAreaView>
   );
 }

@@ -13,8 +13,6 @@ import {
 import * as LocalAuth from 'expo-local-authentication';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Linking } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
 import { Ionicons } from '@expo/vector-icons';
 import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
@@ -100,39 +98,18 @@ export default function ProfileScreen() {
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [gmailEmail,   setGmailEmail]   = useState<string | null>(null);
-  const [gmailExpired, setGmailExpired] = useState(false);
-  const [gmailLoading, setGmailLoading] = useState(false);
-  // Detectar deep link de retorno de Gmail OAuth
-  useEffect(() => {
-    const handleURL = ({ url }: { url: string }) => {
-      if (!url.includes('gmail-connected')) return;
-      const match = url.match(/email=([^&]+)/);
-      const hasError = url.includes('error=');
-      if (match) {
-        const email = decodeURIComponent(match[1]);
-        setGmailEmail(email);
-        Alert.alert('Gmail conectado', `Tu cuenta ${email} quedó vinculada. Ahora detectamos gastos automáticamente.`);
-      } else if (hasError) {
-        Alert.alert('Error', 'No se pudo conectar Gmail. Intentá de nuevo.');
-      }
-    };
-
-    const sub = Linking.addEventListener('url', handleURL);
-    return () => sub.remove();
-  }, []);
 
   // Cargar estado de Gmail al entrar
   useEffect(() => {
     if (!user?.id) return;
     (supabase as any)
       .from('gmail_connections')
-      .select('gmail_email, token_expired')
+      .select('gmail_email')
       .eq('user_id', user.id)
       .maybeSingle()
-      .then(({ data }: { data: { gmail_email: string; token_expired: boolean } | null }) => {
+      .then(({ data }: { data: { gmail_email: string } | null }) => {
         if (data) {
           setGmailEmail(data.gmail_email);
-          setGmailExpired(data.token_expired ?? false);
         }
       });
   }, [user?.id]);
@@ -194,65 +171,6 @@ export default function ProfileScreen() {
         },
       ],
     );
-  };
-
-  const connectGmail = async () => {
-    if (!user?.id) return;
-    setGmailLoading(true);
-    try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        Alert.alert('Sesión expirada', 'Cerrá sesión y volvé a ingresar.');
-        return;
-      }
-
-      const res = await fetch(`${supabaseUrl}/functions/v1/gmail-auth?action=url`, {
-        headers: { 'Authorization': `Bearer ${session.access_token}` },
-      });
-      const json = await res.json();
-
-      if (!res.ok) {
-        console.error('[connectGmail] Error del servidor:', res.status, JSON.stringify(json));
-        if (res.status === 401) {
-          Alert.alert('Error de autenticación', 'Tu sesión no es válida. Cerrá sesión y volvé a ingresar.');
-        } else {
-          Alert.alert('Error', `No se pudo contactar el servidor (${res.status}). Intentá de nuevo.`);
-        }
-        return;
-      }
-
-      if (!json.url) {
-        console.error('[connectGmail] Respuesta sin URL:', JSON.stringify(json));
-        Alert.alert('Error', 'No se pudo obtener el link de autorización. Intentá de nuevo.');
-        return;
-      }
-
-      const result = await WebBrowser.openAuthSessionAsync(json.url, 'pesossmart://gmail-connected');
-
-      if (result.type === 'success' && result.url) {
-        const match    = result.url.match(/email=([^&]+)/);
-        const hasError = result.url.includes('error=');
-        if (match) {
-          const email = decodeURIComponent(match[1]);
-          setGmailEmail(email);
-          setGmailExpired(false);
-          Alert.alert('Gmail conectado', `Tu cuenta ${email} quedó vinculada. Ahora detectamos gastos automáticamente.`);
-        } else if (hasError) {
-          const errMatch = result.url.match(/error=([^&]+)/);
-          const errMsg   = errMatch ? decodeURIComponent(errMatch[1]) : 'Error desconocido';
-          console.error('[connectGmail] Error en callback OAuth:', errMsg);
-          Alert.alert('Error', `No se pudo conectar Gmail: ${errMsg}. Intentá de nuevo.`);
-        }
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        console.log('[connectGmail] Usuario canceló la autorización de Gmail');
-      }
-    } catch (err) {
-      console.error('[connectGmail] Error inesperado:', err);
-      Alert.alert('Error', 'No se pudo iniciar la conexión con Gmail. Verificá tu conexión a internet.');
-    } finally {
-      setGmailLoading(false);
-    }
   };
 
   const disconnectGmail = () => {
@@ -334,275 +252,118 @@ export default function ProfileScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
-        {/* Header */}
+        {/* ── Header ──────────────────────────────────────────────────────── */}
         <View style={styles.profileHeader}>
-          <TouchableOpacity style={styles.avatar} onPress={openEditModal}>
-            <Text variant="h4" color={colors.white}>{initials}</Text>
-            <View style={styles.avatarEditBadge}>
-              <Ionicons name="pencil" size={10} color={colors.white} />
-            </View>
-          </TouchableOpacity>
-          <View style={{ flex: 1, gap: spacing[1] }}>
-            <Text variant="subtitle" color={colors.text.primary}>
-              {profile?.full_name ?? 'Sin nombre'}
-            </Text>
-            <Text variant="bodySmall" color={colors.text.secondary}>
-              {profile?.email}
-            </Text>
-            {profile?.phone ? (
-              <Text variant="caption" color={colors.text.tertiary}>
-                {profile.phone}
-              </Text>
-            ) : null}
-          </View>
+          <Text variant="h4">Perfil</Text>
           <TouchableOpacity onPress={openEditModal} style={styles.editBtn}>
-            <Ionicons name="pencil-outline" size={18} color={colors.text.secondary} />
+            <Ionicons name="settings-outline" size={22} color={colors.text.secondary} />
           </TouchableOpacity>
         </View>
 
-        {/* Plan */}
-        <Card style={[styles.planCard, trialActive && { borderColor: colors.neon + '60', borderWidth: 1 }]}>
-          {/* Trial banner */}
-          {trialActive && (
-            <View style={styles.trialBanner}>
-              <Ionicons name="star" size={13} color={colors.white} />
-              <Text variant="caption" color={colors.white} style={{ fontFamily: 'Montserrat_700Bold', flex: 1 }}>
-                Trial Premium activo
-                {daysLeft !== null && daysLeft > 0 ? ` · ${daysLeft} día${daysLeft !== 1 ? 's' : ''} restantes` : ' · vence hoy'}
-              </Text>
-            </View>
-          )}
-
-          {/* Plan header */}
-          <View style={styles.planRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-              <Text style={{ fontSize: 20 }}>{plan.emoji}</Text>
-              <View>
-                <Text variant="label" color={colors.text.secondary}>PLAN ACTUAL</Text>
-                <Text variant="subtitle" color={plan.color !== '#6B7280' ? plan.color : colors.text.primary}>
-                  {plan.name}
-                </Text>
-              </View>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.planBtn,
-                (effectivePlan === 'free' || trialActive) && styles.planBtnUpgrade,
-              ]}
-              onPress={() => router.push('/(app)/plans')}
-            >
-              <Text
-                variant="caption"
-                color={(effectivePlan === 'free' || trialActive) ? colors.bg.primary : colors.white}
-                style={{ fontFamily: 'Montserrat_700Bold' }}
-              >
-                {effectivePlan === 'premium' && !trialActive ? 'GESTIONAR' : '⚡ MEJORAR'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Fecha de renovación para planes pagos */}
-          {renewalDate && (
-            <Text variant="caption" color={colors.text.secondary}>
-              Vence el {renewalDate}
-            </Text>
-          )}
-
-          {/* Barra de uso de mensajes */}
-          {msgLimit !== null && (
-            <View style={styles.planUsage}>
-              <View style={styles.planUsageInfo}>
-                <Text variant="caption" color={colors.text.secondary}>Mensajes IA este mes</Text>
-                <Text variant="caption"
-                  color={msgCount >= msgLimit ? colors.red : colors.text.primary}
-                  style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                  {msgCount} / {msgLimit}
-                </Text>
-              </View>
-              <View style={styles.planTrack}>
-                <View style={[styles.planFill, {
-                  width: `${Math.min((msgCount / msgLimit) * 100, 100)}%`,
-                  backgroundColor: msgCount >= msgLimit ? colors.red : plan.color !== '#6B7280' ? plan.color : colors.primary,
-                }]} />
-              </View>
-            </View>
-          )}
-          {msgLimit === null && (
-            <Text variant="caption" color={colors.text.secondary}>
-              Mensajes IA ilimitados incluidos en tu plan.
-            </Text>
-          )}
-        </Card>
-
-        {/* Mi cuenta */}
+        {/* ── Seguridad y acceso ──────────────────────────────────────────── */}
         <View style={styles.section}>
-          <Text variant="label" color={colors.text.secondary} style={styles.sectionTitle}>MI CUENTA</Text>
+          <Text variant="label" color={colors.text.tertiary} style={styles.sectionTitle}>SEGURIDAD Y ACCESO</Text>
+          <Text variant="caption" color={colors.text.tertiary} style={{ marginBottom: spacing[3] }}>
+            Protegé tu cuenta y tus datos
+          </Text>
           <Card style={styles.menuCard}>
-            <MenuItem
-              icon="person-outline"
-              label="Editar perfil"
-              description="Nombre y teléfono"
-              onPress={openEditModal}
-            />
-            <View style={styles.menuDivider} />
-            <MenuItem
-              icon="stats-chart-outline"
-              label="Actualizar perfil financiero"
-              description="Ingresos, gastos, situación"
-              onPress={handleReOnboarding}
-            />
-            <View style={styles.menuDivider} />
-            <MenuItem
-              icon="heart-outline"
-              label="Mis intereses"
-              description="Qué querés explorar"
-              onPress={() => router.push('/(onboarding)/interests')}
-            />
-            <View style={styles.menuDivider} />
-            <MenuItem
-              icon="shield-outline"
-              label="Perfil de riesgo"
-              description="Tu tolerancia a la volatilidad"
-              onPress={() => router.push('/(onboarding)/risk-profile')}
-            />
-          </Card>
-        </View>
-
-        {/* Integraciones */}
-        <View style={styles.section}>
-          <Text variant="label" color={colors.text.secondary} style={styles.sectionTitle}>INTEGRACIONES</Text>
-          <Card style={styles.menuCard}>
-
-            {/* Fila principal */}
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={gmailEmail ? disconnectGmail : connectGmail}
-              disabled={gmailLoading}
-            >
-              <View style={styles.menuIcon}>
+            <View style={styles.menuItem}>
+              <View style={[styles.menuIcon, { backgroundColor: biometricEnabled ? colors.primary + '15' : colors.bg.elevated }]}>
                 <Ionicons
-                  name="mail-outline"
+                  name="finger-print-outline"
                   size={20}
-                  color={gmailExpired ? colors.yellow : gmailEmail ? colors.neon : colors.text.secondary}
+                  color={biometricEnabled ? colors.primary : colors.text.secondary}
                 />
               </View>
               <View style={styles.menuText}>
-                <Text variant="bodySmall" color={colors.text.primary}>Gmail</Text>
-                <Text variant="caption" color={gmailExpired ? colors.yellow : gmailEmail ? colors.neon : colors.text.secondary}>
-                  {gmailLoading
-                    ? 'Conectando...'
-                    : gmailExpired
-                      ? `Sesión expirada · ${gmailEmail}`
-                      : gmailEmail
-                        ? `Conectado: ${gmailEmail}`
-                        : 'Detectar gastos desde emails bancarios'}
+                <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                  Seguridad biométrica
+                </Text>
+                <Text variant="caption" color={colors.text.secondary}>
+                  Usá tu huella para ingresar
                 </Text>
               </View>
-              {gmailEmail && !gmailExpired
-                ? <Ionicons name="checkmark-circle" size={20} color={colors.neon} />
-                : gmailExpired
-                  ? <Ionicons name="warning" size={18} color={colors.yellow} />
-                  : <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-              }
-            </TouchableOpacity>
-
-            {/* Banner de reconexión — visible solo cuando el token expiró */}
-            {gmailExpired && (
-              <>
-                <View style={styles.menuDivider} />
-                <TouchableOpacity
-                  style={styles.reconnectBanner}
-                  onPress={connectGmail}
-                  disabled={gmailLoading}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="refresh-outline" size={16} color={colors.yellow} />
-                  <View style={{ flex: 1 }}>
-                    <Text variant="bodySmall" color={colors.yellow} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                      Reconectá tu cuenta de Gmail
-                    </Text>
-                    <Text variant="caption" color={colors.text.secondary}>
-                      La sesión de Google venció. Tocá para volver a autorizar.
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={14} color={colors.yellow} />
-                </TouchableOpacity>
-              </>
-            )}
-
+              <Switch
+                value={biometricEnabled}
+                onValueChange={biometricAvailable ? toggleBiometric : undefined}
+                trackColor={{ false: colors.border.default, true: colors.primary + '80' }}
+                thumbColor={biometricEnabled ? colors.primary : colors.text.tertiary}
+                disabled={!biometricAvailable}
+              />
+            </View>
           </Card>
         </View>
 
-        {/* La app */}
+        {/* ── Mi cuenta ───────────────────────────────────────────────────── */}
         <View style={styles.section}>
-          <Text variant="label" color={colors.text.secondary} style={styles.sectionTitle}>LA APP</Text>
+          <Text variant="label" color={colors.text.tertiary} style={styles.sectionTitle}>MI CUENTA</Text>
           <Card style={styles.menuCard}>
-            <MenuItem
-              icon="notifications-outline"
-              label="Notificaciones"
-              onPress={() => Alert.alert('Próximamente', 'Gestión de notificaciones en camino.')}
-            />
-            {biometricAvailable && (
-              <>
-                <View style={styles.menuDivider} />
-                <View style={styles.menuItem}>
-                  <View style={styles.menuIcon}>
-                    <Ionicons
-                      name="finger-print-outline"
-                      size={20}
-                      color={biometricEnabled ? colors.neon : colors.text.secondary}
-                    />
-                  </View>
-                  <View style={styles.menuText}>
-                    <Text variant="bodySmall" color={colors.text.primary}>Seguridad biométrica</Text>
-                    <Text variant="caption" color={biometricEnabled ? colors.neon : colors.text.secondary}>
-                      {biometricEnabled ? 'Face ID / Huella activado' : 'Protegé el acceso con Face ID o huella'}
-                    </Text>
-                  </View>
-                  <Switch
-                    value={biometricEnabled}
-                    onValueChange={toggleBiometric}
-                    trackColor={{ false: colors.border.default, true: colors.neon + '60' }}
-                    thumbColor={biometricEnabled ? colors.neon : colors.text.tertiary}
-                  />
-                </View>
-              </>
-            )}
+            <MenuItem icon="person-outline" label="Datos personales" onPress={openEditModal} />
             <View style={styles.menuDivider} />
-            <MenuItem
-              icon="lock-closed-outline"
-              label="Privacidad"
-              onPress={() => Alert.alert('Privacidad', 'Tus datos son solo tuyos. No los compartimos ni vendemos.')}
-            />
+            <MenuItem icon="mail-outline" label="Correo y contraseña" onPress={() => Alert.alert('Correo', profile?.email ?? '')} />
             <View style={styles.menuDivider} />
-            <MenuItem
-              icon="help-circle-outline"
-              label="Ayuda y soporte"
-              onPress={() => Alert.alert('Soporte', 'Escribinos a soporte@smartpesos.app')}
-            />
-          </Card>
-        </View>
+            <MenuItem icon="notifications-outline" label="Notificaciones" onPress={() => Alert.alert('Próximamente', 'Gestión de notificaciones en camino.')} />
+            <View style={styles.menuDivider} />
 
-        {/* Automatización */}
-        <View style={styles.section}>
-          <Text variant="label" color={colors.text.secondary} style={styles.sectionTitle}>AUTOMATIZACIÓN</Text>
-          <Card style={styles.menuCard}>
-            <TouchableOpacity style={styles.menuItem} onPress={() => setShowRoundUpModal(true)}>
-              <View style={styles.menuIcon}>
-                <Ionicons name="magnet-outline" size={20} color={roundUp.enabled ? colors.primary : colors.text.secondary} />
+            {/* Plan row */}
+            <TouchableOpacity style={styles.menuItem} onPress={() => router.push('/(app)/plans')}>
+              <View style={[styles.menuIcon, { backgroundColor: colors.primary + '12' }]}>
+                <Ionicons name="star-outline" size={20} color={colors.primary} />
               </View>
               <View style={styles.menuText}>
-                <Text variant="bodySmall" color={colors.text.primary}>Redondeo automático</Text>
-                <Text variant="caption" color={roundUp.enabled ? colors.primary : colors.text.secondary}>
-                  {roundUp.enabled
-                    ? `Activo · al siguiente $${roundUp.roundTo} → ${roundUp.destination === 'fci' ? 'FCI' : 'Ahorro'}`
-                    : 'Acumulá ahorro con cada gasto'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Text variant="bodySmall" color={colors.text.primary}>
+                    {trialActive ? 'Prueba Premium' : plan.name}
+                  </Text>
+                  {trialActive && (
+                    <View style={styles.trialBadge}>
+                      <Text style={styles.trialBadgeText}>
+                        Activo hasta {planExpiresAt ? new Date(planExpiresAt).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
             </TouchableOpacity>
+
+            <View style={styles.menuDivider} />
+            <MenuItem icon="help-circle-outline" label="Centro de ayuda" onPress={() => Alert.alert('Soporte', 'Escribinos a soporte@smartpesos.app')} />
+            <View style={styles.menuDivider} />
+            <MenuItem icon="information-circle-outline" label="Sobre SmartPesos" onPress={() => Alert.alert('SmartPesos', 'v1.0 — Tu asistente financiero argentino.')} />
           </Card>
         </View>
+
+        {/* ── Conectar Gmail ──────────────────────────────────────────── */}
+        {gmailEmail ? (
+          <View style={styles.section}>
+            <Text variant="label" color={colors.text.tertiary} style={styles.sectionTitle}>GMAIL</Text>
+            <Card style={styles.menuCard}>
+              <TouchableOpacity style={styles.menuItem} onPress={disconnectGmail}>
+                <View style={[styles.menuIcon, { width: 36, height: 36, borderRadius: 18, backgroundColor: '#E8F5E9', alignItems: 'center', justifyContent: 'center' }]}>
+                  <Ionicons name="mail-outline" size={20} color={colors.primary} />
+                </View>
+                <View style={styles.menuText}>
+                  <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>Gmail conectado</Text>
+                  <Text variant="caption" color={colors.primary}>{gmailEmail}</Text>
+                </View>
+                <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
+              </TouchableOpacity>
+            </Card>
+          </View>
+        ) : (
+          <View style={styles.section}>
+            <Text variant="label" color={colors.text.tertiary} style={styles.sectionTitle}>GMAIL</Text>
+            <Card style={styles.menuCard}>
+              <MenuItem
+                icon="mail-outline"
+                label="Conectar Gmail"
+                description="Detectá gastos automáticamente desde tu email"
+                onPress={() => router.push('/(app)/gmail-connect' as any)}
+              />
+            </Card>
+          </View>
+        )}
 
         {/* Cerrar sesión + Eliminar cuenta */}
         <Card style={styles.menuCard}>
@@ -834,7 +595,7 @@ const styles = StyleSheet.create({
   profileHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[4],
+    justifyContent: 'space-between',
     paddingVertical: spacing[4],
   },
   avatar: {
@@ -861,6 +622,13 @@ const styles = StyleSheet.create({
   editBtn: { padding: spacing[2] },
   planCard: { padding: spacing[5], gap: spacing[3] },
   planRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  trialBadge: {
+    backgroundColor: colors.primary + '18', borderRadius: 6,
+    paddingHorizontal: spacing[2], paddingVertical: 2,
+  },
+  trialBadgeText: {
+    fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.primary,
+  },
   trialBanner: {
     flexDirection: 'row', alignItems: 'center', gap: spacing[2],
     backgroundColor: colors.neon, borderRadius: 8,
@@ -875,7 +643,7 @@ const styles = StyleSheet.create({
   },
   planUsage: { gap: spacing[2] },
   planUsageInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  planTrack: { height: 5, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
+  planTrack: { height: 6, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
   planFill:  { height: '100%', borderRadius: 3 },
   section: { gap: spacing[3] },
   sectionTitle: {},
@@ -887,7 +655,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[4],
     gap: spacing[4],
   },
-  menuIcon: { width: 24, alignItems: 'center' },
+  menuIcon: { width: 28, alignItems: 'center', justifyContent: 'center' },
   menuText: { flex: 1, gap: spacing[1] },
   menuDivider: {
     height: 1,
@@ -931,6 +699,19 @@ const styles = StyleSheet.create({
     paddingVertical:   spacing[3],
     backgroundColor:   colors.yellow + '12',
   },
+  gmailTrustCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3],
+    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    backgroundColor: colors.primary + '08',
+  },
+  biometricCard: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.border.default,
+    borderRadius: 16, padding: spacing[4],
+  },
+  biometricLeft:  { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  biometricIcon:  { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   emailField: {},
   emailValue: {
     flexDirection: 'row',
@@ -944,6 +725,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border.subtle,
   },
 });
+
 
 const ruStyles = StyleSheet.create({
   row: {

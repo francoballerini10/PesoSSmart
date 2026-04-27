@@ -31,6 +31,9 @@ import { usePlanStore } from '@/store/planStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
 import { InflationThermometer } from '@/components/InflationThermometer';
+import { DecisionHistorySection, buildOpportunities } from '@/components/DecisionHistory';
+import { useFirstVisit } from '@/hooks/useFirstVisit';
+import { FirstVisitSheet } from '@/components/FirstVisitSheet';
 
 import {
   MONTH_NAMES,
@@ -193,7 +196,7 @@ ${patrimonioSection}
 export default function ReportsScreen() {
   const { user, profile } = useAuthStore();
   const { totalThisMonth, totalNecessary, totalDisposable, totalInvestable, estimatedIncome } = useExpensesStore();
-  const { investments, load: loadSavings } = useSavingsStore();
+  const { investments, fetchAll: loadSavings } = useSavingsStore();
   const { effectivePlan, isTrialActive } = usePlanStore();
 
   const now = new Date();
@@ -205,6 +208,10 @@ export default function ReportsScreen() {
   const [isLoading,     setIsLoading]     = useState(false);
   const [inflationRate, setInflationRate] = useState(3.4);
   const [fciRate,       setFciRate]       = useState(3.0);
+  const [pastOppData,   setPastOppData]   = useState<{ monthKey: string; disposable: number; categories: Record<string, number> }[]>([]);
+  const [activeTab, setActiveTab] = useState<'resumen' | 'categorias' | 'inflacion' | 'oportunidades'>('resumen');
+
+  const { isFirstVisit, markVisited } = useFirstVisit('reports');
 
   const isCurrentMonth = month === now.getMonth() + 1 && year === now.getFullYear();
 
@@ -220,7 +227,12 @@ export default function ReportsScreen() {
     if (!user?.id) return;
     setIsLoading(true);
     try {
-      const [mainRes, histRes] = await Promise.all([
+      const oppStart = (() => {
+        const d = new Date(year, month - 4, 1);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+      })();
+
+      const [mainRes, histRes, oppRes] = await Promise.all([
         supabase
           .from('expenses')
           .select('amount, category:expense_categories(id, name_es, color), classification')
@@ -237,6 +249,14 @@ export default function ReportsScreen() {
             const d = new Date(year, month - 4, 1);
             return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
           })())
+          .lt('date', startDate),
+        supabase
+          .from('expenses')
+          .select('amount, date, classification, category:expense_categories(name_es)')
+          .eq('user_id', user.id)
+          .is('deleted_at', null)
+          .eq('classification', 'disposable')
+          .gte('date', oppStart)
           .lt('date', startDate),
       ]);
 
@@ -269,6 +289,16 @@ export default function ReportsScreen() {
         if (exp.classification === 'investable') histMap[key].investable += exp.amount;
       }
       setHistory(Object.values(histMap).sort((a, b) => a.monthKey.localeCompare(b.monthKey)).slice(-3));
+
+      const oppMap: Record<string, { monthKey: string; disposable: number; categories: Record<string, number> }> = {};
+      for (const exp of (oppRes.data ?? []) as any[]) {
+        const mk      = exp.date.slice(0, 7);
+        const catName = exp.category?.name_es ?? 'Prescindibles';
+        if (!oppMap[mk]) oppMap[mk] = { monthKey: mk, disposable: 0, categories: {} };
+        oppMap[mk].disposable += exp.amount;
+        oppMap[mk].categories[catName] = (oppMap[mk].categories[catName] ?? 0) + exp.amount;
+      }
+      setPastOppData(Object.values(oppMap));
     } catch (err) {
       console.error('[Informe] loadData error:', err);
     } finally {
@@ -295,6 +325,12 @@ export default function ReportsScreen() {
 
   const prevMonth = () => { if (month === 1) { setMonth(12); setYear(y => y - 1); } else setMonth(m => m - 1); };
   const nextMonth = () => { if (isCurrentMonth) return; if (month === 12) { setMonth(1); setYear(y => y + 1); } else setMonth(m => m + 1); };
+
+  const displayTotal      = isCurrentMonth ? totalThisMonth  : total;
+  const displayNecessary  = isCurrentMonth ? totalNecessary  : 0;
+  const displayDisposable = isCurrentMonth ? totalDisposable : 0;
+  const displayInvestable = isCurrentMonth ? totalInvestable : 0;
+  const displayIncome     = isCurrentMonth ? estimatedIncome : null;
 
   const [exporting, setExporting] = useState(false);
 
@@ -348,12 +384,6 @@ export default function ReportsScreen() {
     }
   }, [effectivePlan, isTrialActive, investments, month, year, profile, displayTotal, displayNecessary, displayDisposable, displayInvestable, displayIncome, inflationRate, fciRate, rows]);
 
-  const displayTotal      = isCurrentMonth ? totalThisMonth  : total;
-  const displayNecessary  = isCurrentMonth ? totalNecessary  : 0;
-  const displayDisposable = isCurrentMonth ? totalDisposable : 0;
-  const displayInvestable = isCurrentMonth ? totalInvestable : 0;
-  const displayIncome     = isCurrentMonth ? estimatedIncome : null;
-
   const statusData = useMemo(() => computeMonthStatus({
     total: displayTotal, disposable: displayDisposable, estimatedIncome: displayIncome,
   }), [displayTotal, displayDisposable, displayIncome]);
@@ -395,23 +425,48 @@ export default function ReportsScreen() {
     <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
+        {/* ── Header ── */}
         <View style={s.screenHeader}>
-          <Text variant="h4">Informe</Text>
-          <TouchableOpacity
-            style={s.exportBtn}
-            onPress={handleExportPdf}
-            disabled={exporting}
-            activeOpacity={0.8}
-          >
-            {exporting
-              ? <ActivityIndicator size="small" color={colors.bg.primary} />
-              : <Ionicons name="download-outline" size={16} color={colors.bg.primary} />
-            }
-            <Text style={s.exportBtnText}>PDF</Text>
-          </TouchableOpacity>
+          <Text variant="h4">Análisis</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+            <TouchableOpacity onPress={prevMonth} style={{ padding: spacing[1] }}>
+              <Ionicons name="chevron-back" size={20} color={colors.text.primary} />
+            </TouchableOpacity>
+            <Text variant="bodySmall" color={colors.text.secondary}>
+              {MONTH_NAMES[month - 1]} {year}
+            </Text>
+            <TouchableOpacity
+              onPress={nextMonth}
+              disabled={isCurrentMonth}
+              style={{ padding: spacing[1], opacity: isCurrentMonth ? 0.3 : 1 }}
+            >
+              <Ionicons name="chevron-forward" size={20} color={colors.text.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={s.exportBtn} onPress={handleExportPdf} disabled={exporting} activeOpacity={0.8}>
+              {exporting
+                ? <ActivityIndicator size="small" color={colors.bg.primary} />
+                : <Ionicons name="download-outline" size={15} color={colors.bg.primary} />
+              }
+              <Text style={s.exportBtnText}>PDF</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <MonthSelector month={month} year={year} onPrev={prevMonth} onNext={nextMonth} disableNext={isCurrentMonth} />
+        {/* ── Tabs ── */}
+        <View style={s.tabsRow}>
+          {(['resumen', 'categorias', 'inflacion', 'oportunidades'] as const).map(tab => (
+            <TouchableOpacity
+              key={tab}
+              style={[s.tabPill, activeTab === tab && s.tabPillActive]}
+              onPress={() => setActiveTab(tab)}
+              activeOpacity={0.75}
+            >
+              <Text style={[s.tabPillText, activeTab === tab && s.tabPillTextActive]}>
+                {tab === 'resumen' ? 'Resumen' : tab === 'categorias' ? 'Categorías' : tab === 'inflacion' ? 'Inflación' : 'Oportunidades'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
 
         {isLoading ? (
           <View style={s.loading}><ActivityIndicator size="large" color={colors.primary} /></View>
@@ -424,7 +479,7 @@ export default function ReportsScreen() {
               Sin datos para {MONTH_NAMES[month - 1]} {year}
             </Text>
             <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
-              Cargá gastos para ver tu informe, estado del mes y oportunidades de ahorro.
+              Cargá gastos para ver tu análisis, estado del mes y oportunidades de ahorro.
             </Text>
             <TouchableOpacity style={s.emptyBtn} onPress={() => router.push('/(app)/expenses')} activeOpacity={0.8}>
               <Ionicons name="add" size={16} color={colors.white} />
@@ -435,78 +490,147 @@ export default function ReportsScreen() {
           </View>
         ) : (
           <>
-            <MonthStatusBanner data={statusData} />
-            {keyInsight && <KeyInsightCard insight={keyInsight} />}
-            <ResumenCard
-              total={displayTotal} necessary={displayNecessary}
-              disposable={displayDisposable} investable={displayInvestable}
-              estimatedIncome={displayIncome}
-            />
-            <Card style={s.section}>
-              <InflationThermometer userId={user!.id} year={year} month={month} />
-            </Card>
-            <CategoryBreakdown rows={rows} total={total || displayTotal} />
-            <HistoryComparisonCard history={history} comparacion={comparacion} currentTotal={displayTotal} />
-            <DineroRecuperableCard sugerencias={ahorroSugerencias} month={month} year={year} />
-            <PlanProximoMesCard items={planItems} />
-            {objetivo && <ObjetivoCard objetivo={objetivo} />}
-
-            {/* ── Patrimonio vs inflación ───────────────────────────────────── */}
-            {investments.length > 0 && (() => {
-              const totalInvested = investments.reduce((s, inv) => s + inv.amount, 0);
-              const ganancia      = totalInvested * (fciRate / 100);
-              const perdidaInfl   = totalInvested * (inflationRate / 100);
-              const netoPct       = fciRate - inflationRate;
-              const ganó          = netoPct >= 0;
+            {/* ── TAB: Resumen ── */}
+            {activeTab === 'resumen' && (() => {
+              const totalRecuperable = ahorroSugerencias.reduce((s, sg) => s + sg.saving, 0);
+              const othersRow = rows.find(r => r.name.toLowerCase() === 'otros');
+              const othersPct = othersRow && displayTotal > 0 ? othersRow.pct * 100 : 0;
+              const DOT_COLORS = [colors.red, '#F59E0B', colors.accent, colors.primary];
               return (
-                <Card style={s.patrimonioCard}>
-                  <View style={s.patrimonioHeader}>
-                    <Ionicons
-                      name={ganó ? 'trending-up-outline' : 'trending-down-outline'}
-                      size={20}
-                      color={ganó ? colors.neon : colors.red}
-                    />
-                    <Text variant="label" color={colors.text.secondary}>PATRIMONIO VS INFLACIÓN</Text>
+                <>
+                  {/* Card principal — Dinero recuperable */}
+                  <View style={s.investHeroCard}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                      <Text variant="label" color={colors.text.tertiary}>TU POTENCIAL DE INVERSIÓN ESTE MES</Text>
+                      <Ionicons name="information-circle-outline" size={14} color={colors.text.tertiary} />
+                    </View>
+                    <Text style={s.investHeroAmount}>{formatCurrency(totalRecuperable)}</Text>
+                    <Text variant="bodySmall" color={colors.text.secondary}>
+                      Ajustando estos gastos podés invertir esta plata
+                    </Text>
+                    {ahorroSugerencias.slice(0, 4).map((sg, i) => (
+                      <View key={i} style={s.investRow}>
+                        <View style={[s.investDot, { backgroundColor: DOT_COLORS[i % DOT_COLORS.length] }]} />
+                        <Text variant="bodySmall" color={colors.text.secondary} style={{ flex: 1 }}>{sg.text}</Text>
+                        <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold', color: colors.primary }}>
+                          {formatCurrency(sg.saving)}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
-                  <Text variant="h4" color={ganó ? colors.neon : colors.red}>
-                    {ganó ? '+' : ''}{netoPct.toFixed(1)}% real este mes
-                  </Text>
-                  <Text variant="caption" color={colors.text.secondary} style={{ lineHeight: 18 }}>
-                    Tu inversión de {formatCurrency(totalInvested)} rindió ~{formatCurrency(Math.round(ganancia))} ({fciRate.toFixed(1)}%), pero la inflación consumió ~{formatCurrency(Math.round(perdidaInfl))} ({inflationRate.toFixed(1)}%).{' '}
-                    {ganó
-                      ? `Ganaste poder adquisitivo. Tu dinero trabaja.`
-                      : `Perdiste poder adquisitivo. Considerá instrumentos con mayor rendimiento.`}
-                  </Text>
-                  <View style={s.patrimonioRow}>
-                    <View style={s.patrimonioItem}>
-                      <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>RENDIMIENTO</Text>
-                      <Text variant="labelMd" color={colors.neon}>+{formatCurrency(Math.round(ganancia))}</Text>
-                    </View>
-                    <View style={s.patrimonioDivider} />
-                    <View style={s.patrimonioItem}>
-                      <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>INFLACIÓN</Text>
-                      <Text variant="labelMd" color={colors.red}>-{formatCurrency(Math.round(perdidaInfl))}</Text>
-                    </View>
-                    <View style={s.patrimonioDivider} />
-                    <View style={s.patrimonioItem}>
-                      <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>NETO</Text>
-                      <Text variant="labelMd" color={ganó ? colors.neon : colors.red}>
-                        {ganó ? '+' : ''}{formatCurrency(Math.round(ganancia - perdidaInfl))}
+
+                  {/* Alerta "Otros" */}
+                  {othersPct > 15 && (
+                    <View style={s.othersAlert}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                        <Ionicons name="warning-outline" size={18} color='#F59E0B' />
+                        <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold', flex: 1 }}>
+                          Tenés {Math.round(othersPct)}% de gastos en "Otros"
+                        </Text>
+                      </View>
+                      <Text variant="caption" color={colors.text.secondary} style={{ lineHeight: 18 }}>
+                        Supera el 15% recomendado. Recategorizá estos gastos para que la IA te dé mejores recomendaciones.
                       </Text>
+                      <TouchableOpacity onPress={() => router.push('/(app)/expenses' as any)} style={s.othersAlertCta}>
+                        <Text variant="caption" style={{ fontFamily: 'Montserrat_700Bold', color: '#F59E0B' }}>
+                          Recategorizar ahora →
+                        </Text>
+                      </TouchableOpacity>
                     </View>
-                  </View>
-                  <TouchableOpacity style={s.patrimonioBtn} onPress={() => router.push('/(app)/simulator' as any)} activeOpacity={0.85}>
-                    <Text variant="label" color={colors.primary}>Ver simulador →</Text>
-                  </TouchableOpacity>
-                </Card>
+                  )}
+
+                  {/* Termómetro de inflación */}
+                  <InflationThermometer userId={user!.id} year={year} month={month} />
+
+                  <AdvisorCTA context={advisorContext} />
+                </>
               );
             })()}
 
-            <AdvisorCTA context={advisorContext} />
+            {/* ── TAB: Categorías ── */}
+            {activeTab === 'categorias' && (
+              <>
+                <ResumenCard
+                  total={displayTotal} necessary={displayNecessary}
+                  disposable={displayDisposable} investable={displayInvestable}
+                  estimatedIncome={displayIncome}
+                />
+                <CategoryBreakdown rows={rows} total={total || displayTotal} />
+              </>
+            )}
+
+            {/* ── TAB: Inflación ── */}
+            {activeTab === 'inflacion' && (
+              <>
+                <InflationThermometer userId={user!.id} year={year} month={month} />
+                {investments.length > 0 && (() => {
+                  const totalInvested = investments.reduce((s, inv) => s + inv.amount, 0);
+                  const ganancia      = totalInvested * (fciRate / 100);
+                  const perdidaInfl   = totalInvested * (inflationRate / 100);
+                  const netoPct       = fciRate - inflationRate;
+                  const ganó          = netoPct >= 0;
+                  return (
+                    <Card style={s.patrimonioCard}>
+                      <View style={s.patrimonioHeader}>
+                        <Ionicons name={ganó ? 'trending-up-outline' : 'trending-down-outline'} size={20} color={ganó ? colors.neon : colors.red} />
+                        <Text variant="label" color={colors.text.secondary}>PATRIMONIO VS INFLACIÓN</Text>
+                      </View>
+                      <Text variant="h4" color={ganó ? colors.neon : colors.red}>{ganó ? '+' : ''}{netoPct.toFixed(1)}% real este mes</Text>
+                      <Text variant="caption" color={colors.text.secondary} style={{ lineHeight: 18 }}>
+                        Tu inversión de {formatCurrency(totalInvested)} rindió ~{formatCurrency(Math.round(ganancia))} ({fciRate.toFixed(1)}%), pero la inflación consumió ~{formatCurrency(Math.round(perdidaInfl))} ({inflationRate.toFixed(1)}%).
+                      </Text>
+                      <View style={s.patrimonioRow}>
+                        <View style={s.patrimonioItem}>
+                          <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>RENDIMIENTO</Text>
+                          <Text variant="labelMd" color={colors.neon}>+{formatCurrency(Math.round(ganancia))}</Text>
+                        </View>
+                        <View style={s.patrimonioDivider} />
+                        <View style={s.patrimonioItem}>
+                          <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>INFLACIÓN</Text>
+                          <Text variant="labelMd" color={colors.red}>-{formatCurrency(Math.round(perdidaInfl))}</Text>
+                        </View>
+                        <View style={s.patrimonioDivider} />
+                        <View style={s.patrimonioItem}>
+                          <Text variant="caption" color={colors.text.tertiary} style={{ fontSize: 9 }}>NETO</Text>
+                          <Text variant="labelMd" color={ganó ? colors.neon : colors.red}>{ganó ? '+' : ''}{formatCurrency(Math.round(ganancia - perdidaInfl))}</Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity style={s.patrimonioBtn} onPress={() => router.push('/(app)/simulator' as any)} activeOpacity={0.85}>
+                        <Text variant="label" color={colors.primary}>Ver simulador →</Text>
+                      </TouchableOpacity>
+                    </Card>
+                  );
+                })()}
+              </>
+            )}
+
+            {/* ── TAB: Oportunidades ── */}
+            {activeTab === 'oportunidades' && (
+              <>
+                <DecisionHistorySection opportunities={buildOpportunities(pastOppData)} />
+                <HistoryComparisonCard history={history} comparacion={comparacion} currentTotal={displayTotal} />
+                <PlanProximoMesCard items={planItems} />
+                {objetivo && <ObjetivoCard objetivo={objetivo} />}
+                <AdvisorCTA context={advisorContext} />
+              </>
+            )}
           </>
         )}
 
       </ScrollView>
+
+      <FirstVisitSheet
+        visible={isFirstVisit}
+        screenTitle="Tu informe mensual"
+        screenIcon="bar-chart-outline"
+        iconColor={colors.primary}
+        features={[
+          { icon: 'calendar-outline', color: colors.primary, title: 'Navegá mes por mes', body: 'Usá las flechas del selector para revisar cualquier mes anterior y ver cómo evolucionaron tus gastos.' },
+          { icon: 'pie-chart-outline', color: colors.yellow, title: 'Desglose por categoría', body: 'Ves exactamente en qué gastás más y cómo se compara con meses anteriores.' },
+          { icon: 'trending-up-outline', color: colors.neon, title: 'Oportunidades de inversión', body: 'La sección "Oportunidades pasadas" te muestra cuánto podrías haber ganado invirtiendo en lugar de gastar.' },
+        ]}
+        onDismiss={markVisited}
+      />
     </SafeAreaView>
   );
 }
@@ -521,8 +645,53 @@ const s = StyleSheet.create({
   section:      { padding: spacing[5] },
 
   screenHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  exportBtn:     { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.neon, borderRadius: 8, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
-  exportBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: colors.bg.primary },
+  exportBtn:     { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
+  exportBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: colors.white },
+
+  tabsRow:           { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border.subtle, marginHorizontal: -layout.screenPadding, paddingHorizontal: layout.screenPadding },
+  tabPill:           { paddingHorizontal: spacing[3], paddingVertical: spacing[3], borderBottomWidth: 2, borderBottomColor: 'transparent', marginBottom: -1 },
+  tabPillActive:     { borderBottomColor: colors.primary },
+  tabPillText:       { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: colors.text.tertiary },
+  tabPillTextActive: { color: colors.primary, fontFamily: 'Montserrat_600SemiBold' },
+
+  // Resumen tab - investment hero
+  investHeroCard: {
+    backgroundColor: colors.bg.card,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    borderRadius: 16,
+    padding: spacing[4],
+    gap: spacing[3],
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  investHeroAmount: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 34,
+    lineHeight: 40,
+    color: colors.text.primary,
+  },
+  investRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+  },
+  investDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  othersAlert: {
+    backgroundColor: '#FFF8E1',
+    borderWidth: 1,
+    borderColor: '#F59E0B' + '40',
+    borderRadius: 16,
+    padding: spacing[4],
+    gap: spacing[2],
+  },
+  othersAlertCta: { alignSelf: 'flex-start', paddingTop: spacing[1] },
 
   patrimonioCard:    { padding: spacing[5], gap: spacing[4] },
   patrimonioHeader:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
