@@ -245,7 +245,7 @@ function FactorBar({ label, max, value, color }: { label: string; max: number; v
 
 const fbStyles = StyleSheet.create({
   row:   { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  label: { width: 100, fontSize: 11 },
+  label: { minWidth: 100, fontSize: 11 },
   track: { flex: 1, height: 6, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
   fill:  { height: '100%', borderRadius: 3 },
   pts:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 11, minWidth: 20, textAlign: 'right' },
