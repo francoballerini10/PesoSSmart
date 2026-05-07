@@ -122,6 +122,10 @@ export function resolveEffectivePlan(
   if (status === 'trial' && expiresAt) {
     return new Date(expiresAt) > new Date() ? plan : 'free';
   }
+  // Grace period: pago falló pero el usuario mantiene acceso hasta que venza
+  if (status === 'grace' && expiresAt) {
+    return new Date(expiresAt) > new Date() ? plan : 'free';
+  }
   return 'free';
 }
 

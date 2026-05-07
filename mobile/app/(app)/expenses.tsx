@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import Svg, { Circle as SvgCircle } from 'react-native-svg';
+import { ExpensesSkeletonLoader, SmartLoadingState } from '@/components/ui/SkeletonLoader';
+import { useRouter } from 'expo-router';
 import {
   View,
   ScrollView,
@@ -33,26 +35,51 @@ import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/utils/format';
 import type { PaymentMethod, Expense, ExpenseClassification } from '@/types';
 import { PendingTransactions } from '@/components/PendingTransactions';
+import { useFirstVisit } from '@/hooks/useFirstVisit';
+import { FirstVisitSheet } from '@/components/FirstVisitSheet';
+import { useSavingsStore } from '@/store/savingsStore';
 import { InflationThermometer } from '@/components/InflationThermometer';
+import { DecisionHistorySection, buildOpportunities } from '@/components/DecisionHistory';
 import {
-  MONTH_NAMES,
-  PALETTE,
-  type CategoryRow as ReportCategoryRow,
-  type MonthSummary,
-  computeMonthStatus,
-  buildComparacion,
-  buildAhorroSugerencias,
-  buildPlanProximoMes,
-  buildObjetivo,
-  MonthStatusBanner,
-  ResumenCard,
-  CategoryBreakdown,
-  HistoryComparisonCard,
-  DineroRecuperableCard,
-  PlanProximoMesCard,
-  ObjetivoCard,
-  AdvisorCTA,
+  MONTH_NAMES, PALETTE, type CategoryRow, type MonthSummary,
+  buildComparacion, buildAhorroSugerencias, buildPlanProximoMes, buildObjetivo,
+  ResumenCard, CategoryBreakdown, HistoryComparisonCard,
+  PlanProximoMesCard, ObjetivoCard, AdvisorCTA,
 } from '@/components/ReportCards';
+
+const DONUT_R = 34;
+const DONUT_CIRCUMF = 2 * Math.PI * DONUT_R;
+
+function DonutChart({ necessary, disposable, investable, total }: {
+  necessary: number; disposable: number; investable: number; total: number;
+}) {
+  const segs = [
+    { value: necessary,  color: colors.accent },
+    { value: disposable, color: colors.red    },
+    { value: investable, color: colors.neon   },
+  ].filter(s => s.value > 0);
+  let offset = 0;
+  return (
+    <Svg width={84} height={84} viewBox="0 0 84 84">
+      <SvgCircle cx="42" cy="42" r={DONUT_R} fill="none" stroke={colors.border.subtle} strokeWidth={9} />
+      {segs.map((seg, i) => {
+        const len = (seg.value / total) * DONUT_CIRCUMF;
+        const dashArray = `${len} ${DONUT_CIRCUMF - len}`;
+        const dashOffset = -offset;
+        offset += len;
+        return (
+          <SvgCircle
+            key={i} cx="42" cy="42" r={DONUT_R}
+            fill="none" stroke={seg.color} strokeWidth={9}
+            strokeDasharray={dashArray}
+            strokeDashoffset={dashOffset}
+            rotation="-90" origin="42,42"
+          />
+        );
+      })}
+    </Svg>
+  );
+}
 
 const PM_LABELS: Record<string, string> = {
   cash: 'Efectivo', debit: 'Débito', credit: 'Crédito',
@@ -118,7 +145,7 @@ function CategoryBarChart({ rows, total }: {
             {/* Label row */}
             <View style={detStyles.barLabelRow}>
               <View style={[detStyles.barDot, { backgroundColor: row.color }]} />
-              <Text style={detStyles.barName} numberOfLines={1}>{row.name}</Text>
+              <Text style={detStyles.barName} numberOfLines={2} ellipsizeMode="tail">{row.name}</Text>
               <Text style={[detStyles.barPct, { color: row.color }]}>
                 {Math.round(row.pct * 100)}%
               </Text>
@@ -172,7 +199,7 @@ const detStyles = StyleSheet.create({
   barDot:    { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   barName:   { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 13, color: colors.text.primary },
   barPct:    { fontFamily: 'Montserrat_700Bold', fontSize: 12, minWidth: 32, textAlign: 'right' },
-  barAmount: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: colors.text.secondary, minWidth: 72, textAlign: 'right' },
+  barAmount: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: colors.text.secondary, textAlign: 'right', flexShrink: 0 },
   barTrack:  { height: 6, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
   barFill:   { height: '100%', borderRadius: 3 },
 
@@ -253,11 +280,37 @@ const msStyles = StyleSheet.create({
   },
 });
 
+// ─── AnalysisTeaser ────────────────────────────────────────────────────────────
+
+function AnalysisTeaser({ recuperable, onPress }: { recuperable: number; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={teaserS.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={teaserS.iconWrap}>
+        <Ionicons name="analytics-outline" size={22} color="#2E7D32" />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={teaserS.title}>Tu análisis ya está listo</Text>
+        {recuperable > 0 && (
+          <Text style={teaserS.amount}>Encontramos {formatCurrency(recuperable)} para recuperar</Text>
+        )}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color="#757575" />
+    </TouchableOpacity>
+  );
+}
+
+const teaserS = StyleSheet.create({
+  card:     { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#E8F5E9', borderRadius: 16, padding: 14, marginTop: 8, marginBottom: 8 },
+  iconWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#C8E6C9', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  title:    { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#212121' },
+  amount:   { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#2E7D32' },
+});
+
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ExpensesScreen() {
   const router = useRouter();
-  const { tab: tabParam } = useLocalSearchParams<{ tab?: string }>();
+  const { isFirstVisit, markVisited } = useFirstVisit('expenses');
   const { user } = useAuthStore();
   const {
     expenses,
@@ -287,6 +340,7 @@ export default function ExpensesScreen() {
 
   const roundUpStore  = useRoundUpStore();
   const streakStore   = useStreakStore();
+  const { fetchAll: loadSavings } = useSavingsStore();
 
   useEffect(() => {
     roundUpStore.load();
@@ -295,115 +349,6 @@ export default function ExpensesScreen() {
   }, []);
 
   const [showSubscriptions, setShowSubscriptions] = useState(false);
-  const [activeTab, setActiveTab] = useState<'gastos' | 'analisis'>('gastos');
-
-  // Si se navega con ?tab=analisis (p.ej. desde Home), ir directo al tab Análisis
-  useEffect(() => {
-    if (tabParam === 'analisis') setActiveTab('analisis');
-  }, [tabParam]);
-
-  // ── Datos para el tab Análisis ──────────────────────────────────────────────
-  const [analysisHistory, setAnalysisHistory] = useState<MonthSummary[]>([]);
-
-  useEffect(() => {
-    if (activeTab !== 'analisis' || !user?.id) return;
-    const fYear  = filter.year  ?? new Date().getFullYear();
-    const fMonth = filter.month ?? (new Date().getMonth() + 1);
-    const startDate = `${fYear}-${String(fMonth).padStart(2, '0')}-01`;
-    const histStart = (() => {
-      const d = new Date(fYear, fMonth - 4, 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-    })();
-
-    supabase
-      .from('expenses')
-      .select('amount, date, classification')
-      .eq('user_id', user.id)
-      .is('deleted_at', null)
-      .gte('date', histStart)
-      .lt('date', startDate)
-      .then(({ data: rawData }) => {
-        const data = rawData as { amount: number; date: string; classification: string | null }[] | null;
-        const histMap: Record<string, MonthSummary> = {};
-        for (const exp of data ?? []) {
-          const key = exp.date.slice(0, 7);
-          if (!histMap[key]) {
-            const [y, m] = key.split('-').map(Number);
-            histMap[key] = { monthKey: key, label: MONTH_NAMES[m - 1].slice(0, 3), total: 0, disposable: 0, necessary: 0, investable: 0 };
-          }
-          histMap[key].total += exp.amount;
-          if (exp.classification === 'disposable') histMap[key].disposable += exp.amount;
-          if (exp.classification === 'necessary')  histMap[key].necessary  += exp.amount;
-          if (exp.classification === 'investable') histMap[key].investable += exp.amount;
-        }
-        setAnalysisHistory(Object.values(histMap).sort((a, b) => a.monthKey.localeCompare(b.monthKey)).slice(-3));
-      });
-  }, [activeTab, user?.id, filter.month, filter.year]);
-
-  // ─── Filas de categoría en formato ReportCards para el tab Análisis ─────────
-  const analysisRows = useMemo((): ReportCategoryRow[] => {
-    const map: Record<string, ReportCategoryRow> = {};
-    let sum = 0;
-    for (const e of expenses) {
-      const catId = (e as any).category_id ?? 'none';
-      const cat   = (e as any).category;
-      const name  = cat?.name_es
-        ?? (e.classification === 'necessary'  ? 'Necesarios'
-          : e.classification === 'disposable' ? 'Prescindibles'
-          : e.classification === 'investable' ? 'Invertibles'
-          : 'Sin categoría');
-      const color = cat?.color ?? PALETTE[Object.keys(map).length % PALETTE.length];
-      if (!map[catId]) map[catId] = { id: catId, name, color, amount: 0, pct: 0 };
-      map[catId].amount += e.amount;
-      sum += e.amount;
-    }
-    return Object.values(map)
-      .map(r => ({ ...r, pct: sum > 0 ? r.amount / sum : 0 }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [expenses]);
-
-  const analysisStatusData  = useMemo(() => computeMonthStatus({ total: totalThisMonth, disposable: totalDisposable, estimatedIncome }), [totalThisMonth, totalDisposable, estimatedIncome]);
-  const analysisComparacion = useMemo(() => buildComparacion(analysisHistory, totalThisMonth, totalDisposable), [analysisHistory, totalThisMonth, totalDisposable]);
-  const analysisSugerencias = useMemo(() => buildAhorroSugerencias({ rows: analysisRows, disposable: totalDisposable, total: totalThisMonth, estimatedIncome }), [analysisRows, totalDisposable, totalThisMonth, estimatedIncome]);
-  const analysisPlanItems   = useMemo(() => buildPlanProximoMes({ rows: analysisRows, disposable: totalDisposable, total: totalThisMonth, estimatedIncome, history: analysisHistory }), [analysisRows, totalDisposable, totalThisMonth, estimatedIncome, analysisHistory]);
-  const analysisObjetivo    = useMemo(() => buildObjetivo({ disposable: totalDisposable, total: totalThisMonth }), [totalDisposable, totalThisMonth]);
-
-  const analysisAdvisorCtx  = useMemo(() => {
-    const fYear  = filter.year  ?? new Date().getFullYear();
-    const fMonth = filter.month ?? (new Date().getMonth() + 1);
-    const totalSaving = analysisSugerencias.reduce((s, sg) => s + sg.saving, 0);
-    return [
-      `Informe de ${MONTH_NAMES[fMonth - 1]} ${fYear}.`,
-      `Gasté ${formatCurrency(totalThisMonth)}.`,
-      `Estado del mes: ${analysisStatusData.label}.`,
-      totalDisposable > 0 ? `Tengo ${formatCurrency(totalDisposable)} en prescindibles.` : '',
-      estimatedIncome ? `Eso es el ${Math.round((totalThisMonth / estimatedIncome) * 100)}% de mi ingreso.` : '',
-      analysisRows[0] ? `Mi categoría más alta: "${analysisRows[0].name}" (${Math.round(analysisRows[0].pct * 100)}%).` : '',
-      analysisComparacion.vsPrev ? `Cambio vs mes pasado: ${analysisComparacion.vsPrev.changePct > 0 ? '+' : ''}${analysisComparacion.vsPrev.changePct}%.` : '',
-      totalSaving > 0 ? `Podría ahorrar ${formatCurrency(totalSaving)}/mes.` : '',
-      '¿Qué me recomendás hacer el próximo mes?',
-    ].filter(Boolean).join(' ');
-  }, [filter.year, filter.month, totalThisMonth, analysisStatusData, totalDisposable, estimatedIncome, analysisRows, analysisComparacion, analysisSugerencias]);
-
-  // Agrupar gastos del mes actual por categoría para el resumen de detalles
-  const categoryRows = useMemo(() => {
-    const now   = new Date();
-    const ymKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const map: Record<string, { name: string; color: string; icon: string; amount: number }> = {};
-    for (const e of expenses) {
-      if (!e.date.startsWith(ymKey)) continue;
-      const key   = e.category_id ?? '__none__';
-      const name  = e.category?.name_es ?? 'Sin categoría';
-      const color = e.category?.color ?? '#78909c';
-      const icon  = e.category?.icon ?? 'help-circle-outline';
-      if (!map[key]) map[key] = { name, color, icon, amount: 0 };
-      map[key].amount += e.amount;
-    }
-    const total = Object.values(map).reduce((s, r) => s + r.amount, 0);
-    return Object.values(map)
-      .map(r => ({ ...r, pct: total > 0 ? r.amount / total : 0 }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [expenses]);
 
   const expenseSections = useMemo(() => {
     const grouped: Record<string, { date: string; items: Expense[]; total: number }> = {};
@@ -584,6 +529,17 @@ export default function ExpensesScreen() {
   const [inCoupleMode,  setInCoupleMode]  = useState(false);
   const [isShared,      setIsShared]      = useState(false);
 
+  // ── Análisis integrado ──
+  const now = new Date();
+  const [activeView,      setActiveView]      = useState<'gastos' | 'analisis'>('gastos');
+  const [reportTab,       setReportTab]       = useState<'resumen' | 'categorias' | 'inflacion' | 'oportunidades'>('resumen');
+  const [reportRows,      setReportRows]      = useState<CategoryRow[]>([]);
+  const [reportTotal,     setReportTotal]     = useState(0);
+  const [history,         setHistory]         = useState<MonthSummary[]>([]);
+  const [isReportLoading, setIsReportLoading] = useState(false);
+  const [inflationRate,   setInflationRate]   = useState(3.4);
+  const [pastOppData,     setPastOppData]     = useState<{ monthKey: string; disposable: number; categories: Record<string, number> }[]>([]);
+
   useEffect(() => {
     if (user?.id) {
       fetchExpenses(user.id);
@@ -593,6 +549,73 @@ export default function ExpensesScreen() {
       checkCoupleMode(user.id);
     }
   }, [user?.id, filter]);
+
+  const reportMonth    = filter.month ?? (now.getMonth() + 1);
+  const reportYear     = filter.year  ?? now.getFullYear();
+  const isCurrentMonth = reportMonth === now.getMonth() + 1 && reportYear === now.getFullYear();
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const rStart = `${reportYear}-${String(reportMonth).padStart(2, '0')}-01`;
+    const nm = reportMonth === 12 ? 1 : reportMonth + 1;
+    const ny = reportMonth === 12 ? reportYear + 1 : reportYear;
+    const rEnd = `${ny}-${String(nm).padStart(2, '0')}-01`;
+    const oppStart = (() => {
+      const d = new Date(reportYear, reportMonth - 4, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    })();
+    setIsReportLoading(true);
+    Promise.all([
+      supabase.from('expenses').select('amount, category:expense_categories(id, name_es, color), classification').eq('user_id', user.id).is('deleted_at', null).gte('date', rStart).lt('date', rEnd),
+      supabase.from('expenses').select('amount, date, classification').eq('user_id', user.id).is('deleted_at', null).gte('date', oppStart).lt('date', rStart),
+      supabase.from('expenses').select('amount, date, classification, category:expense_categories(name_es)').eq('user_id', user.id).is('deleted_at', null).eq('classification', 'disposable').gte('date', oppStart).lt('date', rStart),
+    ]).then(([mainRes, histRes, oppRes]) => {
+      const map: Record<string, CategoryRow> = {};
+      let sum = 0;
+      for (const exp of mainRes.data ?? []) {
+        const cat = (exp as any).category;
+        const catId = cat?.id ?? 'none';
+        if (!map[catId]) map[catId] = { id: catId, name: cat?.name_es ?? 'Sin categoría', color: cat?.color ?? PALETTE[Object.keys(map).length % PALETTE.length], amount: 0, pct: 0 };
+        map[catId].amount += (exp as any).amount;
+        sum += (exp as any).amount;
+      }
+      setReportTotal(sum);
+      setReportRows(Object.values(map).map(r => ({ ...r, pct: sum > 0 ? r.amount / sum : 0 })).sort((a, b) => b.amount - a.amount));
+
+      const histMap: Record<string, MonthSummary> = {};
+      for (const exp of (histRes.data ?? []) as any[]) {
+        const key = exp.date.slice(0, 7);
+        if (!histMap[key]) {
+          const [y, m] = key.split('-').map(Number);
+          histMap[key] = { monthKey: key, label: MONTH_NAMES[m - 1].slice(0, 3), total: 0, disposable: 0, necessary: 0, investable: 0 };
+        }
+        histMap[key].total += exp.amount;
+        if (exp.classification === 'disposable') histMap[key].disposable += exp.amount;
+        if (exp.classification === 'necessary')  histMap[key].necessary  += exp.amount;
+        if (exp.classification === 'investable') histMap[key].investable += exp.amount;
+      }
+      setHistory(Object.values(histMap).sort((a, b) => a.monthKey.localeCompare(b.monthKey)).slice(-3));
+
+      const oppMap: Record<string, { monthKey: string; disposable: number; categories: Record<string, number> }> = {};
+      for (const exp of (oppRes.data ?? []) as any[]) {
+        const mk = exp.date.slice(0, 7);
+        const catName = exp.category?.name_es ?? 'Prescindibles';
+        if (!oppMap[mk]) oppMap[mk] = { monthKey: mk, disposable: 0, categories: {} };
+        oppMap[mk].disposable += exp.amount;
+        oppMap[mk].categories[catName] = (oppMap[mk].categories[catName] ?? 0) + exp.amount;
+      }
+      setPastOppData(Object.values(oppMap));
+
+      supabase.from('market_rates').select('instrument, rate_monthly').in('instrument', ['inflation', 'fci_mm']).then(({ data }) => {
+        if (!data) return;
+        for (const row of data) {
+          if (row.instrument === 'inflation') setInflationRate(Number(row.rate_monthly));
+        }
+      });
+    }).catch(err => console.error('[Gastos/Análisis]', err)).finally(() => setIsReportLoading(false));
+  }, [user?.id, reportMonth, reportYear]);
+
+  useEffect(() => { if (user?.id) loadSavings(user.id); }, [user?.id]);
 
   const checkCoupleMode = async (userId: string) => {
     const { data } = await (supabase as any)
@@ -737,15 +760,29 @@ export default function ExpensesScreen() {
 
   const classificationFilter = filter.classification;
 
+  const displayTotal      = isCurrentMonth ? totalThisMonth  : reportTotal;
+  const displayNecessary  = isCurrentMonth ? totalNecessary  : 0;
+  const displayDisposable = isCurrentMonth ? totalDisposable : 0;
+  const displayInvestable = isCurrentMonth ? totalInvestable : 0;
+  const displayIncome     = isCurrentMonth ? estimatedIncome : null;
+
+  const ahorroSugerencias = useMemo(() => buildAhorroSugerencias({
+    rows: reportRows, disposable: displayDisposable, total: displayTotal, estimatedIncome: displayIncome,
+  }), [reportRows, displayDisposable, displayTotal, displayIncome]);
+  const totalRecuperable = ahorroSugerencias.reduce((s, sg) => s + sg.saving, 0);
+  const comparacion      = useMemo(() => buildComparacion(history, displayTotal, displayDisposable), [history, displayTotal, displayDisposable]);
+  const planItems        = useMemo(() => buildPlanProximoMes({ rows: reportRows, disposable: displayDisposable, total: displayTotal, estimatedIncome: displayIncome, history }), [reportRows, displayDisposable, displayTotal, displayIncome, history]);
+  const objetivo         = useMemo(() => buildObjetivo({ disposable: displayDisposable, total: displayTotal }), [displayDisposable, displayTotal]);
+
   const listHeader = (
     <>
       {/* Filtros de clasificación */}
       <View style={styles.filters}>
         {[
           { key: null, label: 'Todos' },
-          { key: 'necessary', label: 'Necesario' },
-          { key: 'disposable', label: 'Prescind.' },
-          { key: 'investable', label: 'Invertible' },
+          { key: 'necessary', label: 'Necesarios' },
+          { key: 'disposable', label: 'Prescindibles' },
+          { key: 'investable', label: 'Invertibles' },
         ].map((f) => (
           <TouchableOpacity
             key={f.key ?? 'all'}
@@ -757,11 +794,12 @@ export default function ExpensesScreen() {
           >
             <Text
               variant="label"
-              style={{ fontSize: 9 }}
-              color={classificationFilter === f.key ? colors.neon : colors.text.secondary}
+              style={{ fontSize: 9, letterSpacing: 0 }}
+              color={classificationFilter === f.key ? colors.primary : colors.text.secondary}
               numberOfLines={1}
+              adjustsFontSizeToFit
             >
-              {f.label.toUpperCase()}
+              {f.label}
             </Text>
           </TouchableOpacity>
         ))}
@@ -769,36 +807,39 @@ export default function ExpensesScreen() {
 
       {/* Resumen del mes */}
       <View style={styles.summaryCard}>
-        <Text variant="caption" color={colors.text.tertiary}>TOTAL ESTE MES</Text>
-        <Text variant="numberLg" color={colors.text.primary}>{formatCurrency(totalThisMonth)}</Text>
-
-        {totalThisMonth > 0 && (
-          <>
-            {/* Barra de composición */}
-            <View style={styles.compositionBar}>
-              {totalNecessary  > 0 && <View style={[styles.barSlice, { flex: totalNecessary,  backgroundColor: colors.accent }]} />}
-              {totalDisposable > 0 && <View style={[styles.barSlice, { flex: totalDisposable, backgroundColor: colors.red   }]} />}
-              {totalInvestable > 0 && <View style={[styles.barSlice, { flex: totalInvestable, backgroundColor: colors.neon  }]} />}
-            </View>
-
-            {/* Métricas en fila */}
-            <View style={styles.summaryMetrics}>
-              {[
-                { label: 'Necesario',    amount: totalNecessary,  color: colors.accent },
-                { label: 'Prescindible', amount: totalDisposable, color: colors.red    },
-                { label: 'Invertible',   amount: totalInvestable, color: colors.neon   },
-              ].map((m) => (
-                <View key={m.label} style={styles.metricItem}>
-                  <View style={[styles.metricDot, { backgroundColor: m.color }]} />
-                  <View style={{ gap: 1 }}>
-                    <Text variant="caption" color={colors.text.tertiary}>{m.label}</Text>
-                    <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(m.amount)}</Text>
+        <View style={styles.summaryBody}>
+          {/* Columna izquierda — total */}
+          <View style={{ flex: 1, gap: spacing[1] }}>
+            <Text variant="caption" color={colors.text.tertiary}>TOTAL ESTE MES</Text>
+            <Text style={styles.summaryTotal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>{formatCurrency(totalThisMonth)}</Text>
+          </View>
+          {/* Columna derecha — donut + leyenda */}
+          {totalThisMonth > 0 && (
+            <View style={{ alignItems: 'flex-end', gap: spacing[2] }}>
+              <DonutChart
+                necessary={totalNecessary}
+                disposable={totalDisposable}
+                investable={totalInvestable}
+                total={totalThisMonth}
+              />
+              <View style={{ gap: spacing[1] }}>
+                {[
+                  { label: 'Necesario',    amount: totalNecessary,  color: colors.accent },
+                  { label: 'Prescindible', amount: totalDisposable, color: colors.red    },
+                  { label: 'Invertible',   amount: totalInvestable, color: colors.neon   },
+                ].map((m) => (
+                  <View key={m.label} style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: m.color }]} />
+                    <Text variant="caption" color={colors.text.secondary}>{m.label} </Text>
+                    <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                      {formatCurrency(m.amount)}
+                    </Text>
                   </View>
-                </View>
-              ))}
+                ))}
+              </View>
             </View>
-          </>
-        )}
+          )}
+        </View>
       </View>
 
       {/* Aviso: token de Gmail vencido */}
@@ -819,6 +860,11 @@ export default function ExpensesScreen() {
       )}
 
       {/* Transacciones detectadas en Gmail */}
+      {isPolling && (
+        <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[2] }}>
+          <SmartLoadingState text="Buscando gastos en Gmail..." />
+        </View>
+      )}
       {(pendingTxs.length > 0 || isPolling) && (
         <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[4] }}>
           <PendingTransactions
@@ -884,17 +930,25 @@ export default function ExpensesScreen() {
       {/* ── Top bar fijo ── */}
       <View style={styles.topBar}>
         <View style={styles.topBarRow}>
-          <Text variant="h4">Mis Gastos</Text>
-          <TouchableOpacity
-            style={styles.screenshotBtn}
-            onPress={pickAndProcessScreenshot}
-            disabled={isProcessing}
-          >
-            {isProcessing
-              ? <ActivityIndicator size="small" color={colors.neon} />
-              : <Ionicons name="image-outline" size={20} color={colors.neon} />
-            }
-          </TouchableOpacity>
+          <Text variant="h4">Gastos</Text>
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            <TouchableOpacity
+              style={styles.screenshotBtn}
+              onPress={pickAndProcessScreenshot}
+              disabled={isProcessing}
+            >
+              {isProcessing
+                ? <ActivityIndicator size="small" color={colors.primary} />
+                : <Ionicons name="image-outline" size={20} color={colors.text.secondary} />
+              }
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.screenshotBtn}
+              onPress={() => setFilter({ classification: undefined })}
+            >
+              <Ionicons name="options-outline" size={20} color={colors.text.secondary} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Selector de mes */}
@@ -903,79 +957,24 @@ export default function ExpensesScreen() {
           onSelect={(m, y) => setFilter({ month: m, year: y })}
         />
 
-        {/* Segmented control */}
-        <View style={styles.segTrack}>
-          {([
-            { key: 'gastos',   label: 'Gastos',   icon: 'list-outline'      },
-            { key: 'analisis', label: 'Análisis', icon: 'bar-chart-outline' },
-          ] as const).map(tab => (
+        {/* Segmented control — Gastos / Análisis */}
+        <View style={styles.segControl}>
+          {(['gastos', 'analisis'] as const).map((v) => (
             <TouchableOpacity
-              key={tab.key}
-              style={[styles.segPill, activeTab === tab.key && styles.segPillActive]}
-              onPress={() => setActiveTab(tab.key)}
+              key={v}
+              style={[styles.segBtn, activeView === v && styles.segBtnActive]}
+              onPress={() => setActiveView(v)}
+              activeOpacity={0.8}
             >
-              <Ionicons
-                name={tab.icon}
-                size={13}
-                color={activeTab === tab.key ? colors.text.primary : colors.text.tertiary}
-              />
-              <Text
-                variant="label"
-                style={{ fontSize: 11 }}
-                color={activeTab === tab.key ? colors.text.primary : colors.text.tertiary}
-              >
-                {tab.label.toUpperCase()}
+              <Text style={[styles.segBtnText, activeView === v && styles.segBtnTextActive]}>
+                {v === 'gastos' ? 'Gastos' : 'Análisis'}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
       </View>
 
-      {/* ── Vista Análisis ── */}
-      {activeTab === 'analisis' ? (
-        <ScrollView
-          contentContainerStyle={{ paddingHorizontal: layout.screenPadding, paddingBottom: layout.tabBarHeight + spacing[8], paddingTop: spacing[3], gap: spacing[4] }}
-          showsVerticalScrollIndicator={false}
-        >
-          {totalThisMonth === 0 ? (
-            <View style={{ alignItems: 'center', paddingTop: spacing[10], gap: spacing[4] }}>
-              <Ionicons name="bar-chart-outline" size={48} color={colors.border.default} />
-              <Text variant="body" color={colors.text.tertiary} align="center">
-                Sin gastos este mes para mostrar.
-              </Text>
-            </View>
-          ) : (
-            <>
-              {/* Quick stats row */}
-              <View style={styles.analysisStatsRow}>
-                {[
-                  { label: 'Total', value: formatCurrency(totalThisMonth), color: colors.text.primary },
-                  { label: 'Necesario', value: formatCurrency(totalNecessary), color: colors.accent },
-                  { label: 'Prescindible', value: formatCurrency(totalDisposable), color: colors.red },
-                ].map((s) => (
-                  <View key={s.label} style={styles.analysisStatItem}>
-                    <Text variant="caption" color={colors.text.tertiary}>{s.label}</Text>
-                    <Text variant="labelMd" color={s.color} numberOfLines={1} adjustsFontSizeToFit>{s.value}</Text>
-                  </View>
-                ))}
-              </View>
-              <CategoryBreakdown rows={analysisRows} total={totalThisMonth} />
-              <MonthStatusBanner data={analysisStatusData} />
-              {user?.id && (
-                <View style={{ backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, borderRadius: 16, padding: spacing[5] }}>
-                  <InflationThermometer userId={user.id} year={filter.year ?? new Date().getFullYear()} month={filter.month ?? (new Date().getMonth() + 1)} />
-                </View>
-              )}
-              <HistoryComparisonCard history={analysisHistory} comparacion={analysisComparacion} currentTotal={totalThisMonth} />
-              <DineroRecuperableCard sugerencias={analysisSugerencias} month={filter.month ?? (new Date().getMonth() + 1)} year={filter.year ?? new Date().getFullYear()} />
-              <PlanProximoMesCard items={analysisPlanItems} />
-              {analysisObjetivo && <ObjetivoCard objetivo={analysisObjetivo} />}
-              <AdvisorCTA context={analysisAdvisorCtx} />
-            </>
-          )}
-        </ScrollView>
-      ) : (
-
+      {activeView === 'gastos' ? (
       <SectionList
         style={styles.flatList}
         sections={expenseSections}
@@ -988,22 +987,130 @@ export default function ExpensesScreen() {
         stickySectionHeadersEnabled={false}
         onEndReached={() => { if (user?.id && hasMore) fetchMoreExpenses(user.id); }}
         onEndReachedThreshold={0.3}
-        ListFooterComponent={isLoadingMore ? <ActivityIndicator size="small" color={colors.neon} style={{ paddingVertical: spacing[4] }} /> : null}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Ionicons name="wallet-outline" size={48} color={colors.text.tertiary} />
-            <Text variant="body" color={colors.text.secondary} align="center">
-              {isLoading ? 'Cargando...' : 'No hay gastos este mes.'}
-            </Text>
+        ListFooterComponent={
+          <View>
+            {isLoadingMore && <ActivityIndicator size="small" color={colors.primary} style={{ paddingVertical: spacing[4] }} />}
+            {totalThisMonth > 0 && (
+              <AnalysisTeaser recuperable={totalRecuperable} onPress={() => setActiveView('analisis')} />
+            )}
           </View>
         }
+        ListEmptyComponent={
+          isLoading ? (
+            <View style={{ paddingHorizontal: layout.screenPadding, paddingTop: spacing[2] }}>
+              <ExpensesSkeletonLoader />
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <Ionicons name="wallet-outline" size={48} color={colors.text.tertiary} />
+              <Text variant="body" color={colors.text.secondary} align="center">
+                No hay gastos este mes.
+              </Text>
+            </View>
+          )
+        }
       />
+      ) : (
+        <ScrollView
+          style={styles.flatList}
+          contentContainerStyle={styles.analysisList}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Sub-tabs */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.reportTabsScroll}
+            contentContainerStyle={styles.reportTabsRow}
+          >
+            {(['resumen', 'categorias', 'inflacion', 'oportunidades'] as const).map(tab => (
+              <TouchableOpacity
+                key={tab}
+                style={[styles.reportTabPill, reportTab === tab && styles.reportTabPillActive]}
+                onPress={() => setReportTab(tab)}
+                activeOpacity={0.75}
+              >
+                <Text style={[styles.reportTabText, reportTab === tab && styles.reportTabTextActive]}>
+                  {tab === 'resumen' ? 'Resumen' : tab === 'categorias' ? 'Categorías' : tab === 'inflacion' ? 'Inflación' : 'Oportunidades'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {isReportLoading ? (
+            <View style={{ height: 200, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+          ) : displayTotal === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: spacing[10], gap: spacing[4] }}>
+              <Ionicons name="bar-chart-outline" size={48} color={colors.text.tertiary} />
+              <Text variant="body" color={colors.text.secondary} align="center">
+                Sin datos para analizar este mes.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {reportTab === 'resumen' && (() => {
+                const DOT_COLORS = [colors.red, '#F59E0B', colors.accent, colors.primary];
+                return (
+                  <>
+                    <View style={reportS.heroCard}>
+                      <Text variant="label" color={colors.text.tertiary}>TU POTENCIAL DE INVERSIÓN</Text>
+                      <Text style={reportS.heroAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>{formatCurrency(totalRecuperable)}</Text>
+                      <Text variant="bodySmall" color={colors.text.secondary}>
+                        Ajustando estos gastos podés invertir esta plata
+                      </Text>
+                      {ahorroSugerencias.slice(0, 4).map((sg, i) => (
+                        <View key={i} style={reportS.investRow}>
+                          <View style={[reportS.investDot, { backgroundColor: DOT_COLORS[i % DOT_COLORS.length] }]} />
+                          <Text variant="bodySmall" color={colors.text.secondary} style={{ flex: 1 }}>{sg.text}</Text>
+                          <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold', color: colors.primary }}>
+                            {formatCurrency(sg.saving)}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                    <InflationThermometer userId={user!.id} year={reportYear} month={reportMonth} />
+                    <AdvisorCTA context={`Informe de ${MONTH_NAMES[reportMonth - 1]} ${reportYear}. Gasté ${formatCurrency(displayTotal)}.`} />
+                  </>
+                );
+              })()}
+
+              {reportTab === 'categorias' && (
+                <>
+                  <ResumenCard
+                    total={displayTotal} necessary={displayNecessary}
+                    disposable={displayDisposable} investable={displayInvestable}
+                    estimatedIncome={displayIncome}
+                  />
+                  <CategoryBreakdown rows={reportRows} total={reportTotal || displayTotal} />
+                </>
+              )}
+
+              {reportTab === 'inflacion' && (
+                <InflationThermometer userId={user!.id} year={reportYear} month={reportMonth} />
+              )}
+
+              {reportTab === 'oportunidades' && (
+                <>
+                  <DecisionHistorySection opportunities={buildOpportunities(pastOppData)} />
+                  <HistoryComparisonCard history={history} comparacion={comparacion} currentTotal={displayTotal} />
+                  <PlanProximoMesCard items={planItems} />
+                  {objetivo && <ObjetivoCard objetivo={objetivo} />}
+                  <AdvisorCTA context={`Informe de ${MONTH_NAMES[reportMonth - 1]} ${reportYear}. Gasté ${formatCurrency(displayTotal)}.`} />
+                </>
+              )}
+            </>
+          )}
+        </ScrollView>
       )}
 
       {/* ── FAB agregar gasto ── */}
-      <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)}>
-        <Ionicons name="add" size={26} color={colors.white} />
-      </TouchableOpacity>
+      {activeView === 'gastos' && (
+        <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)}>
+          <Ionicons name="add" size={26} color={colors.white} />
+        </TouchableOpacity>
+      )}
 
       {/* Bottom sheet — Suscripciones detectadas */}
       <Modal
@@ -1460,6 +1567,19 @@ export default function ExpensesScreen() {
           </SafeAreaView>
         </KeyboardAvoidingView>
       </Modal>
+
+      <FirstVisitSheet
+        visible={isFirstVisit}
+        screenTitle="Tus gastos"
+        screenIcon="wallet-outline"
+        iconColor={colors.yellow}
+        features={[
+          { icon: 'add-circle-outline', color: colors.neon, title: 'Cargá gastos fácil y rápido', body: 'Tocá el botón "+" para registrar un gasto manual, o usá la cámara para procesar tickets y resúmenes.' },
+          { icon: 'mail-outline', color: colors.primary, title: 'Gmail detecta automático', body: 'Conectando tu Gmail, escaneamos tus resúmenes y billeteras para detectar gastos sin que tengas que cargarlos.' },
+          { icon: 'pricetag-outline', color: colors.yellow, title: 'Categorizá y clasificá', body: 'Cada gasto puede ser Necesario, Prescindible o Invertible — eso alimenta tu salud financiera y tus reportes.' },
+        ]}
+        onDismiss={markVisited}
+      />
     </SafeAreaView>
   );
 }
@@ -1555,66 +1675,46 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // ── Segmented control ──
-  segTrack: {
-    flexDirection:   'row',
-    backgroundColor: colors.bg.secondary,
-    borderRadius:    12,
-    padding:         3,
-    gap:             3,
-  },
-  segPill: {
-    flex:           1,
-    flexDirection:  'row',
-    alignItems:     'center',
-    justifyContent: 'center',
-    gap:            spacing[1],
-    paddingVertical: spacing[2],
-    borderRadius:   10,
-  },
-  segPillActive: {
-    backgroundColor: colors.bg.primary,
-    shadowColor:     '#000',
-    shadowOffset:    { width: 0, height: 1 },
-    shadowOpacity:   0.08,
-    shadowRadius:    2,
-    elevation:       2,
-  },
-
   // ── FAB ──
   fab: {
     position:        'absolute',
-    bottom:          layout.tabBarHeight + spacing[4],
-    right:           layout.screenPadding,
-    width:           52,
-    height:          52,
-    borderRadius:    26,
-    backgroundColor: colors.neon,
+    bottom:          80,
+    right:           16,
+    width:           56,
+    height:          56,
+    borderRadius:    28,
+    backgroundColor: '#2E7D32',
     alignItems:      'center',
     justifyContent:  'center',
-    shadowColor:     colors.neon,
+    shadowColor:     '#2E7D32',
     shadowOffset:    { width: 0, height: 4 },
-    shadowOpacity:   0.35,
+    shadowOpacity:   0.4,
     shadowRadius:    8,
     elevation:       6,
   },
 
   // ── Summary card ──
+  summaryTotal: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize:   28,
+    lineHeight: 34,
+    color:      colors.text.primary,
+  },
   summaryCard: {
     marginHorizontal: layout.screenPadding,
     marginTop:        spacing[3],
     marginBottom:     spacing[2],
-    padding:          spacing[5],
+    padding:          spacing[4],
     backgroundColor:  colors.bg.card,
     borderWidth:      1,
     borderColor:      colors.border.default,
-    borderRadius:     12,
+    borderRadius:     16,
     gap:              spacing[3],
     shadowColor:      '#000',
-    shadowOffset:     { width: 0, height: 1 },
-    shadowOpacity:    0.05,
-    shadowRadius:     3,
-    elevation:        1,
+    shadowOffset:     { width: 0, height: 2 },
+    shadowOpacity:    0.06,
+    shadowRadius:     8,
+    elevation:        3,
   },
   gmailExpiredBanner: {
     flexDirection:   'row',
@@ -1648,6 +1748,23 @@ const styles = StyleSheet.create({
     height:       8,
     borderRadius: 4,
   },
+  summaryBody: {
+    flexDirection:  'row',
+    alignItems:     'flex-start',
+    justifyContent: 'space-between',
+    gap:            spacing[3],
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           4,
+  },
+  legendDot: {
+    width:        6,
+    height:       6,
+    borderRadius: 3,
+    flexShrink:   0,
+  },
   filters: {
     flexDirection: 'row',
     paddingHorizontal: layout.screenPadding,
@@ -1677,8 +1794,8 @@ const styles = StyleSheet.create({
   filterChip: {
     flex: 1,
     alignItems: 'center',
-    paddingHorizontal: spacing[1],
-    paddingVertical: spacing[1],
+    paddingHorizontal: spacing[2],
+    paddingVertical: 7,
     borderWidth: 1,
     borderColor: colors.border.default,
     borderRadius: 20,
@@ -1728,21 +1845,6 @@ const styles = StyleSheet.create({
   expenseLeft: { flex: 1, gap: spacing[1] },
   expenseMeta: { flexDirection: 'row', alignItems: 'center' },
   expenseRight: { alignItems: 'flex-end', gap: 4 },
-  // Analysis stats row
-  analysisStatsRow: {
-    flexDirection: 'row',
-    gap: spacing[2],
-  },
-  analysisStatItem: {
-    flex: 1,
-    backgroundColor: colors.bg.card,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    borderRadius: 12,
-    padding: spacing[3],
-    gap: spacing[1],
-    alignItems: 'center',
-  },
   // Amount block (add modal)
   amountBlock: {
     backgroundColor: colors.bg.elevated,
@@ -1925,6 +2027,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     borderWidth:     1,
     borderColor:     colors.red,
+    borderRadius:    8,
   },
   sharedToggle: {
     flexDirection:   'row',
@@ -1951,6 +2054,73 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neon,
     borderColor:     colors.neon,
   },
+  // Segmented control — Gastos / Análisis
+  segControl: {
+    flexDirection:   'row',
+    backgroundColor: '#F2F2F2',
+    borderRadius:    16,
+    padding:         4,
+    marginTop:       spacing[2],
+  },
+  segBtn: {
+    flex:            1,
+    alignItems:      'center',
+    paddingVertical: 10,
+    borderRadius:    12,
+  },
+  segBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor:     '#000',
+    shadowOffset:    { width: 0, height: 1 },
+    shadowOpacity:   0.08,
+    shadowRadius:    4,
+    elevation:       2,
+  },
+  segBtnText: {
+    fontFamily: 'Montserrat_500Medium',
+    fontSize:   14,
+    color:      '#757575',
+  },
+  segBtnTextActive: {
+    fontFamily: 'Montserrat_600SemiBold',
+    color:      '#212121',
+  },
+  // Analysis scroll container
+  analysisList: {
+    paddingHorizontal: layout.screenPadding,
+    paddingTop:        spacing[4],
+    paddingBottom:     layout.tabBarHeight + spacing[8],
+    gap:               spacing[4],
+  },
+  // Analysis sub-tabs
+  reportTabsScroll: {
+    marginHorizontal: -layout.screenPadding,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
+  },
+  reportTabsRow: {
+    flexDirection:     'row',
+    paddingHorizontal: layout.screenPadding,
+  },
+  reportTabPill: {
+    paddingHorizontal: spacing[3],
+    paddingVertical:   spacing[3],
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    marginBottom:      -1,
+  },
+  reportTabPillActive: {
+    borderBottomColor: colors.primary,
+  },
+  reportTabText: {
+    fontFamily: 'Montserrat_500Medium',
+    fontSize:   13,
+    color:      colors.text.tertiary,
+  },
+  reportTabTextActive: {
+    fontFamily: 'Montserrat_600SemiBold',
+    color:      colors.primary,
+  },
   // Subscriptions banner (list header)
   subsBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -1971,7 +2141,7 @@ const subsSheetStyles = StyleSheet.create({
     backgroundColor: colors.yellow + '10', borderWidth: 1, borderColor: colors.yellow + '30',
     borderRadius: 14, padding: spacing[4],
   },
-  totalAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: colors.yellow },
+  totalAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: colors.yellow, flexShrink: 1 },
   countBadge: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.yellow + '20',
     alignItems: 'center', justifyContent: 'center',
@@ -2003,4 +2173,35 @@ const subsSheetStyles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
     paddingTop: spacing[2],
   },
+});
+
+const reportS = StyleSheet.create({
+  heroCard: {
+    backgroundColor: colors.bg.card,
+    borderWidth:     1,
+    borderColor:     colors.border.default,
+    borderRadius:    16,
+    padding:         spacing[4],
+    gap:             spacing[3],
+    shadowColor:     '#000',
+    shadowOffset:    { width: 0, height: 2 },
+    shadowOpacity:   0.06,
+    shadowRadius:    8,
+    elevation:       3,
+  },
+  heroAmount: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize:   34,
+    lineHeight: 40,
+    color:      colors.text.primary,
+  },
+  investRow: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    gap:            spacing[3],
+    paddingTop:     spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+  },
+  investDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
 });

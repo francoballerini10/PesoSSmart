@@ -61,23 +61,23 @@ function SavingsEmptyState({ onAddCash, onAddInvestment, onAddGoal }: { onAddCas
     <View style={emptyStyles.container}>
       <SavingsEmptyIllustration />
       <View style={emptyStyles.textBlock}>
-        <Text variant="subtitle" color={colors.text.primary} align="center">Tu capital hoy es $0</Text>
+        <Text variant="subtitle" color={colors.text.primary} align="center">Tu capital quieto pierde contra la inflación</Text>
         <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
-          Cada peso que registres acá empieza a trabajar para vos.
+          Registrá tus ahorros e inversiones para ver cuánto podés generar y cómo protegerlos del peso.
         </Text>
       </View>
       <View style={emptyStyles.buttons}>
         <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.neon }]} onPress={onAddGoal} activeOpacity={0.85}>
-          <Text style={{ fontSize: 18 }}>🎯</Text>
+          <Ionicons name="flag-outline" size={18} color={colors.bg.primary} />
           <Text style={[emptyStyles.btnText, { color: colors.bg.primary }]}>Crear meta de ahorro</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.primary }]} onPress={onAddCash} activeOpacity={0.85}>
           <Ionicons name="cash-outline" size={18} color={colors.white} />
-          <Text style={emptyStyles.btnText}>Agregar efectivo</Text>
+          <Text style={emptyStyles.btnText}>Convertí ahorro en inversión</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.bg.elevated, borderWidth: 1, borderColor: colors.border.default }]} onPress={onAddInvestment} activeOpacity={0.85}>
           <Ionicons name="trending-up-outline" size={18} color={colors.primary} />
-          <Text style={[emptyStyles.btnText, { color: colors.primary }]}>Agregar inversión</Text>
+          <Text style={[emptyStyles.btnText, { color: colors.primary }]}>Simulá cuánto podrías generar</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -142,76 +142,35 @@ function buildInsights(totalARS: number, totalUSDInARS: number, totalInvested: n
 
 // ─── TotalCapitalCard ─────────────────────────────────────────────────────────
 
-function TotalCapitalCard({ totalARS, totalUSDInARS, totalInvested, totalGain, usdRate }: {
+function TotalCapitalCard({ totalARS, totalUSDInARS, totalInvested, totalGain }: {
   totalARS: number; totalUSDInARS: number; totalInvested: number; totalGain: number; usdRate: number | null;
 }) {
   const total = totalARS + totalUSDInARS + totalInvested;
-  const arsW  = total > 0 ? (totalARS / total) * 100 : 0;
-  const usdW  = total > 0 ? (totalUSDInARS / total) * 100 : 0;
-  const invW  = total > 0 ? (totalInvested / total) * 100 : 0;
 
   return (
     <View style={cardStyles.card}>
-      <View style={cardStyles.topRow}>
-        <Text variant="label" color={colors.text.tertiary}>CAPITAL TOTAL</Text>
-        {totalGain > 0 && (
-          <View style={cardStyles.gainBadge}>
-            <Ionicons name="trending-up-outline" size={11} color={colors.neon} />
-            <Text style={cardStyles.gainText}>+{formatCurrency(totalGain)} ganados</Text>
-          </View>
-        )}
-      </View>
-      <Text style={cardStyles.total}>{formatCurrency(total)}</Text>
-
-      {total > 0 && (
-        <View style={cardStyles.stackBar}>
-          {arsW > 0 && <View style={[cardStyles.stackSlice, { flex: arsW, backgroundColor: colors.neon }]} />}
-          {usdW > 0 && <View style={[cardStyles.stackSlice, { flex: usdW, backgroundColor: colors.primary }]} />}
-          {invW > 0 && <View style={[cardStyles.stackSlice, { flex: invW, backgroundColor: '#A78BFA' }]} />}
+      <Text style={cardStyles.label}>Tu capital hoy</Text>
+      <Text style={cardStyles.total} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        {formatCurrency(total)}
+      </Text>
+      <Text style={cardStyles.sublabel}>En pesos argentinos</Text>
+      {totalGain > 0 && (
+        <View style={cardStyles.gainBadge}>
+          <Ionicons name="trending-up-outline" size={11} color={colors.neon} />
+          <Text style={cardStyles.gainText}>+{formatCurrency(totalGain)} ganados</Text>
         </View>
       )}
-
-      <View style={cardStyles.legend}>
-        <View style={cardStyles.legendItem}>
-          <View style={[cardStyles.legendDot, { backgroundColor: colors.neon }]} />
-          <View>
-            <Text variant="caption" color={colors.text.tertiary}>Pesos</Text>
-            <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(totalARS)}</Text>
-          </View>
-        </View>
-        <View style={cardStyles.legendDivider} />
-        <View style={cardStyles.legendItem}>
-          <View style={[cardStyles.legendDot, { backgroundColor: colors.primary }]} />
-          <View>
-            <Text variant="caption" color={colors.text.tertiary}>USD{usdRate ? ` · $${usdRate.toLocaleString('es-AR')}` : ''}</Text>
-            <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(totalUSDInARS)}</Text>
-          </View>
-        </View>
-        <View style={cardStyles.legendDivider} />
-        <View style={cardStyles.legendItem}>
-          <View style={[cardStyles.legendDot, { backgroundColor: '#A78BFA' }]} />
-          <View>
-            <Text variant="caption" color={colors.text.tertiary}>Invertido</Text>
-            <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(totalInvested)}</Text>
-          </View>
-        </View>
-      </View>
     </View>
   );
 }
 
 const cardStyles = StyleSheet.create({
-  card:       { backgroundColor: colors.bg.elevated, borderWidth: 1, borderColor: colors.border.default, borderRadius: 20, padding: spacing[5], gap: spacing[4] },
-  topRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  gainBadge:  { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.neon + '15', borderRadius: 20, paddingHorizontal: spacing[2], paddingVertical: 3 },
-  gainText:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.neon },
-  total:      { fontFamily: 'Montserrat_700Bold', fontSize: 34, color: colors.text.primary, lineHeight: 44 },
-  stackBar:   { flexDirection: 'row', height: 8, borderRadius: 4, overflow: 'hidden', backgroundColor: colors.border.subtle, gap: 2 },
-  stackSlice: { borderRadius: 4 },
-  legend:     { flexDirection: 'row', alignItems: 'center' },
-  legendItem: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  legendDot:  { width: 8, height: 8, borderRadius: 4 },
-  legendDivider: { width: 1, height: 32, backgroundColor: colors.border.subtle, marginHorizontal: spacing[2] },
+  card:      { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 16, padding: spacing[5], gap: spacing[2] },
+  label:     { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#757575' },
+  total:     { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: '#212121', lineHeight: 42 },
+  sublabel:  { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E', marginTop: -4 },
+  gainBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.neon + '15', borderRadius: 20, paddingHorizontal: spacing[2], paddingVertical: 3, alignSelf: 'flex-start', marginTop: spacing[1] },
+  gainText:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.neon },
 });
 
 // ─── GoalCard ─────────────────────────────────────────────────────────────────
@@ -872,11 +831,11 @@ export default function SavingsScreen() {
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <View style={styles.header}>
           <View>
-            <Text variant="h4">Mi Capital</Text>
-            <Text variant="caption" color={colors.text.tertiary}>Ahorros, metas e inversiones</Text>
+            <Text variant="h4">Ahorros</Text>
+            <Text variant="caption" color={colors.text.tertiary}>Capital, metas e inversiones</Text>
           </View>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Ionicons name="close" size={22} color={colors.text.secondary} />
+          <TouchableOpacity onPress={openAddSaving} style={styles.addHeaderBtn}>
+            <Ionicons name="add" size={22} color={colors.primary} />
           </TouchableOpacity>
         </View>
 
@@ -896,13 +855,52 @@ export default function SavingsScreen() {
             />
           )}
 
+          {/* ── Alerta inflación ─────────────────────────────────────────── */}
+          {(totalARS + totalUSDInARS) > 0 && totalInvested === 0 && (() => {
+            const capitalSinInvertir = totalARS + totalUSDInARS;
+            const perdidaProyectada = Math.round(capitalSinInvertir * 0.36);
+            return (
+              <View style={styles.inflationAlert}>
+                <View style={styles.inflationAlertTop}>
+                  <Ionicons name="warning-outline" size={18} color={colors.red} />
+                  <Text variant="bodySmall" color={colors.red} style={{ fontFamily: 'Montserrat_700Bold', flex: 1 }}>
+                    Tu capital está perdiendo contra la inflación
+                  </Text>
+                </View>
+                <Text variant="caption" color={colors.text.secondary} style={{ lineHeight: 18 }}>
+                  Si no invertís, podés perder hasta{' '}
+                  <Text variant="caption" color={colors.red} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                    {formatCurrency(perdidaProyectada)}
+                  </Text>
+                  {' '}en 12 meses.
+                </Text>
+                <TouchableOpacity
+                  style={styles.inflationAlertCta}
+                  onPress={() => router.push('/(app)/simulator' as any)}
+                  activeOpacity={0.8}
+                >
+                  <Text variant="caption" color={colors.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                    Simular rendimiento →
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })()}
+
           {/* ── Metas de ahorro ──────────────────────────────────────────── */}
           <View style={styles.sectionHeader}>
             <Text variant="label" color={colors.text.tertiary}>METAS DE AHORRO</Text>
-            <TouchableOpacity onPress={openAddGoal} style={styles.addBtn}>
-              <Ionicons name="add" size={15} color={colors.neon} />
-              <Text variant="label" color={colors.neon}>Nueva meta</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: spacing[3], alignItems: 'center' }}>
+              {goals.length > 0 && (
+                <Text variant="caption" color={colors.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                  Ver todas →
+                </Text>
+              )}
+              <TouchableOpacity onPress={openAddGoal} style={styles.addBtn}>
+                <Ionicons name="add" size={15} color={colors.neon} />
+                <Text variant="label" color={colors.neon}>Nueva</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {goals.length === 0 ? (
@@ -974,6 +972,43 @@ export default function SavingsScreen() {
             ))
           )}
 
+          {/* ── Opciones para tu dinero ──────────────────────────────────── */}
+          <View style={styles.sectionHeader}>
+            <Text variant="label" color={colors.text.tertiary}>OPCIONES PARA TU DINERO</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.investOptionCard}
+            onPress={() => router.push('/(app)/simulator' as any)}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.investOptionIcon, { backgroundColor: colors.primary + '18' }]}>
+              <Ionicons name="shield-checkmark-outline" size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                Plazo Fijo UVA
+              </Text>
+              <Text variant="caption" color={colors.text.tertiary}>Protegé tu capital de la inflación</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.investOptionCard}
+            onPress={() => router.push('/(app)/simulator' as any)}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.investOptionIcon, { backgroundColor: '#A78BFA18' }]}>
+              <Ionicons name="flash-outline" size={20} color="#A78BFA" />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+                FCI Money Market
+              </Text>
+              <Text variant="caption" color={colors.text.tertiary}>Liquidez diaria y bajo riesgo</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+          </TouchableOpacity>
+
           {/* ── Insights ─────────────────────────────────────────────────── */}
           {insights.map((insight, idx) => (
             <View key={idx} style={styles.insightCard}>
@@ -1044,4 +1079,10 @@ const styles = StyleSheet.create({
   advisorBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.neon, borderRadius: 14, paddingHorizontal: spacing[5], paddingVertical: spacing[4] },
   advisorBtnText: { flex: 1, fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.bg.primary },
   simBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], borderWidth: 1, borderColor: colors.primary + '40', borderRadius: 12, paddingVertical: spacing[4] },
+  addHeaderBtn: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, borderColor: colors.primary + '50', backgroundColor: colors.primary + '10', alignItems: 'center', justifyContent: 'center' },
+  inflationAlert: { backgroundColor: '#FEEBEE', borderWidth: 1, borderColor: '#FFCDD2', borderRadius: 14, padding: spacing[4], gap: spacing[2] },
+  inflationAlertTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  inflationAlertCta: { alignSelf: 'flex-start', paddingVertical: spacing[1] },
+  investOptionCard: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, borderRadius: 14, padding: spacing[4] },
+  investOptionIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 });

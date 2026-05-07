@@ -1,159 +1,114 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   Alert,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
-  Clipboard,
   Share,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/store/authStore';
 import { useFamilyGroupStore } from '@/store/familyGroupStore';
 import { colors, spacing, layout } from '@/theme';
-import { Text, Card, Button } from '@/components/ui';
+import { Text, Card } from '@/components/ui';
+import { useAuthStore } from '@/store/authStore';
+import { usePlanStore } from '@/store/planStore';
+import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
-import type {
-  GroupType,
-  MemberRole,
-  FamilyMember,
-  GroupTransfer,
-} from '@/types/database';
-import {
-  MEMBER_ROLE_LABELS,
-  MEMBER_ROLE_ICONS,
-  ADULT_ROLES,
-  MINOR_ROLES,
-} from '@/types/database';
 
-// ── Tipos locales ─────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-type ActiveTab = 'resumen' | 'miembros' | 'movimientos' | 'config';
+type Role = 'parent' | 'child' | 'partner';
 
-// ── Helpers visuales ──────────────────────────────────────────────────────────
-
-function getRoleColor(role: MemberRole): string {
-  if (ADULT_ROLES.includes(role)) return colors.accent;
-  if (MINOR_ROLES.includes(role)) return colors.primary;
-  return colors.text.secondary;
+interface GroupInfo {
+  id:          string;
+  name:        string;
+  invite_code: string;
+  group_type:  'family' | 'couple';
 }
 
-function getMemberInitials(name: string | null | undefined): string {
-  if (!name) return '?';
-  return name
-    .split(' ')
-    .map(n => n[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
+interface Member {
+  id:            string;
+  user_id:       string;
+  role:          Role;
+  full_name:     string;
+  monthly_total: number;
+  joined_at:     string;
 }
 
-function formatTransferDate(dateStr: string): string {
-  const d = new Date(dateStr + 'T12:00:00');
-  return d.toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
+function currentMonthStart(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  COMPONENTES INTERNOS
-// ══════════════════════════════════════════════════════════════════════════════
+// ─── Sub-componentes ──────────────────────────────────────────────────────────
 
-// ── Avatar de miembro ─────────────────────────────────────────────────────────
-function MemberAvatar({ name, role, size = 44 }: { name: string | null; role: MemberRole; size?: number }) {
-  const color = getRoleColor(role);
-  const bgColor = color + '22';
+function RoleBadge({ role }: { role: Role }) {
+  const config: Record<Role, { label: string; color: string }> = {
+    parent:  { label: 'Admin', color: colors.neon },
+    partner: { label: 'Pareja', color: colors.primary },
+    child:   { label: 'Hijo/a', color: colors.yellow },
+  };
+  const c = config[role];
   return (
-    <View style={[styles.memberAvatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: bgColor }]}>
-      <Text style={{ fontSize: size * 0.38, fontFamily: 'Montserrat_700Bold', color }}>
-        {getMemberInitials(name)}
-      </Text>
+    <View style={[badgeStyles.root, { backgroundColor: c.color + '22', borderColor: c.color + '55' }]}>
+      <Text style={[badgeStyles.text, { color: c.color }]}>{c.label}</Text>
     </View>
   );
 }
+const badgeStyles = StyleSheet.create({
+  root: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1 },
+  text: { fontSize: 9, fontFamily: 'Montserrat_700Bold' },
+});
 
-// ── Badge de rol ──────────────────────────────────────────────────────────────
-function RoleBadge({ role }: { role: MemberRole }) {
-  const color = getRoleColor(role);
-  return (
-    <View style={[styles.roleBadge, { backgroundColor: color + '18', borderColor: color + '40' }]}>
-      <Text style={[styles.roleBadgeText, { color }]}>{MEMBER_ROLE_LABELS[role]}</Text>
-    </View>
-  );
-}
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
-// ── Fila de miembro ───────────────────────────────────────────────────────────
-function MemberRow({
-  member,
-  isMe,
-  isOwner,
-  showTotal,
-}: {
-  member: FamilyMember & { monthlyTotal?: number };
-  isMe: boolean;
-  isOwner: boolean;
-  showTotal: boolean;
-}) {
-  const name = member.profile?.full_name ?? member.profile?.email ?? 'Miembro';
+function FamilyPaywall() {
   return (
-    <View style={styles.memberRow}>
-      <MemberAvatar name={name} role={member.role} />
-      <View style={styles.memberRowInfo}>
-        <View style={styles.memberRowTop}>
-          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-            {name}{isMe ? ' (vos)' : ''}
-          </Text>
-          {isOwner && (
-            <View style={styles.ownerBadge}>
-              <Ionicons name="star" size={10} color={colors.yellow} />
-              <Text style={styles.ownerBadgeText}>Admin</Text>
-            </View>
-          )}
-        </View>
-        <RoleBadge role={member.role} />
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
+        </TouchableOpacity>
+        <Text variant="h4">Grupo Familia</Text>
+        <View style={{ width: 24 }} />
       </View>
-      {showTotal && member.monthlyTotal !== undefined && (
-        <View style={styles.memberRowAmount}>
-          <Text variant="caption" color={colors.text.tertiary}>Este mes</Text>
-          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-            {formatCurrency(member.monthlyTotal)}
-          </Text>
+      <View style={styles.paywallContainer}>
+        <View style={styles.paywallIcon}>
+          <Ionicons name="people-outline" size={48} color={colors.primary} />
         </View>
-      )}
-    </View>
-  );
-}
-
-// ── Fila de transferencia ─────────────────────────────────────────────────────
-function TransferRow({ transfer, myUserId }: { transfer: GroupTransfer; myUserId: string }) {
-  const isSender = transfer.from_user_id === myUserId;
-  const otherName = isSender
-    ? (transfer.to_profile?.full_name ?? 'Destinatario')
-    : (transfer.from_profile?.full_name ?? 'Origen');
-
-  return (
-    <View style={styles.transferRow}>
-      <View style={[styles.transferIcon, { backgroundColor: isSender ? colors.red + '18' : colors.primary + '18' }]}>
-        <Ionicons
-          name={isSender ? 'arrow-up' : 'arrow-down'}
-          size={18}
-          color={isSender ? colors.red : colors.primary}
-        />
-      </View>
-      <View style={styles.transferInfo}>
-        <Text variant="bodySmall" color={colors.text.primary}>
-          {isSender ? `Le pasaste a ${otherName}` : `Recibiste de ${otherName}`}
+        <Text variant="h4" align="center">Coordinación financiera compartida</Text>
+        <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
+          Ideal para parejas, familias o viajes. Dividí gastos sin perder privacidad — vos decidís qué compartir.
         </Text>
-        {transfer.note && (
-          <Text variant="caption" color={colors.text.tertiary}>{transfer.note}</Text>
-        )}
-        <Text variant="caption" color={colors.text.tertiary}>
-          {formatTransferDate(transfer.transfer_date)}
+        <View style={styles.paywallBenefits}>
+          {[
+            { icon: 'people-outline',      text: 'Hasta 6 miembros por grupo' },
+            { icon: 'eye-off-outline',      text: 'Vos decidís qué gastos compartir' },
+            { icon: 'pie-chart-outline',    text: 'Compartí categorías sin mostrar comercios' },
+            { icon: 'notifications-outline',text: 'Alertas de gasto sin vigilancia' },
+          ].map(({ icon, text }) => (
+            <View key={text} style={styles.paywallBenefit}>
+              <Ionicons name={icon as any} size={15} color={colors.primary} />
+              <Text variant="bodySmall" color={colors.text.secondary}>{text}</Text>
+            </View>
+          ))}
+        </View>
+        <TouchableOpacity
+          style={styles.paywallBtn}
+          onPress={() => router.push('/(app)/plans')}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="flash-outline" size={14} color={colors.bg.primary} />
+          <Text variant="label" color={colors.bg.primary}>MEJORAR AHORA</Text>
+        </TouchableOpacity>
+        <Text variant="caption" color={colors.text.tertiary} align="center">
+          Disponible en Plan Pro y Premium
         </Text>
       </View>
       <Text
@@ -1179,370 +1134,494 @@ export default function GrupoFamiliaScreen() {
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  ESTILOS
-// ══════════════════════════════════════════════════════════════════════════════
+export default function GrupoFamiliaScreen() {
+  const { user } = useAuthStore();
+  const { effectivePlan, isTrialActive } = usePlanStore();
+
+  const [group,     setGroup]     = useState<GroupInfo | null>(null);
+  const [members,   setMembers]   = useState<Member[]>([]);
+  const [myRole,    setMyRole]    = useState<Role | null>(null);
+  const [loading,   setLoading]   = useState(true);
+  const [refreshing,setRefreshing]= useState(false);
+
+  const isAdmin   = myRole === 'parent' || myRole === 'partner';
+  const isFree    = effectivePlan === 'free' && !isTrialActive();
+
+  if (isFree) return <FamilyPaywall />;
+
+  // ── Carga ─────────────────────────────────────────────────────────────────
+
+  const load = useCallback(async () => {
+    if (!user?.id) return;
+
+    const { data: myMembership } = await (supabase as any)
+      .from('family_members')
+      .select('group_id, role')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!myMembership) { setLoading(false); return; }
+
+    setMyRole(myMembership.role as Role);
+
+    const [groupRes, membersRes] = await Promise.all([
+      (supabase as any)
+        .from('family_groups')
+        .select('id, name, invite_code, group_type')
+        .eq('id', myMembership.group_id)
+        .single(),
+      (supabase as any)
+        .from('family_members')
+        .select('id, user_id, role, joined_at, profiles:user_id(full_name)')
+        .eq('group_id', myMembership.group_id),
+    ]);
+
+    if (groupRes.data) setGroup(groupRes.data as GroupInfo);
+
+    if (membersRes.data) {
+      const monthStart = currentMonthStart();
+      const memberList: Member[] = await Promise.all(
+        membersRes.data.map(async (m: any) => {
+          const { data: expData } = await (supabase as any)
+            .from('expenses')
+            .select('amount')
+            .eq('user_id', m.user_id)
+            .gte('date', monthStart)
+            .is('deleted_at', null);
+
+          const monthly_total = (expData ?? []).reduce((s: number, e: any) => s + e.amount, 0);
+
+          return {
+            id:            m.id,
+            user_id:       m.user_id,
+            role:          m.role as Role,
+            full_name:     m.profiles?.full_name ?? 'Usuario',
+            monthly_total,
+            joined_at:     m.joined_at,
+          };
+        }),
+      );
+      setMembers(memberList);
+    }
+
+    setLoading(false);
+  }, [user?.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
+
+  // ── Acciones ──────────────────────────────────────────────────────────────
+
+  const shareInvite = async () => {
+    if (!group) return;
+    await Share.share({
+      message: `Unite a mi grupo "${group.name}" en PesoSSmart con el código: ${group.invite_code}\n\nDescargá la app en pesossmart.com.ar`,
+    });
+  };
+
+  const removeMember = (member: Member) => {
+    if (!isAdmin) return;
+    if (member.user_id === user?.id) return;
+
+    Alert.alert(
+      'Eliminar miembro',
+      `¿Querés eliminar a ${member.full_name} del grupo?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            await (supabase as any)
+              .from('family_members')
+              .delete()
+              .eq('id', member.id);
+            setMembers(prev => prev.filter(m => m.id !== member.id));
+          },
+        },
+      ],
+    );
+  };
+
+  const dissolveGroup = () => {
+    if (!isAdmin || !group) return;
+    Alert.alert(
+      'Disolver grupo',
+      'Esta acción eliminará el grupo para todos los miembros. No se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Disolver',
+          style: 'destructive',
+          onPress: async () => {
+            await (supabase as any).from('family_groups').delete().eq('id', group.id);
+            router.replace('/(app)/family');
+          },
+        },
+      ],
+    );
+  };
+
+  const leaveGroup = () => {
+    Alert.alert(
+      'Salir del grupo',
+      '¿Querés salir del grupo familiar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Salir',
+          style: 'destructive',
+          onPress: async () => {
+            await (supabase as any)
+              .from('family_members')
+              .delete()
+              .eq('user_id', user?.id);
+            router.replace('/(app)/family');
+          },
+        },
+      ],
+    );
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
+          </TouchableOpacity>
+          <Text variant="h4">Gestionar grupo</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.centered}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!group) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
+          </TouchableOpacity>
+          <Text variant="h4">Gestionar grupo</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.centered}>
+          <Ionicons name="people-outline" size={48} color={colors.border.default} />
+          <Text variant="body" color={colors.text.secondary} align="center">
+            No pertenecés a ningún grupo.
+          </Text>
+          <TouchableOpacity
+            style={styles.backToFamilyBtn}
+            onPress={() => router.replace('/(app)/family')}
+          >
+            <Text variant="label" color={colors.primary}>Crear o unirme a un grupo</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const groupTotal     = members.reduce((s, m) => s + m.monthly_total, 0);
+  const membersSorted  = [...members].sort((a, b) => b.monthly_total - a.monthly_total);
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top']}>
+
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
+        </TouchableOpacity>
+        <Text variant="h4">Gestionar grupo</Text>
+        <View style={{ width: 24 }} />
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+      >
+
+        {/* ── Info del grupo ─────────────────────────────────────────────── */}
+        <Card style={styles.groupCard}>
+          <View style={styles.groupHeader}>
+            <View style={styles.groupAvatar}>
+              <Text style={{ fontSize: 24 }}>
+                {group.group_type === 'couple' ? '💑' : '👨‍👩‍👧‍👦'}
+              </Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text variant="subtitle">{group.name}</Text>
+              <Text variant="caption" color={colors.text.tertiary}>
+                {group.group_type === 'couple' ? 'Modo pareja' : 'Modo familia'} · {members.length} miembro{members.length !== 1 ? 's' : ''}
+              </Text>
+            </View>
+          </View>
+
+          {/* Código de invitación */}
+          <View style={styles.inviteSection}>
+            <Text variant="caption" color={colors.text.secondary}>CÓDIGO DE INVITACIÓN</Text>
+            <View style={styles.inviteRow}>
+              <Text style={styles.inviteCode}>{group.invite_code}</Text>
+              <TouchableOpacity style={styles.shareBtn} onPress={shareInvite}>
+                <Ionicons name="share-outline" size={18} color={colors.primary} />
+                <Text variant="caption" color={colors.primary}>Compartir</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Card>
+
+        {/* ── Gastos del mes ────────────────────────────────────────────── */}
+        <View style={styles.sectionHeader}>
+          <Text variant="label" color={colors.text.secondary}>GASTOS DEL MES</Text>
+          <Text variant="label" color={colors.neon}>{formatCurrency(groupTotal)}</Text>
+        </View>
+
+        <Card style={styles.membersCard}>
+          {membersSorted.map((member, idx) => {
+            const pct     = groupTotal > 0 ? (member.monthly_total / groupTotal) * 100 : 0;
+            const isMe    = member.user_id === user?.id;
+            const canKick = isAdmin && !isMe;
+
+            return (
+              <View
+                key={member.id}
+                style={[styles.memberRow, idx < membersSorted.length - 1 && styles.memberRowBorder]}
+              >
+                {/* Avatar */}
+                <View style={[styles.memberAvatar, { backgroundColor: colors.primary + '22' }]}>
+                  <Text style={{ fontSize: 16 }}>
+                    {member.role === 'parent' ? '👤' : member.role === 'partner' ? '👤' : '🧒'}
+                  </Text>
+                </View>
+
+                {/* Info */}
+                <View style={{ flex: 1, gap: 4 }}>
+                  <View style={styles.memberNameRow}>
+                    <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                      {member.full_name}{isMe ? ' (vos)' : ''}
+                    </Text>
+                    <RoleBadge role={member.role} />
+                  </View>
+
+                  {/* Barra de progreso */}
+                  <View style={styles.barTrack}>
+                    <View style={[styles.barFill, {
+                      width:           `${pct}%`,
+                      backgroundColor: member.role === 'child' ? colors.yellow : colors.primary,
+                    }]} />
+                  </View>
+
+                  <View style={styles.memberAmountRow}>
+                    <Text variant="caption" color={colors.text.tertiary}>
+                      {pct.toFixed(0)}% del total
+                    </Text>
+                    <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                      {formatCurrency(member.monthly_total)}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Acción de eliminar (solo admin, no a sí mismo) */}
+                {canKick && (
+                  <TouchableOpacity
+                    onPress={() => removeMember(member)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={{ paddingLeft: spacing[2] }}
+                  >
+                    <Ionicons name="person-remove-outline" size={18} color={colors.text.tertiary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })}
+        </Card>
+
+        {/* ── Acciones del grupo ────────────────────────────────────────── */}
+        <View style={styles.sectionHeader}>
+          <Text variant="label" color={colors.text.secondary}>ACCIONES</Text>
+        </View>
+
+        <Card style={styles.actionsCard}>
+
+          {/* Compartir invitación */}
+          <TouchableOpacity style={styles.actionRow} onPress={shareInvite}>
+            <Ionicons name="person-add-outline" size={20} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                Invitar a alguien
+              </Text>
+              <Text variant="caption" color={colors.text.tertiary}>
+                Compartir código {group.invite_code}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+          </TouchableOpacity>
+
+          <View style={styles.actionDivider} />
+
+          {/* Ver gastos del grupo completo (navegar a family) */}
+          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/(app)/family')}>
+            <Ionicons name="bar-chart-outline" size={20} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                Ver panel completo
+              </Text>
+              <Text variant="caption" color={colors.text.tertiary}>
+                Gastos detallados por miembro
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+          </TouchableOpacity>
+
+          <View style={styles.actionDivider} />
+
+          {/* Salir / Disolver */}
+          {isAdmin ? (
+            <TouchableOpacity style={styles.actionRow} onPress={dissolveGroup}>
+              <Ionicons name="trash-outline" size={20} color={colors.red} />
+              <View style={{ flex: 1 }}>
+                <Text variant="bodySmall" color={colors.red} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                  Disolver grupo
+                </Text>
+                <Text variant="caption" color={colors.text.tertiary}>
+                  Elimina el grupo para todos los miembros
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.actionRow} onPress={leaveGroup}>
+              <Ionicons name="exit-outline" size={20} color={colors.red} />
+              <View style={{ flex: 1 }}>
+                <Text variant="bodySmall" color={colors.red} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                  Salir del grupo
+                </Text>
+                <Text variant="caption" color={colors.text.tertiary}>
+                  No podrás ver los gastos compartidos
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+        </Card>
+
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ─── Estilos ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg.primary },
-  centered: { alignItems: 'center', justifyContent: 'center' },
-
+  safe:   { flex: 1, backgroundColor: colors.bg.primary },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: layout.screenPadding, paddingVertical: spacing[4],
+    borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+  },
+  centered: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    gap: spacing[4], paddingHorizontal: layout.screenPadding,
+  },
+  scroll: {
     paddingHorizontal: layout.screenPadding,
-    paddingTop: spacing[4],
-    paddingBottom: spacing[3],
-    gap: spacing[3],
-  },
-
-  // ── Tab bar ────────────────────────────────────────────────────────────────
-  tabBar: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
-    backgroundColor: colors.bg.primary,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing[3],
-    gap: 2,
-  },
-  tabItemActive: {
-    borderBottomWidth: 2,
-    borderBottomColor: colors.primary,
-  },
-  tabLabel: {
-    fontSize: 9,
-    fontFamily: 'Montserrat_500Medium',
-    color: colors.text.tertiary,
-  },
-  tabLabelActive: {
-    color: colors.primary,
-    fontFamily: 'Montserrat_600SemiBold',
-  },
-
-  // ── Tab content ────────────────────────────────────────────────────────────
-  tabContent: {
-    paddingHorizontal: layout.screenPadding,
-    paddingTop: spacing[4],
-    paddingBottom: layout.tabBarHeight + spacing[6],
-  },
-
-  // ── Sin grupo ──────────────────────────────────────────────────────────────
-  noGroupContainer: {
-    paddingHorizontal: layout.screenPadding,
-    paddingBottom: layout.tabBarHeight + spacing[6],
-    gap: spacing[6],
-  },
-  noGroupHero: {
-    alignItems: 'center',
-    paddingTop: spacing[8],
-  },
-  noGroupIconCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: colors.primary + '18',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  noGroupCards: { gap: spacing[3] },
-  noGroupCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.bg.secondary,
-    borderRadius: 12,
-    padding: spacing[4],
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-  },
-  noGroupCardIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  noGroupInfo: {
-    backgroundColor: colors.bg.secondary,
-    borderRadius: 12,
-    padding: spacing[4],
-    gap: spacing[3],
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing[3],
-  },
-
-  // ── Miembro ────────────────────────────────────────────────────────────────
-  memberAvatar: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  memberRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
+    paddingTop: spacing[5], paddingBottom: spacing[12],
     gap: spacing[4],
   },
-  memberRowInfo: { flex: 1, gap: spacing[1] },
-  memberRowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  memberRowAmount: { alignItems: 'flex-end', gap: 2 },
 
-  ownerBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: colors.yellow + '20',
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
+  // Grupo card
+  groupCard:   { padding: spacing[5], gap: spacing[4] },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  groupAvatar: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center', justifyContent: 'center',
   },
-  ownerBadgeText: {
-    fontSize: 9,
-    fontFamily: 'Montserrat_600SemiBold',
-    color: colors.yellow,
+  inviteSection: { gap: spacing[2] },
+  inviteRow: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.bg.elevated,
+    borderRadius: 8, padding: spacing[3],
   },
+  inviteCode: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 22,
+    color: colors.text.primary, letterSpacing: 4,
+  },
+  shareBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
 
-  roleBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 4,
-    borderWidth: 1,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  roleBadgeText: {
-    fontSize: 10,
-    fontFamily: 'Montserrat_500Medium',
+  // Sección
+  sectionHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
 
-  // ── Transferencia ──────────────────────────────────────────────────────────
-  transferRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
-    gap: spacing[3],
+  // Members card
+  membersCard: { padding: 0, overflow: 'hidden' },
+  memberRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    paddingHorizontal: spacing[4], paddingVertical: spacing[4],
   },
-  transferIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
+  memberRowBorder: { borderBottomWidth: 1, borderBottomColor: colors.border.subtle },
+  memberAvatar: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
   },
-  transferInfo: { flex: 1, gap: 2 },
-  transferAmount: {
-    fontFamily: 'Montserrat_700Bold',
-    fontSize: 14,
+  memberNameRow:   { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  memberAmountRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  barTrack: { height: 4, backgroundColor: colors.border.subtle, borderRadius: 2, overflow: 'hidden' },
+  barFill:  { height: '100%', borderRadius: 2 },
+
+  // Actions
+  actionsCard:  { padding: 0, overflow: 'hidden' },
+  actionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    paddingHorizontal: spacing[4], paddingVertical: spacing[4],
+  },
+  actionDivider: { height: 1, backgroundColor: colors.border.subtle },
+
+  // Back to family btn
+  backToFamilyBtn: {
+    paddingVertical: spacing[3], paddingHorizontal: spacing[5],
+    borderWidth: 1, borderColor: colors.primary, borderRadius: 8,
   },
 
-  // ── Resumen ────────────────────────────────────────────────────────────────
-  summaryCard: { gap: spacing[2] },
-  groupTypeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: colors.bg.secondary,
-    borderRadius: 6,
-    paddingHorizontal: spacing[3],
+  // Paywall
+  paywallContainer: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: layout.screenPadding, gap: spacing[5],
+  },
+  paywallIcon: {
+    width: 96, height: 96, borderRadius: 48,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: spacing[2],
+  },
+  paywallBenefits: {
+    width: '100%', gap: spacing[2],
+    backgroundColor: colors.bg.elevated,
+    borderRadius: 12, padding: spacing[4],
+  },
+  paywallBenefit: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
     paddingVertical: spacing[1],
-    marginBottom: spacing[3],
-    gap: 4,
   },
-  memberSummaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: spacing[3],
-  },
-  memberSummaryTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing[1],
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: colors.border.subtle,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: 4,
-    backgroundColor: colors.primary,
-    borderRadius: 2,
-  },
-
-  // ── Config ─────────────────────────────────────────────────────────────────
-  sectionLabel: { marginBottom: spacing[3] },
-  sectionHeader: { marginBottom: spacing[3] },
-  configRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
-  },
-  permissionRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-
-  codeDisplay: {
-    backgroundColor: colors.bg.secondary,
-    borderRadius: 12,
-    padding: spacing[4],
-    alignItems: 'center',
-    marginVertical: spacing[3],
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderStyle: 'dashed',
-  },
-  codeText: {
-    fontFamily: 'Montserrat_800ExtraBold',
-    fontSize: 28,
-    color: colors.text.primary,
-    letterSpacing: 8,
-  },
-  codeActions: {
-    flexDirection: 'row',
-  },
-
-  // ── Modales ────────────────────────────────────────────────────────────────
-  modal: { flex: 1, backgroundColor: colors.bg.primary },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical: spacing[4],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
-  },
-  modalContent: {
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical: spacing[5],
-    paddingBottom: spacing[12],
+  paywallBtn: {
+    backgroundColor: colors.neon,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: spacing[2],
-  },
-
-  // ── Selector de tipo ───────────────────────────────────────────────────────
-  typeSelector: {
-    flexDirection: 'row',
-    gap: spacing[3],
-    marginTop: spacing[3],
-  },
-  typeOption: {
-    flex: 1,
-    alignItems: 'center',
-    padding: spacing[4],
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: colors.border.default,
-    backgroundColor: colors.bg.secondary,
-    gap: 2,
-  },
-  typeOptionActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + '0D',
-  },
-
-  // ── Grid de roles ──────────────────────────────────────────────────────────
-  roleGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing[3],
-    marginTop: spacing[3],
-  },
-  roleOption: {
-    width: '47%',
-    alignItems: 'center',
-    padding: spacing[3],
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: colors.border.default,
-    backgroundColor: colors.bg.secondary,
-  },
-  roleOptionActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + '0D',
-  },
-
-  // ── Input de código ────────────────────────────────────────────────────────
-  codeInput: {
-    textAlign: 'center',
-    fontSize: 22,
-    fontFamily: 'Montserrat_700Bold',
-    letterSpacing: 8,
-  },
-  textInput: {
-    backgroundColor: colors.bg.input,
-    borderRadius: 10,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    fontFamily: 'Montserrat_400Regular',
-    fontSize: 15,
-    color: colors.text.primary,
-    marginTop: spacing[2],
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-  },
-
-  // ── Transfer modal ─────────────────────────────────────────────────────────
-  recipientList: { gap: spacing[2], marginTop: spacing[2] },
-  recipientOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing[3],
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: colors.border.default,
-    backgroundColor: colors.bg.secondary,
-  },
-  recipientOptionActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + '0D',
-  },
-  amountInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: spacing[2],
-  },
-
-  // ── Código modal overlay ───────────────────────────────────────────────────
-  codeModalOverlay: {
-    flex: 1,
-    backgroundColor: colors.overlay,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: layout.screenPadding,
-  },
-  codeModalCard: {
-    width: '100%',
-    gap: spacing[2],
-  },
-
-  // ── Utilidades ─────────────────────────────────────────────────────────────
-  divider: {
-    height: 1,
-    backgroundColor: colors.border.subtle,
-    marginHorizontal: spacing[5],
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: spacing[10],
-    gap: spacing[2],
-  },
-  privacyNote: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: colors.bg.secondary,
-    borderRadius: 8,
-    padding: spacing[3],
-    marginTop: spacing[4],
-    gap: spacing[2],
+    paddingVertical: spacing[4], paddingHorizontal: spacing[8],
+    borderRadius: 8, width: '100%',
   },
 });

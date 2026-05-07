@@ -1,25 +1,5 @@
-/**
- * InflationThermometer
- *
- * Muestra la inflación personal del usuario calculada a partir de sus propios
- * gastos, comparada con el IPC oficial del INDEC.
- *
- * Subcomponentes internos:
- *   InflationGauge        – semicírculo SVG con aguja y marca oficial
- *   ComparisonNumbers     – dos tarjetas: tu inflación vs oficial
- *   InsightCard           – headline + narrative + context note
- *   ImpactSection         – "Qué te está empujando" con barras por categoría
- *   RecommendationSection – "Qué podés hacer" con consejos accionables
- *   DataFooter            – fuente y fecha de los datos INDEC
- */
-
 import React, { useEffect, useState } from 'react';
-import {
-  View,
-  StyleSheet,
-  ActivityIndicator,
-  type ViewStyle,
-} from 'react-native';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import Svg, { Path, Circle, Line, G } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@/theme';
@@ -27,47 +7,45 @@ import { Text } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import {
   calculatePersonalInflation,
-  getInflationLevel,
   type CategoryExpenseInput,
   type CategoryWeight,
   type ConfidenceInfo,
   type ConfidenceLevel,
   type InflationResult,
-  type InflationLevel,
   type Recommendation,
 } from '@/utils/inflationCalc';
 
-// ─── Tokens de nivel ──────────────────────────────────────────────────────────
+// ─── State tokens ─────────────────────────────────────────────────────────────
 
-const LEVEL_COLOR: Record<InflationLevel, string> = {
-  low:    colors.primary,
-  medium: colors.yellow,
-  high:   colors.red,
+const C_GREEN  = '#2E7D32';
+const C_YELLOW = '#F9AB25';
+const C_RED    = '#EF4444';
+
+type GaugeState = 'green' | 'yellow' | 'red';
+
+const STATE_CFG: Record<GaugeState, { bg: string; color: string; msg: string }> = {
+  green:  { bg: '#E8F5E9', color: C_GREEN,  msg: 'Le ganaste a la inflación por' },
+  yellow: { bg: '#FFF8E1', color: C_YELLOW, msg: 'Estuviste alineado con la inflación' },
+  red:    { bg: '#FFEBEE', color: C_RED,    msg: 'Tu inflación está por encima del promedio por' },
 };
 
-const LEVEL_BG: Record<InflationLevel, string> = {
-  low:    colors.primary + '14',
-  medium: colors.yellow  + '16',
-  high:   colors.red     + '12',
-};
-
-const LEVEL_LABEL: Record<InflationLevel, string> = {
-  low:    'BAJO',
-  medium: 'MEDIO',
-  high:   'ALTO',
-};
+function getState(diff: number): GaugeState {
+  if (diff <= 0)   return 'green';
+  if (diff <= 0.5) return 'yellow';
+  return 'red';
+}
 
 // ─── Gauge SVG ────────────────────────────────────────────────────────────────
 
-const GW     = 240;
-const GH     = 140;
-const CX     = GW / 2;
-const CY     = GH - 16;
-const R      = 96;
-const STROKE = 16;
+const GW       = 240;
+const GH       = 140;
+const CX       = GW / 2;
+const CY       = GH - 16;
+const R        = 96;
+const STROKE   = 16;
 const GAUGE_MAX  = 12;
-const GREEN_END  = 3;
-const YELLOW_END = 6;
+const GREEN_END  = 72;   // 40% of 180°
+const YELLOW_END = 108;  // 60% of 180°
 
 function polar(deg: number, r = R) {
   const rad = ((deg - 180) * Math.PI) / 180;
@@ -75,7 +53,6 @@ function polar(deg: number, r = R) {
 }
 
 function arcD(startDeg: number, endDeg: number, r = R): string {
-  // Prevenir arco completo que rompe el SVG path
   const end   = endDeg - startDeg >= 180 ? startDeg + 179.9 : endDeg;
   const s     = polar(startDeg, r);
   const e     = polar(end,      r);
@@ -83,239 +60,63 @@ function arcD(startDeg: number, endDeg: number, r = R): string {
   return `M ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y}`;
 }
 
+// 0 = left (green/low), 180 = right (red/high)
 function valueToDeg(value: number): number {
   const clamped = Math.max(0, Math.min(value, GAUGE_MAX));
-  return 180 - (clamped / GAUGE_MAX) * 180;
+  return (clamped / GAUGE_MAX) * 180;
 }
 
-interface GaugeProps {
-  personal: number;
-  official: number;
-  level: InflationLevel;
-}
+function InflationGauge({ personal, official }: { personal: number; official: number }) {
+  const personalDeg = valueToDeg(personal);
+  const officialDeg = valueToDeg(official);
 
-function InflationGauge({ personal, official, level }: GaugeProps) {
-  const greenEndDeg  = valueToDeg(GREEN_END);
-  const yellowEndDeg = valueToDeg(YELLOW_END);
-  const personalDeg  = valueToDeg(personal);
-  const officialDeg  = valueToDeg(official);
-  const needleColor  = LEVEL_COLOR[level];
+  const needleTip   = polar(personalDeg, R - STROKE / 2 - 2);
+  const needleBase1 = polar(personalDeg + 90, 5);
+  const needleBase2 = polar(personalDeg - 90, 5);
 
-  const needleEnd   = polar(personalDeg, R - STROKE / 2 - 6);
-  const needleBase1 = polar(personalDeg + 90, 9);
-  const needleBase2 = polar(personalDeg - 90, 9);
-  const offP1       = polar(officialDeg, R + 8);
-  const offP2       = polar(officialDeg, R - STROKE - 6);
+  const guideOuter = polar(officialDeg, R + 10);
+  const guideInner = polar(officialDeg, R - STROKE - 6);
 
   return (
     <Svg width={GW} height={GH} viewBox={`0 0 ${GW} ${GH}`}>
-      {/* Track base */}
-      <Path d={arcD(0, 180)} stroke={colors.bg.input} strokeWidth={STROKE} fill="none" strokeLinecap="butt" />
+      {/* Background track */}
+      <Path d={arcD(0, 180)} stroke="#E0E0E0" strokeWidth={STROKE} fill="none" strokeLinecap="round" />
 
-      {/* Zonas de guía (opacidad baja) */}
-      <Path d={arcD(greenEndDeg,  180)}          stroke={colors.primary} strokeWidth={STROKE} fill="none" opacity={0.2} />
-      <Path d={arcD(yellowEndDeg, greenEndDeg)}  stroke={colors.yellow}  strokeWidth={STROKE} fill="none" opacity={0.2} />
-      <Path d={arcD(0,            yellowEndDeg)} stroke={colors.red}     strokeWidth={STROKE} fill="none" opacity={0.2} />
+      {/* Green zone — left 40% */}
+      <Path d={arcD(0, GREEN_END)} stroke={C_GREEN} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
 
-      {/* Arco activo hasta la posición personal */}
-      {personalDeg < 180 && (
-        <Path d={arcD(personalDeg, 180)} stroke={needleColor} strokeWidth={STROKE} fill="none" opacity={0.9} />
-      )}
+      {/* Yellow zone — center 20% */}
+      <Path d={arcD(GREEN_END, YELLOW_END)} stroke={C_YELLOW} strokeWidth={STROKE} fill="none" strokeLinecap="butt" />
 
-      {/* Marca oficial punteada */}
+      {/* Red zone — right 40% */}
+      <Path d={arcD(YELLOW_END, 180)} stroke={C_RED} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
+
+      {/* Official INDEC dashed marker */}
       <Line
-        x1={offP1.x} y1={offP1.y}
-        x2={offP2.x} y2={offP2.y}
-        stroke={colors.text.secondary}
-        strokeWidth={2}
-        strokeDasharray="4,3"
+        x1={guideOuter.x} y1={guideOuter.y}
+        x2={guideInner.x} y2={guideInner.y}
+        stroke="#BDBDBD"
+        strokeWidth={1}
+        strokeDasharray="3,3"
       />
 
-      {/* Aguja */}
+      {/* Needle */}
       <G>
         <Path
-          d={`M ${needleBase1.x} ${needleBase1.y} L ${needleEnd.x} ${needleEnd.y} L ${needleBase2.x} ${needleBase2.y} Z`}
-          fill={needleColor}
+          d={`M ${needleBase1.x} ${needleBase1.y} L ${needleTip.x} ${needleTip.y} L ${needleBase2.x} ${needleBase2.y} Z`}
+          fill="#212121"
         />
-        <Circle cx={CX} cy={CY} r={9} fill={needleColor} />
-        <Circle cx={CX} cy={CY} r={4} fill={colors.bg.card} />
+        <Circle cx={CX} cy={CY} r={8} fill="#212121" />
+        <Circle cx={CX} cy={CY} r={4} fill="white" />
       </G>
     </Svg>
   );
 }
 
-// ─── ComparisonNumbers ────────────────────────────────────────────────────────
-
-function ComparisonNumbers({
-  personal,
-  official,
-  level,
-}: {
-  personal: number;
-  official: number;
-  level: InflationLevel;
-}) {
-  const levelColor = LEVEL_COLOR[level];
-  const levelBg    = LEVEL_BG[level];
-
-  return (
-    <View style={cmpStyles.row}>
-      {/* Tu inflación */}
-      <View style={[cmpStyles.card, { backgroundColor: levelBg, borderColor: levelColor + '30' }]}>
-        <View style={cmpStyles.levelRow}>
-          <View style={[cmpStyles.levelDot, { backgroundColor: levelColor }]} />
-          <Text variant="caption" color={levelColor}>TU INFLACIÓN · {LEVEL_LABEL[level]}</Text>
-        </View>
-        <Text style={[cmpStyles.bigNum, { color: levelColor }]}>
-          {personal.toFixed(1)}%
-        </Text>
-        <Text variant="caption" color={colors.text.secondary}>este mes</Text>
-      </View>
-
-      <Text variant="caption" color={colors.text.tertiary} style={cmpStyles.vs}>vs</Text>
-
-      {/* Oficial */}
-      <View style={[cmpStyles.card, cmpStyles.officialCard]}>
-        <Text variant="caption" color={colors.text.tertiary}>OFICIAL · INDEC</Text>
-        <Text style={[cmpStyles.bigNum, { color: colors.text.secondary, fontSize: 28 }]}>
-          {official.toFixed(1)}%
-        </Text>
-        <Text variant="caption" color={colors.text.tertiary}>promedio país</Text>
-      </View>
-    </View>
-  );
-}
-
-const cmpStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-  },
-  card: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing[4],
-    paddingHorizontal: spacing[2],
-    borderRadius: 12,
-    borderWidth: 1,
-    gap: 3,
-  },
-  officialCard: {
-    backgroundColor: colors.bg.elevated,
-    borderColor:     colors.border.subtle,
-  },
-  levelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  levelDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  bigNum: {
-    fontSize: 34,
-    fontFamily: 'Montserrat_700Bold',
-    lineHeight: 40,
-  },
-  vs: {
-    paddingHorizontal: spacing[1],
-  },
-});
-
-// ─── Leyenda del gauge ────────────────────────────────────────────────────────
-
-function GaugeLegend() {
-  return (
-    <View style={lgStyles.row}>
-      {([
-        { color: colors.primary, label: 'Bajo' },
-        { color: colors.yellow,  label: 'Medio' },
-        { color: colors.red,     label: 'Alto' },
-      ] as const).map(({ color, label }) => (
-        <View key={label} style={lgStyles.item}>
-          <View style={[lgStyles.dot, { backgroundColor: color }]} />
-          <Text variant="caption" color={colors.text.tertiary}>{label}</Text>
-        </View>
-      ))}
-      <View style={lgStyles.item}>
-        <View style={lgStyles.dash} />
-        <Text variant="caption" color={colors.text.tertiary}>Oficial</Text>
-      </View>
-    </View>
-  );
-}
-
-const lgStyles = StyleSheet.create({
-  row:  { flexDirection: 'row', gap: spacing[4], justifyContent: 'center' },
-  item: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  dot:  { width: 8, height: 8, borderRadius: 4 },
-  dash: { width: 14, height: 2, backgroundColor: colors.text.secondary, borderRadius: 1 },
-});
-
-// ─── InsightCard ──────────────────────────────────────────────────────────────
-
-function InsightCard({
-  headline,
-  narrative,
-  contextNote,
-  level,
-}: {
-  headline: string;
-  narrative: string;
-  contextNote: string | null;
-  level: InflationLevel;
-}) {
-  const levelColor = LEVEL_COLOR[level];
-  const levelBg    = LEVEL_BG[level];
-
-  return (
-    <View style={[insStyles.box, { backgroundColor: levelBg, borderLeftColor: levelColor }]}>
-      <Text
-        variant="bodySmall"
-        color={levelColor}
-        style={{ fontFamily: 'Montserrat_600SemiBold', marginBottom: spacing[1] }}
-      >
-        {headline}
-      </Text>
-      <Text variant="bodySmall" color={colors.text.primary} style={{ lineHeight: 20 }}>
-        {narrative}
-      </Text>
-      {contextNote ? (
-        <Text
-          variant="caption"
-          color={colors.text.secondary}
-          style={{ marginTop: spacing[2], lineHeight: 18 }}
-        >
-          {contextNote}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-const insStyles = StyleSheet.create({
-  box: {
-    borderLeftWidth: 3,
-    borderRadius:    10,
-    paddingHorizontal: spacing[4],
-    paddingVertical:   spacing[4],
-  },
-});
-
 // ─── ImpactRow ────────────────────────────────────────────────────────────────
 
-function ImpactRow({
-  cw,
-  isTop,
-}: {
-  cw: CategoryWeight;
-  isTop: boolean;
-}) {
+function ImpactRow({ cw, isTop }: { cw: CategoryWeight; isTop: boolean }) {
   const weightPct = Math.round(Math.max(0, Math.min(cw.weight * 100, 100)));
-
   return (
     <View style={irStyles.row}>
       <View style={[irStyles.dot, { backgroundColor: cw.categoryColor }]} />
@@ -325,6 +126,8 @@ function ImpactRow({
             variant="bodySmall"
             color={colors.text.primary}
             numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
             style={[{ flex: 1 }, isTop && { fontFamily: 'Montserrat_600SemiBold' }]}
           >
             {cw.categoryNameEs}
@@ -334,15 +137,7 @@ function ImpactRow({
           </Text>
         </View>
         <View style={irStyles.track}>
-          <View
-            style={[
-              irStyles.fill,
-              {
-                width:           `${weightPct}%`,
-                backgroundColor: cw.categoryColor,
-              },
-            ]}
-          />
+          <View style={[irStyles.fill, { width: `${weightPct}%`, backgroundColor: cw.categoryColor }]} />
         </View>
         <Text variant="caption" color={colors.text.tertiary}>
           {weightPct}% de tus gastos este mes
@@ -365,41 +160,15 @@ const irStyles = StyleSheet.create({
 function ImpactSection({ categoryWeights }: { categoryWeights: CategoryWeight[] }) {
   const visible = categoryWeights.slice(0, 5);
   if (visible.length === 0) return null;
-
   return (
     <View style={secStyles.section}>
       <View style={secStyles.header}>
         <Ionicons name="flame-outline" size={14} color={colors.text.secondary} />
-        <Text variant="label" color={colors.text.secondary}>QUÉ TE ESTÁ EMPUJANDO</Text>
+        <Text variant="label" color={colors.text.secondary}>¿QUÉ IMPULSÓ TU INFLACIÓN?</Text>
       </View>
       <View style={secStyles.list}>
         {visible.map((cw, i) => (
           <ImpactRow key={cw.categoryNameEs} cw={cw} isTop={i === 0} />
-        ))}
-      </View>
-    </View>
-  );
-}
-
-// ─── RecommendationSection ───────────────────────────────────────────────────
-
-function RecommendationSection({ recommendations }: { recommendations: Recommendation[] }) {
-  if (recommendations.length === 0) return null;
-
-  return (
-    <View style={secStyles.section}>
-      <View style={secStyles.header}>
-        <Ionicons name="bulb-outline" size={14} color={colors.text.secondary} />
-        <Text variant="label" color={colors.text.secondary}>QUÉ PODÉS HACER</Text>
-      </View>
-      <View style={secStyles.list}>
-        {recommendations.map((rec, i) => (
-          <View key={i} style={recStyles.item}>
-            <View style={recStyles.bullet} />
-            <Text variant="bodySmall" color={colors.text.primary} style={{ flex: 1, lineHeight: 20 }}>
-              {rec.text}
-            </Text>
-          </View>
         ))}
       </View>
     </View>
@@ -412,9 +181,34 @@ const secStyles = StyleSheet.create({
   list:    { gap: spacing[4] },
 });
 
+// ─── RecommendationSection ────────────────────────────────────────────────────
+
+function RecommendationSection({ recommendations }: { recommendations: Recommendation[] }) {
+  if (recommendations.length === 0) return null;
+  return (
+    <View style={recStyles.consejo}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Ionicons name="bulb-outline" size={16} color="#F59E0B" />
+        <Text variant="label" color="#F59E0B">CONSEJO</Text>
+      </View>
+      {recommendations.slice(0, 1).map((rec, i) => (
+        <Text key={i} variant="bodySmall" color={colors.text.primary} style={{ lineHeight: 20 }}>
+          {rec.text}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 const recStyles = StyleSheet.create({
-  item:   { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
-  bullet: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.text.tertiary, marginTop: 7, flexShrink: 0 },
+  consejo: {
+    backgroundColor: '#FFF8E1',
+    borderRadius: 12,
+    padding: spacing[4],
+    gap: spacing[2],
+    borderWidth: 1,
+    borderColor: '#F59E0B40',
+  },
 });
 
 // ─── ConfidenceBadge ──────────────────────────────────────────────────────────
@@ -465,16 +259,12 @@ function DataFooter({ indecEntry, usedFallback }: { indecEntry: InflationResult[
 
 const ftStyles = StyleSheet.create({
   row: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[1],
-    paddingTop:    spacing[2],
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
+    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+    paddingTop: spacing[2], borderTopWidth: 1, borderTopColor: colors.border.subtle,
   },
 });
 
-// ─── Componente principal ─────────────────────────────────────────────────────
+// ─── Main component ───────────────────────────────────────────────────────────
 
 interface InflationThermometerProps {
   userId: string;
@@ -506,17 +296,12 @@ export function InflationThermometer({ userId, year, month }: InflationThermomet
 
       if (error || !data) { setResult(null); return; }
 
-      // Agrupar por categoría sumando montos
       const grouped: Record<string, CategoryExpenseInput> = {};
       for (const row of data) {
         const cat = (row as any).expense_categories;
         const key = cat?.name_es ?? 'Otros';
         if (!grouped[key]) {
-          grouped[key] = {
-            categoryNameEs: key,
-            categoryColor:  cat?.color ?? '#888888',
-            amount:         0,
-          };
+          grouped[key] = { categoryNameEs: key, categoryColor: cat?.color ?? '#888888', amount: 0 };
         }
         grouped[key].amount += row.amount ?? 0;
       }
@@ -530,12 +315,10 @@ export function InflationThermometer({ userId, year, month }: InflationThermomet
     }
   };
 
-  // ── Estados vacíos ────────────────────────────────────────────────────────
-
   if (loading) {
     return (
       <View style={s.centered}>
-        <ActivityIndicator size="small" color={colors.primary} />
+        <ActivityIndicator size="small" color={C_GREEN} />
         <Text variant="caption" color={colors.text.tertiary} style={{ marginTop: spacing[2] }}>
           Calculando tu inflación personal...
         </Text>
@@ -557,63 +340,89 @@ export function InflationThermometer({ userId, year, month }: InflationThermomet
     );
   }
 
-  const level = getInflationLevel(result.personalInflation, result.officialInflation);
+  const diff  = result.personalInflation - result.officialInflation;
+  const state = getState(diff);
+  const cfg   = STATE_CFG[state];
 
   return (
-    <View style={s.container}>
-      <Text variant="label" color={colors.text.tertiary}>🌡️  TERMÓMETRO DEL MES</Text>
+    <View style={s.wrap}>
+      {/* Gauge card */}
+      <View style={[gcS.card, { backgroundColor: cfg.bg }]}>
+        <Text style={gcS.title}>Inflación personal vs. oficial</Text>
 
-      <ComparisonNumbers
-        personal={result.personalInflation}
-        official={result.officialInflation}
-        level={level}
-      />
+        <View style={gcS.gaugeWrap}>
+          <InflationGauge
+            personal={result.personalInflation}
+            official={result.officialInflation}
+          />
+        </View>
 
-      <View style={s.gaugeBlock}>
-        <InflationGauge
-          personal={result.personalInflation}
-          official={result.officialInflation}
-          level={level}
-        />
-        <GaugeLegend />
+        <Text style={[gcS.message, { color: cfg.color }]}>{cfg.msg}</Text>
+        <Text style={[gcS.mainValue, { color: cfg.color }]}>
+          {Math.abs(diff).toFixed(1).replace('.', ',')}%
+        </Text>
+
+        <View style={gcS.compRow}>
+          <Text variant="caption" color="#757575">{'Tu inflación: '}</Text>
+          <Text variant="caption" color="#212121" style={{ fontFamily: 'Montserrat_700Bold' }}>
+            {result.personalInflation.toFixed(1).replace('.', ',')}%
+          </Text>
+          <Text variant="caption" color="#757575">{'   |   INDEC: '}</Text>
+          <Text variant="caption" color="#212121" style={{ fontFamily: 'Montserrat_700Bold' }}>
+            {result.officialInflation.toFixed(1).replace('.', ',')}%
+          </Text>
+        </View>
       </View>
 
-      <InsightCard
-        headline={result.insights.headline}
-        narrative={result.insights.narrative}
-        contextNote={result.insights.contextNote}
-        level={level}
-      />
-
       <ImpactSection categoryWeights={result.categoryWeights} />
-
       <RecommendationSection recommendations={result.recommendations} />
-
       <ConfidenceBadge confidence={result.confidence} />
-
-      <DataFooter
-        indecEntry={result.indecEntry}
-        usedFallback={result.usedFallbackMonth}
-      />
+      <DataFooter indecEntry={result.indecEntry} usedFallback={result.usedFallbackMonth} />
     </View>
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const gcS = StyleSheet.create({
+  card: {
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+  },
+  title: {
+    fontFamily: 'Montserrat_600SemiBold',
+    fontSize: 14,
+    color: '#212121',
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+  },
+  gaugeWrap: {
+    alignItems: 'center',
+  },
+  message: {
+    fontFamily: 'Montserrat_500Medium',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  mainValue: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 28,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  compRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    marginTop: 12,
+  },
+});
+
 const s = StyleSheet.create({
-  container: {
-    gap: spacing[5],
-  },
-  centered: {
-    alignItems:     'center',
-    paddingVertical: spacing[8],
-  },
-  noData: {
-    alignItems:     'center',
-    paddingVertical: spacing[8],
-    paddingHorizontal: spacing[4],
-  },
-  gaugeBlock: {
-    alignItems:   'center',
-    marginVertical: -spacing[2],
-  },
+  wrap:     { gap: spacing[4] },
+  centered: { alignItems: 'center', paddingVertical: spacing[8] },
+  noData:   { alignItems: 'center', paddingVertical: spacing[8], paddingHorizontal: spacing[4] },
 });

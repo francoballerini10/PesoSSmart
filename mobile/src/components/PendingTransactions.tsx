@@ -304,16 +304,23 @@ export function PendingTransactions({ transactions, userId, isPolling, categorie
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Ionicons name="flash-outline" size={14} color={colors.neon} />
-          <Text variant="label" color={colors.neon}>DETECTADOS Y REGISTRADOS</Text>
+          <Ionicons name="mail-outline" size={14} color={colors.neon} />
+          <Text variant="label" color={colors.neon}>GASTOS DETECTADOS DE GMAIL</Text>
         </View>
         <View style={styles.headerRight}>
-          {isPolling && <ActivityIndicator size="small" color={colors.text.tertiary} />}
-          {filtered.length > 0 && (
-            <Text variant="caption" color={colors.text.tertiary}>
-              {filtered.length} nuevo{filtered.length > 1 ? 's' : ''}
-            </Text>
-          )}
+          {isPolling
+            ? (
+              <View style={styles.pollingRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text variant="caption" color={colors.text.tertiary}>Analizando correos...</Text>
+              </View>
+            )
+            : filtered.length > 0 && (
+              <Text variant="caption" color={colors.text.tertiary}>
+                {filtered.length} nuevo{filtered.length > 1 ? 's' : ''} para revisar
+              </Text>
+            )
+          }
         </View>
       </View>
 
@@ -474,4 +481,5 @@ const styles = StyleSheet.create({
   ctaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
 
   showMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], paddingVertical: spacing[2] },
+  pollingRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
 });

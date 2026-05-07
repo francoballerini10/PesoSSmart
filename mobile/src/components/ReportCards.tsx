@@ -375,7 +375,7 @@ export function ResumenCard({ total, necessary, disposable, investable, estimate
 const resStyles = StyleSheet.create({
   card:          { padding: spacing[5], gap: spacing[3] },
   incomeRow:     { gap: spacing[1] },
-  progressTrack: { height: 5, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
+  progressTrack: { height: 6, backgroundColor: colors.border.subtle, borderRadius: 3, overflow: 'hidden' },
   progressFill:  { height: '100%', borderRadius: 3 },
   breakdown:     { flexDirection: 'row', gap: spacing[4], flexWrap: 'wrap' },
   breakdownItem: { gap: 2 },
@@ -402,13 +402,13 @@ export function CategoryBreakdown({ rows, total }: { rows: CategoryRow[]; total:
           <View key={i} style={cbStyles.barRow}>
             <View style={cbStyles.barMeta}>
               <View style={[cbStyles.dot, { backgroundColor: row.color }]} />
-              <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }} numberOfLines={1}>
+              <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }} numberOfLines={2} ellipsizeMode="tail">
                 {row.name}
               </Text>
-              <Text variant="caption" color={row.color} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+              <Text variant="caption" color={row.color} style={{ fontFamily: 'Montserrat_600SemiBold', flexShrink: 0 }}>
                 {Math.round(row.pct * 100)}%
               </Text>
-              <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_500Medium', minWidth: 72, textAlign: 'right' }}>
+              <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_500Medium', textAlign: 'right', flexShrink: 0 }}>
                 {formatCurrency(row.amount)}
               </Text>
             </View>
@@ -537,9 +537,11 @@ export function DineroRecuperableCard({ sugerencias, month, year }: {
       </View>
 
       <View style={drStyles.headline}>
-        <Text variant="caption" color={colors.text.secondary}>Podrías haber ahorrado</Text>
-        <Text style={drStyles.amount}>{formatCurrency(totalSaving)}</Text>
-        <Text variant="caption" color={colors.text.tertiary}>este mes</Text>
+        <Text variant="caption" color={colors.text.secondary}>Tu potencial de inversión este mes</Text>
+        <Text style={drStyles.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{formatCurrency(totalSaving)}</Text>
+        <Text variant="caption" color={colors.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+          Podés recuperar hasta este monto
+        </Text>
       </View>
 
       {sugerencias.map((sg, i) => (
@@ -574,10 +576,10 @@ export function DineroRecuperableCard({ sugerencias, month, year }: {
         onPress={() => router.push({ pathname: '/(app)/advisor', params: { initialContext: investContext } } as any)}
       >
         <Ionicons name="trending-up-outline" size={16} color={colors.white} />
-        <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.white }}>
+        <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.white, flex: 1 }}>
           ¿En qué invierto y cuánto genero?
         </Text>
-        <Ionicons name="arrow-forward" size={14} color={colors.white} style={{ marginLeft: 'auto' }} />
+        <Ionicons name="arrow-forward" size={14} color={colors.white} />
       </TouchableOpacity>
     </Card>
   );
@@ -586,7 +588,7 @@ const drStyles = StyleSheet.create({
   card:        { padding: spacing[5], gap: spacing[3] },
   header:      { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   headline:    { alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.border.subtle, gap: 2 },
-  amount:      { fontSize: 30, fontFamily: 'Montserrat_700Bold', color: colors.text.primary, lineHeight: 40 },
+  amount:      { fontSize: 38, fontFamily: 'Montserrat_800ExtraBold', color: colors.primary, lineHeight: 48 },
   row:         { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
   iconBox:     { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.primary + '15', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   projRow:     { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bg.elevated, borderRadius: 10, padding: spacing[3] },

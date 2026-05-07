@@ -32,12 +32,14 @@ interface PlanState {
   msgLimit:         number | null;
 
   // Acciones
-  load:              (userId: string) => Promise<void>;
-  incrementUsage:    (userId: string) => Promise<void>;
-  canSendMessage:    () => boolean;
-  remainingMessages: () => number | null;
-  isTrialActive:     () => boolean;
-  daysLeftInTrial:   () => number | null;
+  load:                    (userId: string) => Promise<void>;
+  incrementUsage:          (userId: string) => Promise<void>;
+  canSendMessage:          () => boolean;
+  remainingMessages:       () => number | null;
+  isTrialActive:           () => boolean;
+  daysLeftInTrial:         () => number | null;
+  subscribeToRealtime:     (userId: string, onUpgrade: () => void) => void;
+  unsubscribeFromRealtime: () => void;
 }
 
 function currentMonth(): string {
@@ -156,5 +158,48 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const { isTrialActive, planExpiresAt } = get();
     if (!isTrialActive()) return null;
     return trialDaysLeft(planExpiresAt);
+  },
+
+  // ── Realtime: escucha cambios en profiles para detectar upgrade de plan ────
+  subscribeToRealtime: (userId, onUpgrade) => {
+    const prevPlan = get().effectivePlan;
+
+    supabase
+      .channel(`plan_realtime_${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event:  'UPDATE',
+          schema: 'public',
+          table:  'profiles',
+          filter: `id=eq.${userId}`,
+        },
+        async (payload: any) => {
+          const newStatus  = payload.new?.subscription_status ?? 'inactive';
+          const newPlan    = (payload.new?.subscription_plan ?? 'free') as PlanId;
+          const expiresAt  = payload.new?.plan_expires_at ?? null;
+          const effective  = computeEffective(newPlan, newStatus, expiresAt);
+
+          set({
+            rawPlan:            newPlan,
+            subscriptionStatus: newStatus,
+            planExpiresAt:      expiresAt,
+            trialUsed:          payload.new?.trial_used       ?? false,
+            trialStartedAt:     payload.new?.trial_started_at ?? null,
+            effectivePlan:      effective,
+            msgLimit:           PLAN_MSG_LIMITS[effective],
+          });
+
+          // Notificar solo cuando el plan mejora
+          const upgraded = (prevPlan === 'free' || prevPlan === 'pro') &&
+            (effective === 'pro' || effective === 'premium');
+          if (upgraded) onUpgrade();
+        },
+      )
+      .subscribe();
+  },
+
+  unsubscribeFromRealtime: () => {
+    supabase.removeAllChannels();
   },
 }));

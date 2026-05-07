@@ -171,13 +171,13 @@ export function HealthScoreCard({ score, prevScore, input }: Props) {
   // Factores para tips
   const tips: string[] = [];
   if (input.totalThisMonth > 0 && input.totalDisposable / input.totalThisMonth > 0.25) {
-    tips.push('Reducir prescindibles sube tu score hasta +10 pts.');
+    tips.push('Tu mayor fuga son los prescindibles — reducirlos sube tu score hasta +10 pts.');
   }
   if (input.totalInvested === 0) {
-    tips.push('Empezar a invertir (FCI MM) suma 15 pts inmediato.');
+    tips.push('Convertí tu ahorro en inversión (FCI MM) y sumá 15 pts inmediato.');
   }
   if (input.weekStreak === 0) {
-    tips.push('Cerrar una semana bajo presupuesto suma 4 pts.');
+    tips.push('Cerrá esta semana bajo presupuesto y arrancá tu racha (+4 pts).');
   }
 
   return (

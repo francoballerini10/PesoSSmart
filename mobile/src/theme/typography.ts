@@ -92,52 +92,51 @@ export const textVariants = {
   // Subtítulos
   subtitle: {
     fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.xl,
+    fontSize: fontSizes.xl,            // 20px
     lineHeight: fontSizes.xl * lineHeights.normal,
   },
-  // Cuerpo principal
+  // Cuerpo principal — 14px mockup spec
   body: {
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.md,
-    lineHeight: fontSizes.md * lineHeights.relaxed,
+    fontSize: fontSizes.base,          // 14px
+    lineHeight: fontSizes.base * lineHeights.relaxed,
   },
   bodySmall: {
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.base,
+    fontSize: fontSizes.base,          // 14px
     lineHeight: fontSizes.base * lineHeights.relaxed,
   },
-  // Labels y badges
+  // Labels — 12px uppercase — mockup caption spec
   label: {
     fontFamily: fontFamilies.bodySemiBold,
-    fontSize: fontSizes.sm,
+    fontSize: fontSizes.sm,            // 12px
     lineHeight: fontSizes.sm * lineHeights.normal,
-    letterSpacing: letterSpacings.wider,
+    letterSpacing: letterSpacings.wide,
     textTransform: 'uppercase' as const,
   },
   labelMd: {
     fontFamily: fontFamilies.bodySemiBold,
-    fontSize: fontSizes.base,
+    fontSize: fontSizes.base,          // 14px
     lineHeight: fontSizes.base * lineHeights.normal,
-    letterSpacing: letterSpacings.wide,
   },
-  // Números/valores financieros
+  // Números — 28px mockup spec
   number: {
     fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes['2xl'],
-    lineHeight: fontSizes['2xl'] * lineHeights.tight,
+    fontSize: fontSizes['3xl'],        // 28px
+    lineHeight: fontSizes['3xl'] * lineHeights.tight,
     letterSpacing: letterSpacings.tight,
   },
   numberLg: {
     fontFamily: fontFamilies.heading,
-    fontSize: fontSizes['4xl'],
+    fontSize: fontSizes['4xl'],        // 32px
     lineHeight: fontSizes['4xl'] * lineHeights.tight,
     letterSpacing: letterSpacings.tighter,
   },
-  // Caption
+  // Caption — 12px — mockup spec
   caption: {
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.xs,
-    lineHeight: fontSizes.xs * lineHeights.relaxed,
+    fontSize: fontSizes.sm,            // 12px
+    lineHeight: fontSizes.sm * lineHeights.relaxed,
   },
   // Botones
   button: {
