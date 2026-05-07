@@ -1215,7 +1215,7 @@ const carouselStyles = StyleSheet.create({
   dotActive: { width: 20, height: 6, borderRadius: 3, backgroundColor: colors.primary },
 });
 
-// ─── GmailPendingBanner ───────────────────────────────────────────────────────
+// ─── UnconfirmedExpensesBanner ────────────────────────────────────────────────
 
 function GmailPendingBanner({ count, onPress }: { count: number; onPress: () => void }) {
   if (count === 0) return null;
@@ -1223,21 +1223,21 @@ function GmailPendingBanner({ count, onPress }: { count: number; onPress: () => 
     <TouchableOpacity style={gpStyles.card} onPress={onPress} activeOpacity={0.85}>
       <View style={gpStyles.left}>
         <View style={gpStyles.iconWrap}>
-          <Ionicons name="mail-outline" size={18} color={colors.neon} />
+          <Ionicons name="time-outline" size={20} color="#F57F17" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text variant="label" color={colors.neon} style={{ fontSize: 11 }}>
-            GMAIL DETECTÓ {count} GASTO{count > 1 ? 'S' : ''}
+          <Text style={gpStyles.title}>
+            Tenés {count} gasto{count > 1 ? 's' : ''} sin confirmar
           </Text>
-          <Text variant="caption" color={colors.text.secondary} numberOfLines={1}>
-            Revisá y confirmá en tu sección de gastos
+          <Text style={gpStyles.sub}>
+            SmartPesos los encontró para vos. Decidí cómo registrarlos.
           </Text>
         </View>
       </View>
-      <View style={gpStyles.badge}>
-        <Text style={gpStyles.badgeText}>{count}</Text>
+      <View style={gpStyles.cta}>
+        <Text style={gpStyles.ctaText}>Revisar</Text>
+        <Ionicons name="chevron-forward" size={14} color="#F57F17" />
       </View>
-      <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
     </TouchableOpacity>
   );
 }
@@ -1245,15 +1245,17 @@ function GmailPendingBanner({ count, onPress }: { count: number; onPress: () => 
 const gpStyles = StyleSheet.create({
   card: {
     flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.neon + '0A',
-    borderWidth: 1, borderColor: colors.neon + '35',
-    borderLeftWidth: 3, borderLeftColor: colors.neon,
+    backgroundColor: '#FFF8E1',
+    borderWidth: 1, borderColor: '#FFE082',
+    borderLeftWidth: 3, borderLeftColor: '#F9A825',
     borderRadius: 14, padding: spacing[4],
   },
-  left:     { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  iconWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.neon + '15', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  badge:    { backgroundColor: colors.neon, borderRadius: 10, minWidth: 22, height: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[1] },
-  badgeText:{ fontFamily: 'Montserrat_700Bold', fontSize: 11, color: colors.bg.primary },
+  left:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  iconWrap:{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFF9C4', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  title:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#212121', marginBottom: 2 },
+  sub:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#757575', lineHeight: 15 },
+  cta:     { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0 },
+  ctaText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#F57F17' },
 });
 
 // ─── CompactWidgetsRow ────────────────────────────────────────────────────────
@@ -1816,6 +1818,9 @@ export default function HomeScreen() {
   const [gmailConnected, setGmailConnected] = useState(false);
   const [showQuickStart, setShowQuickStart] = useState(false);
   const [pendingCount,   setPendingCount]   = useState(0);
+  const [mpConnected,    setMpConnected]    = useState(false);
+  const [mpSyncing,      setMpSyncing]      = useState(false);
+  const [mpSyncMsg,      setMpSyncMsg]      = useState<string | null>(null);
   const [inflationData,  setInflationData]  = useState<{ personal: number; official: number } | null>(null);
 
   const { isFirstVisit, markVisited } = useFirstVisit('home');
@@ -1852,9 +1857,17 @@ export default function HomeScreen() {
         .then(({ data }: { data: { id: string } | null }) => setGmailConnected(!!data));
 
       (supabase as any)
+        .from('mp_connections')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle()
+        .then(({ data }: { data: { id: string } | null }) => setMpConnected(!!data));
+
+      (supabase as any)
         .from('pending_transactions')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', user.id)
+        .eq('status', 'pending')
         .then(({ count }: { count: number | null }) => setPendingCount(count ?? 0));
     }
 
@@ -1999,6 +2012,52 @@ export default function HomeScreen() {
     setShowQuickStart(false);
   }, []);
 
+  const syncMpQuick = useCallback(async () => {
+    if (!user?.id || mpSyncing) return;
+    setMpSyncing(true);
+    setMpSyncMsg(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const res = await fetch(
+        `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/mp-poll`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ force_sync: true }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timeout);
+      if (res.ok) {
+        const json = await res.json();
+        const found = (json.new_found ?? 0) as number;
+        setMpSyncMsg(found > 0 ? `+${found}` : '✓');
+        if (found > 0) {
+          // Refresh pending count (gastos van a pendientes, no a expenses directamente)
+          (supabase as any)
+            .from('pending_transactions')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', user.id)
+            .eq('status', 'pending')
+            .then(({ count }: { count: number | null }) => setPendingCount(count ?? 0));
+        }
+      } else {
+        setMpSyncMsg('!');
+      }
+    } catch {
+      setMpSyncMsg('!');
+    } finally {
+      setMpSyncing(false);
+      setTimeout(() => setMpSyncMsg(null), 3000);
+    }
+  }, [user?.id, mpSyncing, fetchExpenses]);
+
   // ── Health Score ────────────────────────────────────────────────────────────
   const totalInvested   = investments.reduce((sum, inv) => sum + inv.amount, 0);
   const investmentTypes = new Set(investments.map(inv => inv.instrument_type)).size;
@@ -2068,9 +2127,26 @@ export default function HomeScreen() {
               <Text style={styles.eyeSub}>Este es tu resumen de hoy</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/profile')}>
-            <Ionicons name="notifications-outline" size={22} color="#212121" />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            {mpConnected && (
+              <TouchableOpacity
+                style={styles.syncBtn}
+                activeOpacity={0.7}
+                onPress={syncMpQuick}
+                disabled={mpSyncing}
+              >
+                {mpSyncing
+                  ? <ActivityIndicator size="small" color={colors.neon} />
+                  : mpSyncMsg
+                    ? <Text style={styles.syncMsg}>{mpSyncMsg}</Text>
+                    : <Ionicons name="sync-outline" size={20} color={colors.neon} />
+                }
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/profile')}>
+              <Ionicons name="notifications-outline" size={22} color="#212121" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* ── Skeleton while loading ──────────────────────────────────────────── */}
@@ -2235,6 +2311,8 @@ const styles = StyleSheet.create({
   eyeLabel:     { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#7C3AED' },
   eyeSub:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#757575' },
   bellBtn:      { padding: spacing[2] },
+  syncBtn:      { padding: spacing[2], alignItems: 'center', justifyContent: 'center', minWidth: 32 },
+  syncMsg:      { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.neon },
   insightBtn:  { padding: spacing[1], position: 'relative' },
   insightBadge: {
     position: 'absolute', top: 0, right: 0,

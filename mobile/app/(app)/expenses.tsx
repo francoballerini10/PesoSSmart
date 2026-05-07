@@ -527,6 +527,17 @@ export default function ExpensesScreen() {
   const [isPolling,         setIsPolling]         = useState(false);
   const [gmailTokenExpired, setGmailTokenExpired] = useState(false);
   const [inCoupleMode,  setInCoupleMode]  = useState(false);
+
+  const loadPendingTxs = async () => {
+    if (!user?.id) return;
+    const { data } = await (supabase as any)
+      .from('pending_transactions')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('status', 'pending')
+      .order('transaction_date', { ascending: false });
+    setPendingTxs(data ?? []);
+  };
   const [isShared,      setIsShared]      = useState(false);
 
   // ── Análisis integrado ──
@@ -545,6 +556,7 @@ export default function ExpensesScreen() {
       fetchExpenses(user.id);
       fetchCategories();
       fetchSubscriptionsAndProjection(user.id);
+      loadPendingTxs();
       pollGmail();
       checkCoupleMode(user.id);
     }
@@ -647,7 +659,30 @@ export default function ExpensesScreen() {
       console.log('[pollGmail] Sesión refrescada OK, reintentando...');
       await pollGmailWithToken(refreshed.session.access_token);
     }
+    // Correr mp-poll en paralelo (silencioso, sin bloquear el spinner de Gmail)
+    pollMp().catch(err => console.warn('[pollMp] background error:', err));
+
     setIsPolling(false);
+  };
+
+  const pollMp = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) return;
+      const res = await fetch(
+        `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/mp-poll`,
+        { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } },
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.new_found > 0) {
+        console.log('[pollMp] Nuevos pendientes MP:', data.new_found);
+        loadPendingTxs();
+      }
+    } catch (err) {
+      console.warn('[pollMp] error:', err);
+    }
   };
 
   const pollGmailWithToken = async (token: string): Promise<number | undefined> => {
@@ -676,8 +711,8 @@ export default function ExpensesScreen() {
         return;
       }
       setGmailTokenExpired(false);
-      console.log('[pollGmail] gmail_connected:', data?.gmail_connected, '| new_found:', data?.new_found, '| pending:', data?.pending?.length ?? 0);
-      setPendingTxs(data?.pending ?? []);
+      console.log('[pollGmail] gmail_connected:', data?.gmail_connected, '| new_found:', data?.new_found);
+      loadPendingTxs();
     } catch (e) {
       console.log('[pollGmail] fetch error:', e);
     }
@@ -873,8 +908,8 @@ export default function ExpensesScreen() {
             isPolling={isPolling}
             categories={categories}
             onConfirmed={() => {
-              pollGmail();
-              fetchExpenses(user!.id);
+              loadPendingTxs();
+              if (user?.id) fetchExpenses(user.id);
             }}
           />
         </View>

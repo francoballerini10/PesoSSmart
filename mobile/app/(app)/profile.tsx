@@ -9,8 +9,12 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import * as LocalAuth from 'expo-local-authentication';
+import * as WebBrowser from 'expo-web-browser';
+import * as ExpoLinking from 'expo-linking';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -97,9 +101,30 @@ export default function ProfileScreen() {
   const [showRoundUpModal, setShowRoundUpModal] = useState(false);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
-  const [gmailEmail,   setGmailEmail]   = useState<string | null>(null);
+  const [gmailEmail,    setGmailEmail]    = useState<string | null>(null);
+  const [mpEmail,       setMpEmail]       = useState<string | null>(null);
+  const [mpConnecting,  setMpConnecting]  = useState(false);
+  const [mpSyncing,     setMpSyncing]     = useState(false);
+  const [mpLastSync,    setMpLastSync]    = useState<Date | null>(null);
+  const [mpSyncCount,   setMpSyncCount]   = useState(0);
+  const [mpSyncStatus,  setMpSyncStatus]  = useState<'ok' | 'token_expired' | 'never' | 'error'>('never');
 
-  // Cargar estado de Gmail al entrar
+  const loadMpStatus = async () => {
+    if (!user?.id) return;
+    const { data } = await (supabase as any)
+      .from('mp_connections')
+      .select('mp_email, mp_user_id, last_checked_at, last_sync_count, last_sync_status')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (data) {
+      setMpEmail(data.mp_email ?? data.mp_user_id);
+      setMpLastSync(data.last_checked_at ? new Date(data.last_checked_at) : null);
+      setMpSyncCount(data.last_sync_count ?? 0);
+      setMpSyncStatus(data.last_sync_status ?? 'never');
+    }
+  };
+
+  // Cargar estado de Gmail y MP al entrar
   useEffect(() => {
     if (!user?.id) return;
     (supabase as any)
@@ -108,10 +133,9 @@ export default function ProfileScreen() {
       .eq('user_id', user.id)
       .maybeSingle()
       .then(({ data }: { data: { gmail_email: string } | null }) => {
-        if (data) {
-          setGmailEmail(data.gmail_email);
-        }
+        if (data) setGmailEmail(data.gmail_email);
       });
+    loadMpStatus();
   }, [user?.id]);
 
   // ── Biometría ──────────────────────────────────────────────────────────────
@@ -185,6 +209,126 @@ export default function ProfileScreen() {
         },
       },
     ]);
+  };
+
+  const connectMp = async () => {
+    if (!user?.id) return;
+    setMpConnecting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        Alert.alert('Sesión expirada', 'Cerrá sesión y volvé a ingresar.');
+        return;
+      }
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+
+      // URL de retorno adaptada al entorno (exp:// en dev, pesossmart:// en producción)
+      const redirectUrl = ExpoLinking.createURL('mp-connected');
+
+      const res = await fetch(
+        `${supabaseUrl}/functions/v1/mp-auth?action=url&redirect_url=${encodeURIComponent(redirectUrl)}`,
+        { headers: { Authorization: `Bearer ${session.access_token}` } },
+      );
+      if (!res.ok) throw new Error('No se pudo obtener la URL de Mercado Pago');
+      const { url } = await res.json();
+
+      // openAuthSessionAsync intercepta automáticamente cuando el browser navega a redirectUrl
+      const result = await WebBrowser.openAuthSessionAsync(url, redirectUrl);
+
+      if (result.type === 'success') {
+        const deepLink = result.url;
+        const match    = deepLink.match(/email=([^&]+)/);
+        const hasError = deepLink.includes('error=');
+        if (match) {
+          setMpEmail(decodeURIComponent(match[1]));
+          Alert.alert('Mercado Pago conectado', 'Ahora detectamos tus gastos directamente desde MP.');
+        } else if (hasError) {
+          const errMatch = deepLink.match(/error=([^&]+)/);
+          Alert.alert('Error', errMatch ? decodeURIComponent(errMatch[1]) : 'No se pudo conectar.');
+        }
+      }
+    } catch (err) {
+      Alert.alert('Error', 'No se pudo conectar con Mercado Pago.');
+    } finally {
+      setMpConnecting(false);
+    }
+  };
+
+  const disconnectMp = () => {
+    Alert.alert('Desconectar Mercado Pago', '¿Querés dejar de detectar gastos desde MP?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Desconectar',
+        style: 'destructive',
+        onPress: async () => {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/mp-auth`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${session.access_token}` },
+            });
+          }
+          setMpEmail(null);
+        },
+      },
+    ]);
+  };
+
+  const syncMpNow = async () => {
+    setMpSyncing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+
+      // Resetear al inicio del mes para capturar todos los movimientos del mes
+      await supabase
+        .from('mp_connections')
+        .update({ last_checked_at: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() })
+        .eq('user_id', user!.id);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000); // 45s timeout
+      let data: any;
+      try {
+        const res = await fetch(`${supabaseUrl}/functions/v1/mp-poll`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ force_sync: true }),
+          signal: controller.signal,
+        });
+        data = await res.json();
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (data.code === 'MP_TOKEN_EXPIRED') {
+        setMpSyncStatus('token_expired');
+        Alert.alert('Token vencido', 'Desconectá y volvé a conectar tu cuenta de Mercado Pago.');
+        return;
+      }
+
+      const found = data.new_found ?? 0;
+      const total = data.total_api ?? 0;
+
+      await loadMpStatus();
+
+      Alert.alert(
+        'Sincronización completa',
+        found > 0
+          ? `Se agregaron ${found} gasto${found !== 1 ? 's' : ''} nuevos de Mercado Pago.`
+          : total > 0
+            ? `Se encontraron ${total} movimientos en MP, pero ya estaban registrados.`
+            : 'No se encontraron movimientos en Mercado Pago para este mes.\n\nAsegurate de haber reconectado después del último cambio.',
+      );
+    } catch {
+      Alert.alert('Error', 'No se pudo sincronizar. Intentá de nuevo.');
+    } finally {
+      setMpSyncing(false);
+    }
   };
 
   const { control, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<EditFormData>({
@@ -364,6 +508,107 @@ export default function ProfileScreen() {
             </Card>
           </View>
         )}
+
+        {/* ── Mercado Pago ───────────────────────────────────────────── */}
+        <View style={styles.section}>
+          <Text variant="label" color={colors.text.tertiary} style={styles.sectionTitle}>MERCADO PAGO</Text>
+          <Card style={styles.menuCard}>
+            {mpEmail ? (
+              <>
+                {/* Estado de conexión */}
+                <TouchableOpacity style={styles.menuItem} onPress={disconnectMp}>
+                  <View style={[styles.menuIcon, { width: 36, height: 36, borderRadius: 18,
+                    backgroundColor: mpSyncStatus === 'token_expired' ? '#FFF3E0' : '#E3F2FD',
+                    alignItems: 'center', justifyContent: 'center' }]}>
+                    <Ionicons
+                      name={mpSyncStatus === 'token_expired' ? 'warning-outline' : 'wallet-outline'}
+                      size={20}
+                      color={mpSyncStatus === 'token_expired' ? '#E65100' : '#1565C0'}
+                    />
+                  </View>
+                  <View style={styles.menuText}>
+                    <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
+                      {mpSyncStatus === 'token_expired' ? 'Reconectar Mercado Pago' : 'Mercado Pago conectado'}
+                    </Text>
+                    <Text variant="caption" color={mpSyncStatus === 'token_expired' ? '#E65100' : '#1565C0'}>
+                      {mpSyncStatus === 'token_expired'
+                        ? 'Token vencido — tocá para desconectar y volver a conectar'
+                        : mpEmail}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={mpSyncStatus === 'token_expired' ? 'chevron-forward' : 'checkmark-circle'}
+                    size={20}
+                    color={mpSyncStatus === 'token_expired' ? colors.text.tertiary : '#1565C0'}
+                  />
+                </TouchableOpacity>
+
+                <View style={{ height: 1, backgroundColor: colors.border.subtle }} />
+
+                {/* Última sincronización */}
+                {mpLastSync && (
+                  <>
+                    <View style={[styles.menuItem, { paddingVertical: 10 }]}>
+                      <View style={[styles.menuIcon, { width: 36, height: 36, borderRadius: 18,
+                        backgroundColor: colors.bg.elevated, alignItems: 'center', justifyContent: 'center' }]}>
+                        <Ionicons name="time-outline" size={18} color={colors.text.secondary} />
+                      </View>
+                      <View style={styles.menuText}>
+                        <Text variant="caption" color={colors.text.secondary}>Última sincronización</Text>
+                        <Text variant="bodySmall" color={colors.text.primary}>
+                          {mpLastSync.toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+                          {' · '}
+                          {mpLastSync.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
+                          {mpSyncCount > 0 ? ` · ${mpSyncCount} nuevo${mpSyncCount !== 1 ? 's' : ''}` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ height: 1, backgroundColor: colors.border.subtle }} />
+                  </>
+                )}
+
+                {/* Botón sincronizar */}
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={syncMpNow}
+                  disabled={mpSyncing}
+                >
+                  <View style={[styles.menuIcon, { width: 36, height: 36, borderRadius: 18,
+                    backgroundColor: '#E8F5E9', alignItems: 'center', justifyContent: 'center' }]}>
+                    {mpSyncing
+                      ? <ActivityIndicator size="small" color="#2E7D32" />
+                      : <Ionicons name="sync-outline" size={20} color="#2E7D32" />}
+                  </View>
+                  <View style={styles.menuText}>
+                    <Text variant="bodySmall" color={colors.text.primary}>
+                      {mpSyncing ? 'Sincronizando…' : 'Sincronizar este mes'}
+                    </Text>
+                    <Text variant="caption" color={colors.text.secondary}>
+                      Importar todos los gastos de {new Date().toLocaleString('es-AR', { month: 'long' })}
+                    </Text>
+                  </View>
+                  {!mpSyncing && <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />}
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity style={styles.menuItem} onPress={connectMp} disabled={mpConnecting}>
+                <View style={[styles.menuIcon, { width: 36, height: 36, borderRadius: 18,
+                  backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' }]}>
+                  {mpConnecting
+                    ? <ActivityIndicator size="small" color={colors.text.tertiary} />
+                    : <Ionicons name="wallet-outline" size={20} color={colors.text.secondary} />}
+                </View>
+                <View style={styles.menuText}>
+                  <Text variant="bodySmall" color={colors.text.primary}>Conectar Mercado Pago</Text>
+                  <Text variant="caption" color={colors.text.secondary}>
+                    {mpConnecting ? 'Abriendo autorización…' : 'Detectá gastos QR y en-app directamente'}
+                  </Text>
+                </View>
+                {!mpConnecting && <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />}
+              </TouchableOpacity>
+            )}
+          </Card>
+        </View>
 
         {/* Cerrar sesión + Eliminar cuenta */}
         <Card style={styles.menuCard}>
