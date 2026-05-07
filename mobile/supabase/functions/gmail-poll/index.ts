@@ -79,6 +79,17 @@ async function refreshAccessToken(refreshToken: string): Promise<string | null> 
   }
 }
 
+// ── Limpieza de nombre de comercio ───────────────────────────────────────────
+
+function cleanMerchant(raw: string): string {
+  return raw
+    .replace(/@\S*/g, '')        // sushi@ → sushi, @alias → ''
+    .replace(/#\S*/g, '')        // #hashtag → ''
+    .replace(/[*|_\\]/g, ' ')   // separadores de descriptores de pago
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 // ── Email body extraction ─────────────────────────────────────────────────────
 
 function decodeBase64Url(data: string): string {
@@ -159,14 +170,15 @@ Formato exacto:
   "es_movimiento": true,
   "monto": 350000,
   "moneda": "ARS",
-  "comercio": "Nombre del destinatario o comercio",
+  "comercio": "Nombre limpio del comercio o destinatario (sin @, #, ni caracteres especiales)",
   "categoria": "otros",
   "clasificacion": "disposable",
   "fecha": "2026-04-08",
   "descripcion": "Transferencia enviada desde Banco Patagonia"
 }
 
-Categorías válidas: comida, transporte, servicios, entretenimiento, salud, ropa, hogar, educacion, otros
+Categorías válidas: comida, cafe, transporte, servicios, entretenimiento, salud, ropa, hogar, educacion, deporte, peluqueria, seguros, otros
+Usar "cafe" para cafeterías/Starbucks/café/té. Usar "peluqueria" para cortes/tintura/estética/spa. Usar "deporte" para gym/pilates/natación. Usar "seguros" para pólizas y coberturas.
 Si no hay monto saliente claro, respondé: { "es_movimiento": false }`;
 
   try {
@@ -432,51 +444,42 @@ serve(async (req) => {
       // Use pre-parsed amount/date as fallback if Groq couldn't extract them
       const finalAmount = result.monto ?? preParsed.amount;
       const finalDate = result.fecha ?? preParsed.occurredAt ?? new Date().toISOString().split('T')[0];
-      const finalMerchant = result.comercio ?? preParsed.recipientName ?? preParsed.senderName ?? 'Desconocido';
+      const finalMerchant = cleanMerchant(result.comercio ?? preParsed.recipientName ?? preParsed.senderName ?? 'Desconocido');
 
       const validClassifications = ['necessary', 'disposable', 'investable'];
       const classification = validClassifications.includes(result.clasificacion)
         ? result.clasificacion
         : 'disposable';
 
-      // Buscar category_id en expense_categories
-      const { data: catData } = await supabase
-        .from('expense_categories')
-        .select('id')
-        .ilike('name_es', `%${result.categoria}%`)
-        .single();
+      // Mapear categoría al name de DB
+      const CATEGORY_NAME_MAP: Record<string, string> = {
+        cafe:            'cafe',
+        peluqueria:      'beauty_salon',
+        deporte:         'sports',
+        seguros:         'insurance',
+        comida:          'food_dining',
+        transporte:      'transport',
+        salud:           'health',
+        ropa:            'clothing',
+        hogar:           'home',
+        educacion:       'education',
+        entretenimiento: 'entertainment',
+        otros:           'other',
+      };
 
-      // Auto-registrar directamente en expenses sin pedir confirmación
-      const { error: expenseInsertError } = await supabase.from('expenses').insert({
-        user_id: userId,
-        amount: result.monto,
-        description: result.comercio || result.descripcion || 'Gasto detectado',
-        category_id: catData?.id ?? null,
-        date: result.fecha ?? new Date().toISOString().split('T')[0],
-        payment_method: 'digital_wallet',
-        classification,
-        is_recurring: false,
-      });
-
-      if (expenseInsertError) {
-        console.error('[gmail-poll] Error auto-insertando en expenses:', expenseInsertError.message, expenseInsertError.code);
-      } else {
-        console.log('[gmail-poll] Auto-registrado en expenses OK:', result.comercio, result.monto);
-      }
-
-      // Guardar en pending_transactions como confirmed (solo para deduplicación)
+      // Guardar como pendiente — el usuario confirma en la app
       const { error: insertError } = await supabase.from('pending_transactions').upsert({
         user_id: userId,
         source: 'gmail',
         amount: finalAmount,
         currency: result.moneda ?? 'ARS',
         merchant: finalMerchant,
-        suggested_category: result.categoria,
+        suggested_category: CATEGORY_NAME_MAP[result.categoria] ?? 'other',
         suggested_classification: classification,
         description: result.descripcion,
         transaction_date: finalDate,
         raw_subject: msg.id,
-        status: 'confirmed',
+        status: 'pending',
       }, { onConflict: 'user_id,raw_subject', ignoreDuplicates: true });
 
       if (insertError) {

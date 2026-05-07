@@ -151,7 +151,7 @@ INSERT INTO public.expense_categories (name, name_es, icon, color) VALUES
   ('subscriptions', 'Suscripciones', 'repeat-outline', '#7e57c2'),
   ('travel', 'Viajes', 'airplane-outline', '#29b6f6'),
   ('pets', 'Mascotas', 'paw-outline', '#8d6e63'),
-  ('beauty', 'Cuidado personal', 'sparkles-outline', '#f48fb1'),
+  ('cafe', 'Café y bebidas', 'cafe-outline', '#795548'),
   ('sports', 'Deporte y gym', 'barbell-outline', '#9ccc65'),
   ('leisure', 'Ocio y salidas', 'beer-outline', '#ffa726'),
   ('beauty_salon', 'Peluquería y estética', 'cut-outline', '#ec407a'),

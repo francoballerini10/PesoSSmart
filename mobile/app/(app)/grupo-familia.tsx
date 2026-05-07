@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+﻿import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -8,6 +8,8 @@ import {
   Share,
   ActivityIndicator,
   RefreshControl,
+  Modal,
+  Clipboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -15,8 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/store/authStore';
 import { useFamilyGroupStore } from '@/store/familyGroupStore';
 import { colors, spacing, layout } from '@/theme';
-import { Text, Card } from '@/components/ui';
-import { useAuthStore } from '@/store/authStore';
+import { Text, Card, Button } from '@/components/ui';
 import { usePlanStore } from '@/store/planStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
@@ -40,6 +41,14 @@ interface Member {
   monthly_total: number;
   joined_at:     string;
 }
+
+type ActiveTab = 'resumen' | 'miembros' | 'movimientos' | 'config';
+
+const MEMBER_ROLE_LABELS: Record<Role, string> = {
+  parent:  'Admin',
+  partner: 'Pareja',
+  child:   'Hijo/a',
+};
 
 function currentMonthStart(): string {
   const d = new Date();
@@ -111,13 +120,7 @@ function FamilyPaywall() {
           Disponible en Plan Pro y Premium
         </Text>
       </View>
-      <Text
-        variant="bodySmall"
-        style={[styles.transferAmount, { color: isSender ? colors.red : colors.primary }]}
-      >
-        {isSender ? '-' : '+'}{formatCurrency(transfer.amount)}
-      </Text>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -1134,393 +1137,6 @@ export default function GrupoFamiliaScreen() {
   );
 }
 
-export default function GrupoFamiliaScreen() {
-  const { user } = useAuthStore();
-  const { effectivePlan, isTrialActive } = usePlanStore();
-
-  const [group,     setGroup]     = useState<GroupInfo | null>(null);
-  const [members,   setMembers]   = useState<Member[]>([]);
-  const [myRole,    setMyRole]    = useState<Role | null>(null);
-  const [loading,   setLoading]   = useState(true);
-  const [refreshing,setRefreshing]= useState(false);
-
-  const isAdmin   = myRole === 'parent' || myRole === 'partner';
-  const isFree    = effectivePlan === 'free' && !isTrialActive();
-
-  if (isFree) return <FamilyPaywall />;
-
-  // ── Carga ─────────────────────────────────────────────────────────────────
-
-  const load = useCallback(async () => {
-    if (!user?.id) return;
-
-    const { data: myMembership } = await (supabase as any)
-      .from('family_members')
-      .select('group_id, role')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (!myMembership) { setLoading(false); return; }
-
-    setMyRole(myMembership.role as Role);
-
-    const [groupRes, membersRes] = await Promise.all([
-      (supabase as any)
-        .from('family_groups')
-        .select('id, name, invite_code, group_type')
-        .eq('id', myMembership.group_id)
-        .single(),
-      (supabase as any)
-        .from('family_members')
-        .select('id, user_id, role, joined_at, profiles:user_id(full_name)')
-        .eq('group_id', myMembership.group_id),
-    ]);
-
-    if (groupRes.data) setGroup(groupRes.data as GroupInfo);
-
-    if (membersRes.data) {
-      const monthStart = currentMonthStart();
-      const memberList: Member[] = await Promise.all(
-        membersRes.data.map(async (m: any) => {
-          const { data: expData } = await (supabase as any)
-            .from('expenses')
-            .select('amount')
-            .eq('user_id', m.user_id)
-            .gte('date', monthStart)
-            .is('deleted_at', null);
-
-          const monthly_total = (expData ?? []).reduce((s: number, e: any) => s + e.amount, 0);
-
-          return {
-            id:            m.id,
-            user_id:       m.user_id,
-            role:          m.role as Role,
-            full_name:     m.profiles?.full_name ?? 'Usuario',
-            monthly_total,
-            joined_at:     m.joined_at,
-          };
-        }),
-      );
-      setMembers(memberList);
-    }
-
-    setLoading(false);
-  }, [user?.id]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await load();
-    setRefreshing(false);
-  }, [load]);
-
-  // ── Acciones ──────────────────────────────────────────────────────────────
-
-  const shareInvite = async () => {
-    if (!group) return;
-    await Share.share({
-      message: `Unite a mi grupo "${group.name}" en PesoSSmart con el código: ${group.invite_code}\n\nDescargá la app en pesossmart.com.ar`,
-    });
-  };
-
-  const removeMember = (member: Member) => {
-    if (!isAdmin) return;
-    if (member.user_id === user?.id) return;
-
-    Alert.alert(
-      'Eliminar miembro',
-      `¿Querés eliminar a ${member.full_name} del grupo?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            await (supabase as any)
-              .from('family_members')
-              .delete()
-              .eq('id', member.id);
-            setMembers(prev => prev.filter(m => m.id !== member.id));
-          },
-        },
-      ],
-    );
-  };
-
-  const dissolveGroup = () => {
-    if (!isAdmin || !group) return;
-    Alert.alert(
-      'Disolver grupo',
-      'Esta acción eliminará el grupo para todos los miembros. No se puede deshacer.',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Disolver',
-          style: 'destructive',
-          onPress: async () => {
-            await (supabase as any).from('family_groups').delete().eq('id', group.id);
-            router.replace('/(app)/family');
-          },
-        },
-      ],
-    );
-  };
-
-  const leaveGroup = () => {
-    Alert.alert(
-      'Salir del grupo',
-      '¿Querés salir del grupo familiar?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Salir',
-          style: 'destructive',
-          onPress: async () => {
-            await (supabase as any)
-              .from('family_members')
-              .delete()
-              .eq('user_id', user?.id);
-            router.replace('/(app)/family');
-          },
-        },
-      ],
-    );
-  };
-
-  // ── Render ────────────────────────────────────────────────────────────────
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
-          </TouchableOpacity>
-          <Text variant="h4">Gestionar grupo</Text>
-          <View style={{ width: 24 }} />
-        </View>
-        <View style={styles.centered}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!group) {
-    return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
-          </TouchableOpacity>
-          <Text variant="h4">Gestionar grupo</Text>
-          <View style={{ width: 24 }} />
-        </View>
-        <View style={styles.centered}>
-          <Ionicons name="people-outline" size={48} color={colors.border.default} />
-          <Text variant="body" color={colors.text.secondary} align="center">
-            No pertenecés a ningún grupo.
-          </Text>
-          <TouchableOpacity
-            style={styles.backToFamilyBtn}
-            onPress={() => router.replace('/(app)/family')}
-          >
-            <Text variant="label" color={colors.primary}>Crear o unirme a un grupo</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const groupTotal     = members.reduce((s, m) => s + m.monthly_total, 0);
-  const membersSorted  = [...members].sort((a, b) => b.monthly_total - a.monthly_total);
-
-  return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
-        </TouchableOpacity>
-        <Text variant="h4">Gestionar grupo</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-      >
-
-        {/* ── Info del grupo ─────────────────────────────────────────────── */}
-        <Card style={styles.groupCard}>
-          <View style={styles.groupHeader}>
-            <View style={styles.groupAvatar}>
-              <Text style={{ fontSize: 24 }}>
-                {group.group_type === 'couple' ? '💑' : '👨‍👩‍👧‍👦'}
-              </Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text variant="subtitle">{group.name}</Text>
-              <Text variant="caption" color={colors.text.tertiary}>
-                {group.group_type === 'couple' ? 'Modo pareja' : 'Modo familia'} · {members.length} miembro{members.length !== 1 ? 's' : ''}
-              </Text>
-            </View>
-          </View>
-
-          {/* Código de invitación */}
-          <View style={styles.inviteSection}>
-            <Text variant="caption" color={colors.text.secondary}>CÓDIGO DE INVITACIÓN</Text>
-            <View style={styles.inviteRow}>
-              <Text style={styles.inviteCode}>{group.invite_code}</Text>
-              <TouchableOpacity style={styles.shareBtn} onPress={shareInvite}>
-                <Ionicons name="share-outline" size={18} color={colors.primary} />
-                <Text variant="caption" color={colors.primary}>Compartir</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Card>
-
-        {/* ── Gastos del mes ────────────────────────────────────────────── */}
-        <View style={styles.sectionHeader}>
-          <Text variant="label" color={colors.text.secondary}>GASTOS DEL MES</Text>
-          <Text variant="label" color={colors.neon}>{formatCurrency(groupTotal)}</Text>
-        </View>
-
-        <Card style={styles.membersCard}>
-          {membersSorted.map((member, idx) => {
-            const pct     = groupTotal > 0 ? (member.monthly_total / groupTotal) * 100 : 0;
-            const isMe    = member.user_id === user?.id;
-            const canKick = isAdmin && !isMe;
-
-            return (
-              <View
-                key={member.id}
-                style={[styles.memberRow, idx < membersSorted.length - 1 && styles.memberRowBorder]}
-              >
-                {/* Avatar */}
-                <View style={[styles.memberAvatar, { backgroundColor: colors.primary + '22' }]}>
-                  <Text style={{ fontSize: 16 }}>
-                    {member.role === 'parent' ? '👤' : member.role === 'partner' ? '👤' : '🧒'}
-                  </Text>
-                </View>
-
-                {/* Info */}
-                <View style={{ flex: 1, gap: 4 }}>
-                  <View style={styles.memberNameRow}>
-                    <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                      {member.full_name}{isMe ? ' (vos)' : ''}
-                    </Text>
-                    <RoleBadge role={member.role} />
-                  </View>
-
-                  {/* Barra de progreso */}
-                  <View style={styles.barTrack}>
-                    <View style={[styles.barFill, {
-                      width:           `${pct}%`,
-                      backgroundColor: member.role === 'child' ? colors.yellow : colors.primary,
-                    }]} />
-                  </View>
-
-                  <View style={styles.memberAmountRow}>
-                    <Text variant="caption" color={colors.text.tertiary}>
-                      {pct.toFixed(0)}% del total
-                    </Text>
-                    <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                      {formatCurrency(member.monthly_total)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Acción de eliminar (solo admin, no a sí mismo) */}
-                {canKick && (
-                  <TouchableOpacity
-                    onPress={() => removeMember(member)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    style={{ paddingLeft: spacing[2] }}
-                  >
-                    <Ionicons name="person-remove-outline" size={18} color={colors.text.tertiary} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            );
-          })}
-        </Card>
-
-        {/* ── Acciones del grupo ────────────────────────────────────────── */}
-        <View style={styles.sectionHeader}>
-          <Text variant="label" color={colors.text.secondary}>ACCIONES</Text>
-        </View>
-
-        <Card style={styles.actionsCard}>
-
-          {/* Compartir invitación */}
-          <TouchableOpacity style={styles.actionRow} onPress={shareInvite}>
-            <Ionicons name="person-add-outline" size={20} color={colors.primary} />
-            <View style={{ flex: 1 }}>
-              <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                Invitar a alguien
-              </Text>
-              <Text variant="caption" color={colors.text.tertiary}>
-                Compartir código {group.invite_code}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-          </TouchableOpacity>
-
-          <View style={styles.actionDivider} />
-
-          {/* Ver gastos del grupo completo (navegar a family) */}
-          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/(app)/family')}>
-            <Ionicons name="bar-chart-outline" size={20} color={colors.primary} />
-            <View style={{ flex: 1 }}>
-              <Text variant="bodySmall" style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                Ver panel completo
-              </Text>
-              <Text variant="caption" color={colors.text.tertiary}>
-                Gastos detallados por miembro
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-          </TouchableOpacity>
-
-          <View style={styles.actionDivider} />
-
-          {/* Salir / Disolver */}
-          {isAdmin ? (
-            <TouchableOpacity style={styles.actionRow} onPress={dissolveGroup}>
-              <Ionicons name="trash-outline" size={20} color={colors.red} />
-              <View style={{ flex: 1 }}>
-                <Text variant="bodySmall" color={colors.red} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                  Disolver grupo
-                </Text>
-                <Text variant="caption" color={colors.text.tertiary}>
-                  Elimina el grupo para todos los miembros
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={styles.actionRow} onPress={leaveGroup}>
-              <Ionicons name="exit-outline" size={20} color={colors.red} />
-              <View style={{ flex: 1 }}>
-                <Text variant="bodySmall" color={colors.red} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                  Salir del grupo
-                </Text>
-                <Text variant="caption" color={colors.text.tertiary}>
-                  No podrás ver los gastos compartidos
-                </Text>
-              </View>
-            </TouchableOpacity>
-          )}
-        </Card>
-
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
@@ -1624,4 +1240,22 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[4], paddingHorizontal: spacing[8],
     borderRadius: 8, width: '100%',
   },
+
+  // Code modal
+  codeModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: layout.screenPadding,
+  },
+  codeModalCard: { width: '100%', padding: spacing[6], gap: spacing[3] },
+  codeDisplay: {
+    backgroundColor: colors.bg.elevated,
+    borderRadius: 8, padding: spacing[4],
+    alignItems: 'center',
+  },
+  codeText: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 28,
+    color: colors.neon, letterSpacing: 6,
+  },
+  codeActions: { flexDirection: 'row', marginTop: spacing[2] },
 });
