@@ -30,7 +30,6 @@ interface Props {
   expenses: Expense[];     // ya filtrados: solo category_id !== null
   budgets: Budget[];       // provistos por home.tsx (query compartida)
   pendingCount: number;    // gastos sin clasificar (pending_transactions status='pending')
-  totalThisMonth: number;
   prevMonthTotal: number;
   onNavigate: (route: string) => void;
 }
