@@ -32,3 +32,8 @@ export function hapticSuccess() {
 export function hapticWarning() {
   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
 }
+
+/** Notificación de error — rechazo, acción destructiva */
+export function hapticError() {
+  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+}

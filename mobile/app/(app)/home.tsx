@@ -9,6 +9,7 @@ import {
   Modal,
   ActivityIndicator,
   Dimensions,
+  Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/lib/supabase';
@@ -32,6 +33,8 @@ import { RoundUpSummary } from '@/components/RoundUpSummary';
 import { useStreakStore } from '@/store/streakStore';
 import { useRoundUpStore } from '@/store/roundUpStore';
 import { scheduleBudgetAlert } from '@/lib/notifications';
+import { BudgetHomeWidget } from '@/components/BudgetCard';
+import { MonthInsightCard } from '@/components/MonthInsightCard';
 import { getGreeting, formatCurrency } from '@/utils/format';
 import { useFirstVisit } from '@/hooks/useFirstVisit';
 import { FirstVisitSheet } from '@/components/FirstVisitSheet';
@@ -163,6 +166,26 @@ function MonthHeroCard({
   const cfg     = STATUS_CONFIG[status];
   const insight = buildInsight(status, totalThisMonth, totalDisposable, estimatedIncome);
 
+  const barAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const targetPct = estimatedIncome && estimatedIncome > 0
+      ? Math.min(totalThisMonth / estimatedIncome, 1)
+      : 0;
+    Animated.timing(barAnim, {
+      toValue: targetPct,
+      duration: 900,
+      delay: 200,
+      useNativeDriver: false,
+    }).start();
+  }, [totalThisMonth, estimatedIncome]);
+
+  const handlePressIn = () =>
+    Animated.spring(scaleAnim, { toValue: 0.98, useNativeDriver: true, speed: 60, bounciness: 0 }).start();
+  const handlePressOut = () =>
+    Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+
   const incomePct  = estimatedIncome && estimatedIncome > 0
     ? Math.min(totalThisMonth / estimatedIncome, 1)
     : null;
@@ -172,10 +195,13 @@ function MonthHeroCard({
                         .toUpperCase();
 
   return (
+    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
     <TouchableOpacity
       style={[heroStyles.card, { borderColor: cfg.border, backgroundColor: cfg.bg }]}
       onPress={() => router.push('/(app)/expenses' as any)}
-      activeOpacity={0.92}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      activeOpacity={1}
     >
       {/* Top row: mes + badge + ingreso */}
       <View style={heroStyles.topRow}>
@@ -219,7 +245,15 @@ function MonthHeroCard({
       {/* Progress bar */}
       {incomePct !== null && (
         <View style={heroStyles.progressTrack}>
-          <View style={[heroStyles.progressFill, { width: `${incomePct * 100}%`, backgroundColor: cfg.color }]} />
+          <Animated.View
+            style={[
+              heroStyles.progressFill,
+              {
+                width: barAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+                backgroundColor: cfg.color,
+              },
+            ]}
+          />
           {(() => {
             const dayPct = now.getDate() / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
             return <View style={[heroStyles.dayMarker, { left: `${dayPct * 100}%` }]} />;
@@ -256,13 +290,16 @@ function MonthHeroCard({
         </View>
       )}
     </TouchableOpacity>
+    </Animated.View>
   );
 }
 
 const heroStyles = StyleSheet.create({
   card: {
-    borderWidth: 1, borderRadius: 16,
-    padding: spacing[4], gap: spacing[3], overflow: 'hidden',
+    borderWidth: 1, borderRadius: 20,
+    padding: spacing[5], gap: spacing[3], overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
   topRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   topLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
@@ -280,23 +317,24 @@ const heroStyles = StyleSheet.create({
   amountRow:   { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
   amountBlock: { gap: 2 },
   pctWrap:     { alignItems: 'flex-end', gap: 1 },
-  pctText:     { fontFamily: 'Montserrat_700Bold', fontSize: 22, lineHeight: 26 },
+  pctText:     { fontFamily: 'Montserrat_700Bold', fontSize: 24, lineHeight: 28, letterSpacing: -0.5 },
   progressTrack: {
-    height: 4, backgroundColor: colors.border.subtle, borderRadius: 2,
+    height: 6, backgroundColor: colors.border.subtle, borderRadius: 3,
     overflow: 'hidden', position: 'relative',
   },
-  progressFill: { height: '100%', borderRadius: 2 },
+  progressFill: { height: '100%', borderRadius: 3 },
   dayMarker: {
     position: 'absolute', top: -2, bottom: -2,
     width: 2, backgroundColor: colors.text.tertiary + '80', borderRadius: 1,
   },
   kpiRow: {
     flexDirection: 'row', alignItems: 'center',
-    paddingTop: spacing[2], borderTopWidth: 1, borderTopColor: colors.border.subtle,
+    paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: colors.border.subtle,
+    marginTop: spacing[1],
   },
-  kpiItem:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  kpiDot:     { width: 5, height: 5, borderRadius: 3 },
-  kpiDivider: { width: 1, height: 24, backgroundColor: colors.border.subtle, marginHorizontal: spacing[2] },
+  kpiItem:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  kpiDot:     { width: 6, height: 6, borderRadius: 3 },
+  kpiDivider: { width: 1, height: 28, backgroundColor: colors.border.subtle, marginHorizontal: spacing[2] },
 });
 
 // ─── RecoverableCard ──────────────────────────────────────────────────────────
@@ -1227,15 +1265,15 @@ function GmailPendingBanner({ count, onPress }: { count: number; onPress: () => 
         </View>
         <View style={{ flex: 1 }}>
           <Text style={gpStyles.title}>
-            Tenés {count} gasto{count > 1 ? 's' : ''} sin confirmar
+            Tenés {count} gasto{count > 1 ? 's' : ''} sin clasificar
           </Text>
           <Text style={gpStyles.sub}>
-            SmartPesos los encontró para vos. Decidí cómo registrarlos.
+            Ya están cargados en tus gastos. Solo falta elegir la categoría.
           </Text>
         </View>
       </View>
       <View style={gpStyles.cta}>
-        <Text style={gpStyles.ctaText}>Revisar</Text>
+        <Text style={gpStyles.ctaText}>Clasificar</Text>
         <Ionicons name="chevron-forward" size={14} color="#F57F17" />
       </View>
     </TouchableOpacity>
@@ -1245,17 +1283,104 @@ function GmailPendingBanner({ count, onPress }: { count: number; onPress: () => 
 const gpStyles = StyleSheet.create({
   card: {
     flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: '#FFF8E1',
+    backgroundColor: '#FFFDE7',
     borderWidth: 1, borderColor: '#FFE082',
-    borderLeftWidth: 3, borderLeftColor: '#F9A825',
-    borderRadius: 14, padding: spacing[4],
+    borderLeftWidth: 4, borderLeftColor: '#FB8C00',
+    borderRadius: 16, padding: spacing[4],
+    shadowColor: '#FB8C00', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.10, shadowRadius: 8, elevation: 2,
   },
   left:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  iconWrap:{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFF9C4', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  title:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#212121', marginBottom: 2 },
-  sub:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#757575', lineHeight: 15 },
-  cta:     { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0 },
-  ctaText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#F57F17' },
+  iconWrap:{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF8E1', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  title:   { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#212121', marginBottom: 2 },
+  sub:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#8D6E63', lineHeight: 16 },
+  cta:     { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 0 },
+  ctaText: { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#E65100' },
+});
+
+// ─── MonthSpendingMini ────────────────────────────────────────────────────────
+
+function MonthSpendingMini({
+  totalThisMonth,
+  estimatedIncome,
+}: {
+  totalThisMonth:  number;
+  estimatedIncome: number | null;
+}) {
+  if (!estimatedIncome || estimatedIncome <= 0 || totalThisMonth <= 0) return null;
+
+  const pct      = Math.min(totalThisMonth / estimatedIncome, 1);
+  const pctInt   = Math.round(pct * 100);
+  const barColor = pct > 1 ? '#C62828' : pct > 0.85 ? '#E65100' : '#2E7D32';
+
+  const barAnim   = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.timing(barAnim, {
+      toValue: pct,
+      duration: 800,
+      delay: 400,
+      useNativeDriver: false,
+    }).start();
+  }, [pct]);
+
+  const pressIn  = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true, speed: 60, bounciness: 0 }).start();
+  const pressOut = () => Animated.spring(scaleAnim, { toValue: 1,    useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+
+  return (
+    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+    <TouchableOpacity
+      style={msmStyles.card}
+      onPress={() => router.push('/(app)/expenses' as any)}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
+      activeOpacity={1}
+    >
+      {/* Left: amount spent */}
+      <View style={msmStyles.left}>
+        <Text style={msmStyles.label}>Gastaste en el mes</Text>
+        <Text style={msmStyles.amount}>{formatCurrency(totalThisMonth)}</Text>
+      </View>
+
+      {/* Right: income ref + bar + pct */}
+      <View style={msmStyles.right}>
+        <Text style={msmStyles.incomeRef}>de {formatCurrency(estimatedIncome)}</Text>
+        <View style={msmStyles.barTrack}>
+          <Animated.View
+            style={[
+              msmStyles.barFill,
+              {
+                width: barAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+                backgroundColor: barColor,
+              },
+            ]}
+          />
+        </View>
+        <Text style={[msmStyles.pctText, { color: barColor }]}>{pctInt}% del ingreso</Text>
+      </View>
+    </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+const msmStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16, borderWidth: 1, borderColor: '#EEEEEE',
+    paddingHorizontal: 16, paddingVertical: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  left:      { flex: 1, gap: 3, paddingRight: 16 },
+  right:     { flex: 1, gap: 5, alignItems: 'flex-start' },
+  label:     { fontFamily: 'Montserrat_500Medium', fontSize: 11, color: '#9E9E9E', letterSpacing: 0.3 },
+  amount:    { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: '#212121', letterSpacing: -0.5 },
+  incomeRef: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#BDBDBD' },
+  barTrack:  { height: 6, width: '100%', backgroundColor: '#F0F0F0', borderRadius: 3, overflow: 'hidden' },
+  barFill:   { height: '100%', borderRadius: 3 },
+  pctText:   { fontFamily: 'Montserrat_700Bold', fontSize: 12 },
 });
 
 // ─── CompactWidgetsRow ────────────────────────────────────────────────────────
@@ -1460,6 +1585,10 @@ function OpportunityHeroCard({
   onPress: () => void;
   onNoData: () => void;
 }) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const pressIn  = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true, speed: 60, bounciness: 0 }).start();
+  const pressOut = () => Animated.spring(scaleAnim, { toValue: 1,    useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+
   if (!hasExpenses) {
     return (
       <TouchableOpacity style={oppStyles.noData} onPress={onNoData} activeOpacity={0.85}>
@@ -1477,7 +1606,14 @@ function OpportunityHeroCard({
   if (recoverable <= 0) return null;
 
   return (
-    <TouchableOpacity style={oppStyles.card} onPress={onPress} activeOpacity={0.9}>
+    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+    <TouchableOpacity
+      style={oppStyles.card}
+      onPress={onPress}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
+      activeOpacity={1}
+    >
       <View style={oppStyles.content}>
         <Text style={oppStyles.label}>Tu oportunidad este mes</Text>
         <Text style={oppStyles.sublabel}>Podés recuperar</Text>
@@ -1492,32 +1628,39 @@ function OpportunityHeroCard({
         <MoneyBagIcon size={96} />
       </View>
     </TouchableOpacity>
+    </Animated.View>
   );
 }
 
 const oppStyles = StyleSheet.create({
   card: {
-    backgroundColor: '#2E7D32',
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 20,
+    backgroundColor: '#1B5E20',
+    borderRadius: 20,
+    paddingHorizontal: 22,
+    paddingVertical: 22,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     overflow: 'visible',
+    shadowColor: '#1B5E20',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
   },
   content: { flex: 1, gap: spacing[1], paddingRight: 12 },
-  label: { color: 'rgba(255,255,255,0.75)', fontFamily: 'Montserrat_600SemiBold', fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
-  sublabel: { color: 'rgba(255,255,255,0.9)', fontFamily: 'Montserrat_400Regular', fontSize: 14, marginTop: spacing[1] },
-  amount: { color: '#FFFFFF', fontFamily: 'Montserrat_700Bold', fontSize: 28, letterSpacing: -0.5, lineHeight: 34 },
-  sub: { color: 'rgba(255,255,255,0.8)', fontFamily: 'Montserrat_400Regular', fontSize: 14 },
+  label: { color: 'rgba(255,255,255,0.65)', fontFamily: 'Montserrat_600SemiBold', fontSize: 10, letterSpacing: 1, textTransform: 'uppercase' },
+  sublabel: { color: 'rgba(255,255,255,0.85)', fontFamily: 'Montserrat_400Regular', fontSize: 14, marginTop: spacing[1] },
+  amount: { color: '#FFFFFF', fontFamily: 'Montserrat_700Bold', fontSize: 30, letterSpacing: -0.5, lineHeight: 36 },
+  sub: { color: 'rgba(255,255,255,0.75)', fontFamily: 'Montserrat_400Regular', fontSize: 13 },
   btn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    backgroundColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: 'rgba(255,255,255,0.18)',
     borderRadius: 12, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    alignSelf: 'flex-start', marginTop: spacing[3], height: 48,
+    alignSelf: 'flex-start', marginTop: spacing[3], height: 44,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)',
   },
-  btnText: { color: '#FFFFFF', fontFamily: 'Montserrat_600SemiBold', fontSize: 14 },
+  btnText: { color: '#FFFFFF', fontFamily: 'Montserrat_600SemiBold', fontSize: 13 },
   deco: {
     flexShrink: 0,
     alignItems: 'center',
@@ -1922,6 +2065,7 @@ export default function HomeScreen() {
     const now = new Date();
     const grouped: Record<string, { categoryNameEs: string; categoryColor: string; amount: number }> = {};
     for (const e of expenses) {
+      if (!e.category_id) continue; // excluir sin clasificar
       const cat  = (e as any).category;
       const name = cat?.name_es ?? 'Otros';
       if (!grouped[name]) grouped[name] = { categoryNameEs: name, categoryColor: cat?.color ?? '#888888', amount: 0 };
@@ -1948,7 +2092,8 @@ export default function HomeScreen() {
   });
 
   const keyInsights = buildKeyInsights({
-    expenses, subscriptions, totalThisMonth, totalDisposable,
+    expenses: expenses.filter(e => e.category_id !== null),
+    subscriptions, totalThisMonth, totalDisposable,
     totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
   });
 
@@ -2143,8 +2288,8 @@ export default function HomeScreen() {
                 }
               </TouchableOpacity>
             )}
-            <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/profile')}>
-              <Ionicons name="notifications-outline" size={22} color="#212121" />
+            <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/advisor' as any)}>
+              <Ionicons name="chatbubble-ellipses-outline" size={22} color="#212121" />
             </TouchableOpacity>
           </View>
         </View>
@@ -2170,6 +2315,35 @@ export default function HomeScreen() {
           } as any)}
           onNoData={openIncomeModal}
         />
+
+        {/* ── Resumen de gasto mensual ─────────────────────────────────────────── */}
+        {!isLoading && (
+        <MonthSpendingMini
+          totalThisMonth={totalThisMonth}
+          estimatedIncome={estimatedIncome}
+        />
+        )}
+
+        {/* ── Widget de presupuestos ───────────────────────────────────────────── */}
+        {!isLoading && user?.id && (
+          <BudgetHomeWidget
+            userId={user.id}
+            expenses={expenses}
+            onPress={() => router.push('/(app)/expenses' as any)}
+          />
+        )}
+
+        {/* ── Insight del mes ──────────────────────────────────────────────────── */}
+        {!isLoading && user?.id && (
+          <MonthInsightCard
+            userId={user.id}
+            expenses={expenses.filter(e => e.category_id !== null)}
+            pendingCount={pendingCount}
+            totalThisMonth={totalThisMonth}
+            prevMonthTotal={prevMonthTotal}
+            onNavigate={(route) => router.push(route as any)}
+          />
+        )}
 
         {/* ── Inflación personal compacta ──────────────────────────────────────── */}
         {inflationData !== null && (
@@ -2201,7 +2375,7 @@ export default function HomeScreen() {
         />
 
         {/* ── Top categorías ───────────────────────────────────────────────────── */}
-        <TopCategoriesCard expenses={expenses} />
+        <TopCategoriesCard expenses={expenses.filter(e => e.category_id !== null)} />
 
         {/* ── QuickStart (sólo sin datos) ──────────────────────────────────────── */}
         {showQuickStart && expenses.length === 0 && (
@@ -2303,13 +2477,13 @@ const styles = StyleSheet.create({
 
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingBottom: spacing[2],
+    paddingBottom: spacing[3],
   },
   headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   headerRight:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  greetingName: { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: '#212121', lineHeight: 24 },
-  eyeLabel:     { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#7C3AED' },
-  eyeSub:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#757575' },
+  greetingName: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: '#212121', lineHeight: 26, letterSpacing: -0.3 },
+  eyeLabel:     { fontFamily: 'Montserrat_700Bold', fontSize: 11, color: '#7C3AED', letterSpacing: 0.5 },
+  eyeSub:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E' },
   bellBtn:      { padding: spacing[2] },
   syncBtn:      { padding: spacing[2], alignItems: 'center', justifyContent: 'center', minWidth: 32 },
   syncMsg:      { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.neon },
