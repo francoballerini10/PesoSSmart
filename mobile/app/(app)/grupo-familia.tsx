@@ -10,6 +10,9 @@ import {
   RefreshControl,
   Modal,
   Clipboard,
+  KeyboardAvoidingView,
+  Platform,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -21,6 +24,7 @@ import { Text, Card, Button } from '@/components/ui';
 import { usePlanStore } from '@/store/planStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
+import type { GroupType, MemberRole, GroupTransfer, FamilyMember } from '@/types/database';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,10 +48,20 @@ interface Member {
 
 type ActiveTab = 'resumen' | 'miembros' | 'movimientos' | 'config';
 
-const MEMBER_ROLE_LABELS: Record<Role, string> = {
-  parent:  'Admin',
-  partner: 'Pareja',
-  child:   'Hijo/a',
+const MEMBER_ROLE_LABELS: Record<string, string> = {
+  parent:      'Admin',
+  partner:     'Pareja',
+  child:       'Hijo/a',
+  guardian:    'Tutor/a',
+  other_adult: 'Otro adulto',
+};
+
+const MEMBER_ROLE_ICONS: Record<string, string> = {
+  parent:      'person',
+  child:       'happy-outline',
+  partner:     'heart-outline',
+  guardian:    'shield-outline',
+  other_adult: 'person-outline',
 };
 
 function currentMonthStart(): string {
@@ -55,15 +69,82 @@ function currentMonthStart(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
+type MemberWithExpenses = FamilyMember & { monthlyTotal?: number };
+
 // ─── Sub-componentes ──────────────────────────────────────────────────────────
 
-function RoleBadge({ role }: { role: Role }) {
-  const config: Record<Role, { label: string; color: string }> = {
-    parent:  { label: 'Admin', color: colors.neon },
-    partner: { label: 'Pareja', color: colors.primary },
-    child:   { label: 'Hijo/a', color: colors.yellow },
+function MemberAvatar({ name, role, size = 40 }: { name: string; role: string; size?: number }) {
+  const initials = name.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+  const roleColor: Record<string, string> = {
+    parent: colors.primary, partner: colors.neon,
+    child: colors.yellow, guardian: colors.accent, other_adult: colors.mediumGray,
   };
-  const c = config[role];
+  const c = roleColor[role] ?? colors.primary;
+  return (
+    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: c + '30', alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ fontSize: size * 0.35, fontFamily: 'Montserrat_700Bold', color: c }}>{initials || '?'}</Text>
+    </View>
+  );
+}
+
+function MemberRow({ member, isMe, isOwner, showTotal }: {
+  member: MemberWithExpenses; isMe: boolean; isOwner: boolean; showTotal: boolean;
+}) {
+  const name = (member as any).profile?.full_name ?? (member as any).profile?.email ?? 'Miembro';
+  return (
+    <View style={styles.memberRowContainer}>
+      <MemberAvatar name={name} role={member.role} size={40} />
+      <View style={{ flex: 1, marginLeft: spacing[3] }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+          <Text variant="bodySmall" color={colors.text.primary}>{isMe ? `${name} (vos)` : name}</Text>
+          {isOwner && (
+            <View style={{ backgroundColor: colors.neon + '22', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+              <Text style={{ fontSize: 9, color: colors.neon, fontFamily: 'Montserrat_700Bold' }}>ADMIN</Text>
+            </View>
+          )}
+        </View>
+        <RoleBadge role={member.role} />
+      </View>
+      {showTotal && member.monthlyTotal !== undefined && (
+        <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+          {formatCurrency(member.monthlyTotal)}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function TransferRow({ transfer, myUserId }: { transfer: GroupTransfer; myUserId: string }) {
+  const isSender = transfer.from_user_id === myUserId;
+  const otherName = isSender
+    ? ((transfer as any).to_profile?.full_name ?? 'Miembro')
+    : ((transfer as any).from_profile?.full_name ?? 'Miembro');
+  return (
+    <View style={styles.transferRow}>
+      <View style={[styles.transferIcon, { backgroundColor: (isSender ? colors.error : colors.primary) + '22' }]}>
+        <Ionicons name={isSender ? 'arrow-up' : 'arrow-down'} size={16} color={isSender ? colors.error : colors.primary} />
+      </View>
+      <View style={{ flex: 1, marginLeft: spacing[3] }}>
+        <Text variant="bodySmall" color={colors.text.primary}>{isSender ? `Para ${otherName}` : `De ${otherName}`}</Text>
+        {transfer.note && <Text variant="caption" color={colors.text.tertiary}>{transfer.note}</Text>}
+        <Text variant="caption" color={colors.text.tertiary}>{new Date(transfer.transfer_date).toLocaleDateString('es-AR')}</Text>
+      </View>
+      <Text variant="bodySmall" color={isSender ? colors.error : colors.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
+        {isSender ? '-' : '+'}{formatCurrency(transfer.amount)}
+      </Text>
+    </View>
+  );
+}
+
+function RoleBadge({ role }: { role: string }) {
+  const config: Record<string, { label: string; color: string }> = {
+    parent:      { label: 'Admin',       color: colors.neon },
+    partner:     { label: 'Pareja',      color: colors.primary },
+    child:       { label: 'Hijo/a',      color: colors.yellow },
+    guardian:    { label: 'Tutor/a',     color: colors.accent },
+    other_adult: { label: 'Otro adulto', color: colors.mediumGray },
+  };
+  const c = config[role] ?? { label: role, color: colors.mediumGray };
   return (
     <View style={[badgeStyles.root, { backgroundColor: c.color + '22', borderColor: c.color + '55' }]}>
       <Text style={[badgeStyles.text, { color: c.color }]}>{c.label}</Text>
@@ -1213,6 +1294,20 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.primary, borderRadius: 8,
   },
 
+  // Member / Transfer rows
+  memberRowContainer: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+  },
+  transferRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+  },
+  transferIcon: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
   // Paywall
   paywallContainer: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
@@ -1258,4 +1353,113 @@ const styles = StyleSheet.create({
     color: colors.neon, letterSpacing: 6,
   },
   codeActions: { flexDirection: 'row', marginTop: spacing[2] },
+
+  // Tab bar interno
+  tabBar: {
+    flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+    backgroundColor: colors.bg.primary,
+  },
+  tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[2] },
+  tabItemActive: { borderBottomWidth: 2, borderBottomColor: colors.primary },
+  tabLabel: { fontSize: 10, fontFamily: 'Montserrat_400Regular', color: colors.text.tertiary, marginTop: 2 },
+  tabLabelActive: { color: colors.primary, fontFamily: 'Montserrat_600SemiBold' },
+
+  // Modales
+  modal: { flex: 1, backgroundColor: colors.bg.primary },
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: layout.screenPadding, paddingVertical: spacing[4],
+    borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+  },
+  modalContent: { padding: layout.screenPadding, paddingBottom: spacing[8] },
+
+  // Selectores de tipo/rol
+  typeSelector: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[2] },
+  typeOption: {
+    flex: 1, alignItems: 'center', paddingVertical: spacing[4],
+    borderWidth: 1, borderColor: colors.border.default, borderRadius: 8,
+    backgroundColor: colors.bg.card,
+  },
+  typeOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '10' },
+  roleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], marginTop: spacing[2] },
+  roleOption: {
+    flex: 1, minWidth: 80, alignItems: 'center', paddingVertical: spacing[3],
+    borderWidth: 1, borderColor: colors.border.default, borderRadius: 8,
+    backgroundColor: colors.bg.card,
+  },
+  roleOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '10' },
+
+  // TextInput
+  textInput: {
+    marginTop: spacing[2], paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+    backgroundColor: colors.bg.input, borderRadius: 8,
+    fontFamily: 'Montserrat_400Regular', fontSize: 15, color: colors.text.primary,
+    borderWidth: 1, borderColor: colors.border.default,
+  },
+  codeInput: { textAlign: 'center', fontSize: 22, letterSpacing: 4, fontFamily: 'Montserrat_700Bold' },
+
+  // Receptor de transferencia
+  recipientList: { gap: spacing[2], marginTop: spacing[2] },
+  recipientOption: {
+    flexDirection: 'row', alignItems: 'center', padding: spacing[3],
+    borderWidth: 1, borderColor: colors.border.default, borderRadius: 8,
+    backgroundColor: colors.bg.card,
+  },
+  recipientOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '10' },
+  amountInputRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing[2] },
+
+  // Sin grupo
+  noGroupContainer: {
+    paddingHorizontal: layout.screenPadding, paddingTop: spacing[8], paddingBottom: spacing[12],
+  },
+  noGroupHero: { alignItems: 'center', marginBottom: spacing[6] },
+  noGroupIconCircle: {
+    width: 96, height: 96, borderRadius: 48,
+    backgroundColor: colors.bg.elevated, alignItems: 'center', justifyContent: 'center',
+  },
+  noGroupCards: { gap: spacing[3], marginBottom: spacing[6] },
+  noGroupCard: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: spacing[4], borderRadius: 12,
+    backgroundColor: colors.bg.card,
+    borderWidth: 1, borderColor: colors.border.default,
+  },
+  noGroupCardIcon: {
+    width: 48, height: 48, borderRadius: 24,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  noGroupInfo: { gap: spacing[1] },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2], paddingVertical: spacing[1] },
+
+  // Contenido de tabs
+  tabContent: {
+    paddingHorizontal: layout.screenPadding,
+    paddingTop: spacing[4], paddingBottom: spacing[12],
+    gap: spacing[3],
+  },
+  groupTypeBadge: {
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
+    paddingHorizontal: spacing[3], paddingVertical: spacing[1],
+    backgroundColor: colors.bg.elevated, borderRadius: 20, marginBottom: spacing[2],
+  },
+  summaryCard: { padding: spacing[4], gap: spacing[2] },
+  divider: { height: 1, backgroundColor: colors.border.subtle },
+  memberSummaryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: spacing[3] },
+  memberSummaryTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  progressBar: { height: 4, backgroundColor: colors.border.subtle, borderRadius: 2, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: colors.primary, borderRadius: 2 },
+  emptyState: { alignItems: 'center', paddingVertical: spacing[10] },
+
+  // Config tab
+  sectionLabel: { marginBottom: spacing[2] },
+  configRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+  },
+  permissionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
+  privacyNote: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
+    marginTop: spacing[3], padding: spacing[3],
+    backgroundColor: colors.bg.elevated, borderRadius: 8,
+  },
 });

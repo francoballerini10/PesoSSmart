@@ -230,57 +230,28 @@ export const useFamilyGroupStore = create<FamilyGroupStore>((set, get) => ({
   createGroup: async ({ name, groupType, ownerId, ownerRole }) => {
     set({ isCreating: true, error: null });
     try {
-      // Generar código único (reintenta si hay colisión)
-      let inviteCode = '';
-      let attempts = 0;
-      while (attempts < 5) {
-        const candidate = generateInviteCode();
-        const { data: existing } = await supabase
-          .from('family_groups')
-          .select('id')
-          .eq('invite_code', candidate)
-          .single();
-        if (!existing) {
-          inviteCode = candidate;
-          break;
-        }
-        attempts++;
-      }
+      const inviteCode = generateInviteCode();
 
-      if (!inviteCode) {
-        set({ isCreating: false, error: 'No se pudo generar un código único' });
+      const { data, error } = await supabase.rpc('create_family_group', {
+        p_name:        name,
+        p_invite_code: inviteCode,
+        p_group_type:  groupType,
+        p_owner_role:  ownerRole,
+      });
+
+      if (error) {
+        console.error('[familyGroupStore] createGroup rpc error:', error);
+        const msg = error.message?.includes('Ya pertenecés')
+          ? 'Ya pertenecés a un grupo. Salí del actual para crear uno nuevo.'
+          : 'No se pudo crear el grupo. Intentá de nuevo.';
+        set({ isCreating: false, error: msg });
         return null;
       }
 
-      // Insertar grupo
-      const { data: group, error: groupErr } = await supabase
-        .from('family_groups')
-        .insert({ name, invite_code: inviteCode, group_type: groupType, owner_id: ownerId })
-        .select()
-        .single();
-
-      if (groupErr || !group) {
-        console.error('[familyGroupStore] createGroup insert error:', groupErr);
-        set({ isCreating: false, error: 'No se pudo crear el grupo' });
-        return null;
-      }
-
-      // Insertar membresía del creador
-      const { error: memErr } = await supabase
-        .from('family_members')
-        .insert({ group_id: group.id, user_id: ownerId, role: ownerRole });
-
-      if (memErr) {
-        console.error('[familyGroupStore] createGroup membership error:', memErr);
-        // Limpiar el grupo creado para no dejar huérfano
-        await supabase.from('family_groups').delete().eq('id', group.id);
-        set({ isCreating: false, error: 'No se pudo registrar tu membresía' });
-        return null;
-      }
-
+      const code = (data as any)?.invite_code ?? inviteCode;
       set({ isCreating: false });
       await get().fetchGroup(ownerId);
-      return { inviteCode };
+      return { inviteCode: code };
     } catch (err) {
       console.error('[familyGroupStore] createGroup error:', err);
       set({ isCreating: false, error: 'Error inesperado al crear el grupo' });
