@@ -437,7 +437,7 @@ export default function FamilyScreen() {
       const db2 = supabase as any;
       const { data: newGroup, error: groupErr } = await db2
         .from('family_groups')
-        .insert({ name: groupName.trim(), invite_code: code, group_type: groupType })
+        .insert({ name: groupName.trim(), invite_code: code, group_type: groupType, owner_id: user.id })
         .select()
         .single();
 
