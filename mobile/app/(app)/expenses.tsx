@@ -35,6 +35,7 @@ import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/utils/format';
 import type { PaymentMethod, Expense, ExpenseClassification } from '@/types';
 import { PendingTransactions } from '@/components/PendingTransactions';
+import { BudgetCard } from '@/components/BudgetCard';
 import { useFirstVisit } from '@/hooks/useFirstVisit';
 import { FirstVisitSheet } from '@/components/FirstVisitSheet';
 import { useSavingsStore } from '@/store/savingsStore';
@@ -578,7 +579,7 @@ export default function ExpensesScreen() {
     })();
     setIsReportLoading(true);
     Promise.all([
-      supabase.from('expenses').select('amount, category:expense_categories(id, name_es, color), classification').eq('user_id', user.id).is('deleted_at', null).gte('date', rStart).lt('date', rEnd),
+      supabase.from('expenses').select('amount, category:expense_categories(id, name_es, color), classification').eq('user_id', user.id).is('deleted_at', null).not('category_id', 'is', null).gte('date', rStart).lt('date', rEnd),
       supabase.from('expenses').select('amount, date, classification').eq('user_id', user.id).is('deleted_at', null).gte('date', oppStart).lt('date', rStart),
       supabase.from('expenses').select('amount, date, classification, category:expense_categories(name_es)').eq('user_id', user.id).is('deleted_at', null).eq('classification', 'disposable').gte('date', oppStart).lt('date', rStart),
     ]).then(([mainRes, histRes, oppRes]) => {
@@ -877,6 +878,17 @@ export default function ExpensesScreen() {
         </View>
       </View>
 
+      {/* Presupuestos del mes */}
+      {user?.id && (
+        <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[2] }}>
+          <BudgetCard
+            userId={user.id}
+            expenses={expenses}
+            categories={categories}
+          />
+        </View>
+      )}
+
       {/* Aviso: token de Gmail vencido */}
       {gmailTokenExpired && (
         <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[3] }}>
@@ -907,6 +919,7 @@ export default function ExpensesScreen() {
             userId={user!.id}
             isPolling={isPolling}
             categories={categories}
+            confirmedExpenses={expenses.filter(e => e.category_id !== null).map(e => ({ amount: e.amount, date: e.date, description: e.description }))}
             onConfirmed={() => {
               loadPendingTxs();
               if (user?.id) fetchExpenses(user.id);
@@ -914,6 +927,27 @@ export default function ExpensesScreen() {
           />
         </View>
       )}
+
+      {/* Banner: gastos sin clasificar en la lista del mes */}
+      {(() => {
+        const sinClasif = expenses.filter(e => e.category_id === null).length;
+        if (sinClasif === 0) return null;
+        return (
+          <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[3] }}>
+            <View style={sinClasifBannerS.card}>
+              <Ionicons name="help-circle-outline" size={16} color="#F59E0B" />
+              <View style={{ flex: 1 }}>
+                <Text style={sinClasifBannerS.title}>
+                  {sinClasif} gasto{sinClasif > 1 ? 's' : ''} sin clasificar
+                </Text>
+                <Text style={sinClasifBannerS.sub}>
+                  Ya están cargados. Solo falta elegir la categoría.
+                </Text>
+              </View>
+            </View>
+          </View>
+        );
+      })()}
 
       {/* Búsqueda por texto */}
       <View style={styles.searchRow}>
@@ -1071,6 +1105,20 @@ export default function ExpensesScreen() {
               </TouchableOpacity>
             ))}
           </ScrollView>
+
+          {/* Aviso de precisión cuando hay gastos sin clasificar */}
+          {(() => {
+            const unclasCount = expenses.filter(e => e.category_id === null).length;
+            if (unclasCount === 0) return null;
+            return (
+              <View style={reportS.precisionNotice}>
+                <Ionicons name="information-circle-outline" size={14} color="#607D8B" />
+                <Text style={reportS.precisionText}>
+                  {unclasCount} gasto{unclasCount > 1 ? 's' : ''} sin clasificar no {unclasCount > 1 ? 'están incluidos' : 'está incluido'} en este análisis.
+                </Text>
+              </View>
+            );
+          })()}
 
           {isReportLoading ? (
             <View style={{ height: 200, alignItems: 'center', justifyContent: 'center' }}>
@@ -1644,10 +1692,12 @@ function DayHeader({ date, total }: { date: string; total: number }) {
 }
 
 function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => void }) {
-  const catColor =
-    (expense.category as any)?.color ??
-    (expense.classification ? CLASSIFICATION_COLOR[expense.classification] : colors.border.default);
-  const catIcon = (expense.category as any)?.icon ?? 'receipt-outline';
+  const isUnclassified = expense.category_id === null;
+  const catColor = isUnclassified
+    ? '#9E9E9E'
+    : ((expense.category as any)?.color ??
+       (expense.classification ? CLASSIFICATION_COLOR[expense.classification] : colors.border.default));
+  const catIcon = isUnclassified ? 'help-circle-outline' : ((expense.category as any)?.icon ?? 'receipt-outline');
 
   return (
     <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.7}>
@@ -1659,13 +1709,22 @@ function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => vo
           {expense.description}
         </Text>
         <View style={styles.expenseMeta}>
-          {expense.category && (
-            <Text variant="caption" color={colors.text.tertiary}>{expense.category.name_es}</Text>
-          )}
-          {expense.payment_method && (
-            <Text variant="caption" color={colors.text.tertiary}>
-              {expense.category ? ' · ' : ''}{PM_LABELS[expense.payment_method] ?? expense.payment_method}
-            </Text>
+          {isUnclassified ? (
+            <View style={sinClasifS.badge}>
+              <View style={sinClasifS.dot} />
+              <Text style={sinClasifS.label}>Sin clasificar</Text>
+            </View>
+          ) : (
+            <>
+              {expense.category && (
+                <Text variant="caption" color={colors.text.tertiary}>{expense.category.name_es}</Text>
+              )}
+              {expense.payment_method && (
+                <Text variant="caption" color={colors.text.tertiary}>
+                  {expense.category ? ' · ' : ''}{PM_LABELS[expense.payment_method] ?? expense.payment_method}
+                </Text>
+              )}
+            </>
           )}
         </View>
       </View>
@@ -1673,13 +1732,36 @@ function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => vo
         <Text variant="labelMd" color={colors.text.primary}>
           -{formatCurrency(expense.amount)}
         </Text>
-        {expense.classification && (
+        {!isUnclassified && expense.classification && (
           <Badge classification={expense.classification} label={expense.classification} small animated />
         )}
       </View>
     </TouchableOpacity>
   );
 }
+
+const sinClasifS = StyleSheet.create({
+  badge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#F5F5F5', borderRadius: 999,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: '#E0E0E0',
+    alignSelf: 'flex-start',
+  },
+  dot:   { width: 5, height: 5, borderRadius: 3, backgroundColor: '#9E9E9E' },
+  label: { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: '#757575' },
+});
+
+const sinClasifBannerS = StyleSheet.create({
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: '#FFFDE7', borderWidth: 1, borderColor: '#FFE082',
+    borderLeftWidth: 3, borderLeftColor: '#F59E0B',
+    borderRadius: 12, padding: spacing[3],
+  },
+  title: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#212121' },
+  sub:   { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#8D6E63', marginTop: 1 },
+});
 
 const styles = StyleSheet.create({
   safe:     { flex: 1, backgroundColor: colors.bg.primary },
@@ -2211,6 +2293,15 @@ const subsSheetStyles = StyleSheet.create({
 });
 
 const reportS = StyleSheet.create({
+  precisionNotice: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    backgroundColor: '#ECEFF1', borderRadius: 8,
+    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+    marginHorizontal: layout.screenPadding, marginBottom: spacing[2],
+  },
+  precisionText: {
+    fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#546E7A', flex: 1,
+  },
   heroCard: {
     backgroundColor: colors.bg.card,
     borderWidth:     1,
