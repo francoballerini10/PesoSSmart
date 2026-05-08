@@ -1970,6 +1970,7 @@ export default function HomeScreen() {
 
   const [prevMonthCats,  setPrevMonthCats]  = useState<Record<string, { name: string; amount: number }>>({});
   const [prevMonthTotal, setPrevMonthTotal] = useState(0);
+  const [homeBudgets,    setHomeBudgets]    = useState<Array<{ id: string; category_id: string; monthly_limit: number }> | null>(null);
 
   useEffect(() => {
     if (user?.id) {
@@ -2012,6 +2013,14 @@ export default function HomeScreen() {
         .eq('user_id', user.id)
         .eq('status', 'pending')
         .then(({ count }: { count: number | null }) => setPendingCount(count ?? 0));
+
+      (supabase as any)
+        .from('category_budgets')
+        .select('id, category_id, monthly_limit')
+        .eq('user_id', user.id)
+        .then(({ data }: { data: Array<{ id: string; category_id: string; monthly_limit: number }> | null }) =>
+          setHomeBudgets(data ?? []),
+        );
     }
 
     // QuickStart: show unless dismissed
@@ -2329,17 +2338,17 @@ export default function HomeScreen() {
           <BudgetHomeWidget
             userId={user.id}
             expenses={expenses}
+            budgets={homeBudgets ?? []}
             onPress={() => router.push('/(app)/expenses' as any)}
           />
         )}
 
         {/* ── Insight del mes ──────────────────────────────────────────────────── */}
-        {!isLoading && user?.id && (
+        {!isLoading && user?.id && homeBudgets !== null && (
           <MonthInsightCard
-            userId={user.id}
             expenses={expenses.filter(e => e.category_id !== null)}
+            budgets={homeBudgets}
             pendingCount={pendingCount}
-            totalThisMonth={totalThisMonth}
             prevMonthTotal={prevMonthTotal}
             onNavigate={(route) => router.push(route as any)}
           />

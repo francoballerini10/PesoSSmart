@@ -1,73 +1,83 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
-  ActivityIndicator,
-  Share,
+  View, ScrollView, StyleSheet, TouchableOpacity,
+  Modal, TextInput, KeyboardAvoidingView, Platform,
+  Alert, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, layout } from '@/theme';
-import { Text, Card, Button, Input } from '@/components/ui';
+import { Text } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
 import { supabase } from '@/lib/supabase';
-import { formatCurrency, formatDate } from '@/utils/format';
+import { formatCurrency } from '@/utils/format';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ─── Tokens ───────────────────────────────────────────────────────────────────
 
-type FamilyRole = 'parent' | 'child' | 'partner';
-type ViewState  = 'loading' | 'empty' | 'parent' | 'child' | 'couple';
+const C = {
+  bg:       '#F6F7F9',
+  white:    '#FFFFFF',
+  purple:   '#8B5CF6',
+  purpleLt: '#F3EEFF',
+  green:    '#2E7D32',
+  greenLt:  '#EEF7EF',
+  text:     '#111111',
+  text2:    '#444444',
+  muted:    '#757575',
+  border:   '#E5E7EB',
+  red:      '#EF4444',
+} as const;
 
-type GroupData = {
-  id:          string;
-  name:        string;
-  invite_code: string;
-  group_type:  'family' | 'couple';
-};
+const sp = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24 } as const;
 
-type MemberData = {
-  id:            string;
-  user_id:       string;
-  role:          FamilyRole;
-  full_name:     string;
-  monthly_total: number; // 0 for parents / self when child
-};
+// ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type ChildExpense = {
-  id:                string;
-  amount:            number;
-  description:       string;
-  date:              string;
-  classification:    string;
-  expense_categories: { name_es: string } | null;
-};
+type GroupKind  = 'familiar' | 'amigos';
+type CreateKind = GroupKind;
+type MemberRole = 'Admin' | 'Miembro';
 
-type CoupleExpense = {
-  id:                string;
-  amount:            number;
-  description:       string;
-  date:              string;
-  classification:    string | null;
-  user_id:           string;
-  is_shared:         boolean;
-  expense_categories: { name_es: string } | null;
-};
+interface Member {
+  name:       string;
+  initial:    string;
+  color:      string;
+  monthTotal: number;
+  isMe:       boolean;
+}
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+interface Group {
+  id:           string;
+  name:         string;
+  kind:         GroupKind;
+  myRole:       MemberRole;
+  totalMonth:   number;
+  myMonthTotal: number;
+  hasActivity:  boolean;
+  members:      Member[];
+  color:        string;
+}
 
-function generateInviteCode(): string {
-  // Excluye caracteres confusos (0/O, 1/I, etc.)
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const GROUP_COLORS  = ['#8B5CF6', '#F59E0B', '#3B82F6', '#10B981', '#EF4444', '#EC4899'];
+const AVATAR_COLORS = ['#4361ee', '#e63946', '#2d6a4f', '#f4a261', '#7209b7', '#3a86ff'];
+
+function hashIdx(str: string, len: number): number {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
+  return Math.abs(h) % len;
+}
+
+function mapRole(dbRole: string): MemberRole {
+  return dbRole === 'parent' || dbRole === 'partner' || dbRole === 'admin' ? 'Admin' : 'Miembro';
+}
+
+function mapKind(dbType: string): GroupKind {
+  return dbType === 'friends' ? 'amigos' : 'familiar';
+}
+
+function generateCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return Array.from(
-    { length: 6 },
-    () => chars[Math.floor(Math.random() * chars.length)],
-  ).join('');
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
 function currentMonthStart(): string {
@@ -75,1038 +85,428 @@ function currentMonthStart(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-// ── Sub-components ───────────────────────────────────────────────────────────
+function sevenDaysAgo(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  return d.toISOString().split('T')[0];
+}
 
-function MemberRow({
-  member,
-  isCurrentUser,
-  showAmount,
-  onPress,
-}: {
-  member:        MemberData;
-  isCurrentUser: boolean;
-  showAmount:    boolean;
-  onPress?:      () => void;
-}) {
-  const isParent = member.role === 'parent';
-  const accentColor = isParent ? colors.neon : colors.info;
+// ─── Fetch ────────────────────────────────────────────────────────────────────
+
+async function fetchGroups(userId: string): Promise<Group[]> {
+  const db = supabase as any;
+
+  const { data: memberships } = await db
+    .from('family_members').select('role, group_id').eq('user_id', userId);
+  if (!memberships?.length) return [];
+
+  const groupIds: string[] = memberships.map((m: any) => m.group_id);
+
+  const [{ data: groupsRaw }, { data: membersRaw }] = await Promise.all([
+    db.from('family_groups').select('id, name, group_type').in('id', groupIds),
+    db.from('family_members').select('user_id, role, group_id').in('group_id', groupIds),
+  ]);
+
+  const allUserIds: string[] = [...new Set((membersRaw ?? []).map((m: any) => m.user_id as string))];
+
+  const [{ data: profilesRaw }, { data: expensesRaw }] = await Promise.all([
+    db.from('profiles').select('id, full_name, email').in('id', allUserIds),
+    supabase.from('expenses').select('user_id, amount, date')
+      .in('user_id', allUserIds).gte('date', currentMonthStart()).is('deleted_at', null),
+  ]);
+
+  const profileMap: Record<string, { full_name?: string; email?: string }> = {};
+  for (const p of profilesRaw ?? []) profileMap[p.id] = p;
+
+  const totals: Record<string, number> = {};
+  const lastDate: Record<string, string> = {};
+  for (const e of expensesRaw ?? []) {
+    totals[e.user_id] = (totals[e.user_id] ?? 0) + Number(e.amount);
+    if (!lastDate[e.user_id] || e.date > lastDate[e.user_id]) lastDate[e.user_id] = e.date;
+  }
+
+  const recentDate = sevenDaysAgo();
+
+  return (groupsRaw ?? []).map((g: any): Group => {
+    const myMembership = memberships.find((m: any) => m.group_id === g.id);
+    const groupMembers: any[] = (membersRaw ?? []).filter((m: any) => m.group_id === g.id);
+
+    const members: Member[] = groupMembers.map((m: any) => {
+      const p = profileMap[m.user_id];
+      const name = p?.full_name || (p?.email ? p.email.split('@')[0] : null) || 'Miembro';
+      return {
+        name, initial: name.charAt(0).toUpperCase(),
+        color: AVATAR_COLORS[hashIdx(m.user_id, AVATAR_COLORS.length)],
+        monthTotal: totals[m.user_id] ?? 0,
+        isMe: m.user_id === userId,
+      };
+    });
+
+    const totalMonth    = members.reduce((s, m) => s + m.monthTotal, 0);
+    const myMonthTotal  = members.find(m => m.isMe)?.monthTotal ?? 0;
+    const hasActivity   = groupMembers.some(m => (lastDate[m.user_id] ?? '') >= recentDate);
+
+    return {
+      id: g.id, name: g.name,
+      kind:         mapKind(g.group_type),
+      myRole:       mapRole(myMembership?.role ?? 'child'),
+      totalMonth, myMonthTotal, hasActivity, members,
+      color: GROUP_COLORS[hashIdx(g.id, GROUP_COLORS.length)],
+    };
+  });
+}
+
+// ─── GroupCard ────────────────────────────────────────────────────────────────
+
+function GroupCard({ group, onPress }: { group: Group; onPress: () => void }) {
+  const pct = group.totalMonth > 0 ? (group.myMonthTotal / group.totalMonth) * 100 : 0;
+  const icon = group.kind === 'amigos' ? 'people' : 'home';
 
   return (
-    <TouchableOpacity
-      style={styles.memberRow}
-      onPress={onPress}
-      disabled={!onPress}
-      activeOpacity={onPress ? 0.7 : 1}
-    >
-      {/* Avatar circular con inicial */}
-      <View style={[styles.memberAvatar, { backgroundColor: accentColor + '18', borderColor: accentColor + '40' }]}>
-        <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 14, color: accentColor }}>
-          {(isCurrentUser ? 'Vos' : member.full_name).charAt(0).toUpperCase()}
-        </Text>
-      </View>
+    <TouchableOpacity style={s.groupCard} onPress={onPress} activeOpacity={0.85}>
 
-      {/* Info */}
-      <View style={styles.memberInfo}>
-        <View style={styles.memberNameRow}>
-          <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-            {isCurrentUser ? 'Vos' : member.full_name}
-          </Text>
-          {isCurrentUser && (
-            <View style={styles.youBadge}>
-              <Text style={styles.youBadgeText}>TÚ</Text>
-            </View>
-          )}
+      {/* Top row */}
+      <View style={s.gcTop}>
+        <View style={[s.gcIcon, { backgroundColor: group.color + '18' }]}>
+          <Ionicons name={icon} size={22} color={group.color} />
         </View>
-        <Text variant="caption" color={accentColor}>
-          {isParent ? 'Padre / Madre' : 'Hijo / Hija'}
-        </Text>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={s.gcName} numberOfLines={1}>{group.name}</Text>
+          <Text style={s.gcMeta}>
+            {group.members.length} miembro{group.members.length !== 1 ? 's' : ''}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
+          <Text style={s.gcTotalLbl}>Total del mes</Text>
+          <Text style={[s.gcTotalAmt, { color: group.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            {formatCurrency(group.totalMonth)}
+          </Text>
+        </View>
       </View>
 
-      {/* Right */}
-      <View style={styles.memberRight}>
-        {showAmount && (
-          <Text variant="labelMd" color={colors.text.primary}>
-            {formatCurrency(member.monthly_total)}
-          </Text>
-        )}
-        {onPress && (
-          <Ionicons
-            name="chevron-forward"
-            size={16}
-            color={colors.text.tertiary}
-            style={{ marginLeft: spacing[2] }}
-          />
-        )}
+      {/* Progress bar */}
+      <View style={s.gcBar}>
+        <View style={[s.gcBarFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: group.color }]} />
       </View>
+
+      {/* Bottom row */}
+      <View style={s.gcBottom}>
+        <View>
+          <Text style={s.gcPartLbl}>Tu parte</Text>
+          <Text style={s.gcPartAmt}>{formatCurrency(group.myMonthTotal)}</Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={s.gcPartLbl}>Pagaste</Text>
+          <Text style={s.gcPartAmt}>{formatCurrency(group.myMonthTotal)}</Text>
+        </View>
+      </View>
+
     </TouchableOpacity>
   );
 }
 
-function InviteCodeCard({ code }: { code: string }) {
-  const handleShare = () => {
-    Share.share({
-      message: `Unite a mi grupo familiar en SmartPesos con el código: ${code}`,
-      title: 'Código de invitación familiar',
-    });
-  };
-
-  return (
-    <Card variant="neon" style={styles.codeCard}>
-      <Text variant="label" color={colors.text.secondary}>
-        CÓDIGO DE INVITACIÓN
-      </Text>
-
-      <View style={styles.codeRow}>
-        {/* Letters */}
-        <View style={styles.codeLetters}>
-          {code.split('').map((char, i) => (
-            <View key={i} style={styles.codeLetter}>
-              <Text variant="h4" color={colors.neon} style={{ letterSpacing: 0 }}>
-                {char}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Share */}
-        <TouchableOpacity style={styles.shareBtn} onPress={handleShare}>
-          <Ionicons name="share-social-outline" size={18} color={colors.text.secondary} />
-          <Text variant="caption" color={colors.text.secondary} style={{ marginTop: 2 }}>
-            COMPARTIR
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <Text variant="caption" color={colors.text.secondary} style={{ marginTop: spacing[3] }}>
-        Compartí este código para que tu familia se una al grupo
-      </Text>
-    </Card>
-  );
-}
-
-function ChildExpenseList({
-  expenses,
-  loading,
-}: {
-  expenses: ChildExpense[];
-  loading:  boolean;
-}) {
-  if (loading) {
-    return (
-      <View style={styles.listPlaceholder}>
-        <ActivityIndicator color={colors.neon} size="small" />
-      </View>
-    );
-  }
-
-  if (expenses.length === 0) {
-    return (
-      <View style={styles.listPlaceholder}>
-        <Text variant="caption" color={colors.text.tertiary} align="center">
-          Sin gastos este mes
-        </Text>
-      </View>
-    );
-  }
-
-  const total = expenses.reduce((s, e) => s + Number(e.amount), 0);
-
-  return (
-    <View>
-      {/* Monthly total */}
-      <View style={styles.childTotal}>
-        <Text variant="label" color={colors.text.secondary}>TOTAL DEL MES</Text>
-        <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(total)}</Text>
-      </View>
-
-      {/* List */}
-      {expenses.map((exp) => (
-        <View key={exp.id} style={styles.expRow}>
-          <View style={{ flex: 1 }}>
-            <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
-              {exp.description}
-            </Text>
-            <Text variant="caption" color={colors.text.secondary}>
-              {formatDate(exp.date)}
-              {exp.expense_categories ? ` · ${exp.expense_categories.name_es}` : ''}
-            </Text>
-          </View>
-          <Text
-            variant="labelMd"
-            color={
-              exp.classification === 'investable' ? colors.neon :
-              exp.classification === 'disposable' ? colors.red :
-              colors.text.primary
-            }
-          >
-            {formatCurrency(exp.amount)}
-          </Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function CoupleExpenseRow({
-  expense,
-  isMe,
-  memberName,
-}: {
-  expense:    CoupleExpense;
-  isMe:       boolean;
-  memberName: string;
-}) {
-  const accentColor =
-    expense.classification === 'investable' ? colors.neon :
-    expense.classification === 'disposable' ? colors.red :
-    colors.text.primary;
-
-  return (
-    <View style={styles.expRow}>
-      {/* Indicador de quién gastó */}
-      <View style={[styles.coupleAvatar, { borderColor: isMe ? colors.neon : colors.info }]}>
-        <Text style={{ fontSize: 10, color: isMe ? colors.neon : colors.info, fontFamily: 'Montserrat_600SemiBold' }}>
-          {isMe ? 'VOS' : memberName.split(' ')[0].slice(0, 3).toUpperCase()}
-        </Text>
-      </View>
-
-      <View style={{ flex: 1 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1} style={{ flex: 1 }}>
-            {expense.description}
-          </Text>
-          {expense.is_shared && (
-            <View style={styles.sharedBadge}>
-              <Text style={{ fontSize: 9, color: colors.yellow, fontFamily: 'Montserrat_600SemiBold' }}>
-                COMPARTIDO
-              </Text>
-            </View>
-          )}
-        </View>
-        <Text variant="caption" color={colors.text.secondary}>
-          {formatDate(expense.date)}
-          {expense.expense_categories ? ` · ${expense.expense_categories.name_es}` : ''}
-        </Text>
-      </View>
-
-      <Text variant="labelMd" color={accentColor}>
-        {formatCurrency(expense.amount)}
-      </Text>
-    </View>
-  );
-}
-
-// ── Main Screen ───────────────────────────────────────────────────────────────
+// ─── Pantalla ─────────────────────────────────────────────────────────────────
 
 export default function FamilyScreen() {
   const { user } = useAuthStore();
 
-  const [viewState,    setViewState]    = useState<ViewState>('loading');
-  const [group,        setGroup]        = useState<GroupData | null>(null);
-  const [myRole,       setMyRole]       = useState<FamilyRole | null>(null);
-  const [members,      setMembers]      = useState<MemberData[]>([]);
+  const [groups,     setGroups]     = useState<Group[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [showCreateModal,      setShowCreateModal]      = useState(false);
-  const [showJoinModal,        setShowJoinModal]        = useState(false);
-  const [creatingCoupleMode,   setCreatingCoupleMode]   = useState(false);
-  const [groupName,            setGroupName]            = useState('');
-  const [joinCode,             setJoinCode]             = useState('');
-  const [isSubmitting,         setIsSubmitting]         = useState(false);
+  const [showJoin,    setShowJoin]    = useState(false);
+  const [joinCode,    setJoinCode]    = useState('');
+  const [joinError,   setJoinError]   = useState<string | null>(null);
+  const [joiningLoad, setJoiningLoad] = useState(false);
 
-  const [selectedChildId,      setSelectedChildId]      = useState<string | null>(null);
-  const [childExpenses,        setChildExpenses]        = useState<ChildExpense[]>([]);
-  const [childExpensesLoading, setChildExpensesLoading] = useState(false);
+  const [showCreate,   setShowCreate]   = useState(false);
+  const [createKind,   setCreateKind]   = useState<CreateKind>('familiar');
+  const [groupName,    setGroupName]    = useState('');
+  const [creatingLoad, setCreatingLoad] = useState(false);
 
-  const [coupleExpenses,       setCoupleExpenses]       = useState<CoupleExpense[]>([]);
-
-  // ── Data loading ────────────────────────────────────────────────────────
-
-  const loadFamilyData = useCallback(async () => {
-    if (!user?.id) {
-      setViewState('empty');
-      return;
-    }
-    setViewState('loading');
-
-    const db = supabase as any;
-
-    // ¿El usuario tiene membresía?
-    const { data: membership } = await db
-      .from('family_members')
-      .select('role, group_id')
-      .eq('user_id', user.id)
-      .single();
-
-    if (!membership) {
-      setViewState('empty');
-      return;
-    }
-
-    setMyRole(membership.role as FamilyRole);
-
-    // Info del grupo
-    const { data: groupData } = await db
-      .from('family_groups')
-      .select('id, name, invite_code, group_type')
-      .eq('id', membership.group_id)
-      .single();
-
-    if (!groupData) {
-      setViewState('empty');
-      return;
-    }
-
-    setGroup(groupData);
-
-    // Miembros con perfil
-    const { data: membersRaw } = await db
-      .from('family_members')
-      .select('id, user_id, role, profiles:user_id(full_name)')
-      .eq('group_id', membership.group_id)
-      .order('role', { ascending: true }); // parents first
-
-    const formatted: MemberData[] = (membersRaw ?? []).map((m: any) => ({
-      id:            m.id,
-      user_id:       m.user_id,
-      role:          m.role as FamilyRole,
-      full_name:     m.profiles?.full_name ?? 'Sin nombre',
-      monthly_total: 0,
-    }));
-
-    // Si es pareja → cargar gastos combinados de ambos
-    if (groupData.group_type === 'couple') {
-      const partnerIds = formatted.map((m) => m.user_id);
-      const { data: expData } = await supabase
-        .from('expenses')
-        .select('id, amount, description, date, classification, user_id, is_shared, expense_categories:category_id(name_es)')
-        .in('user_id', partnerIds)
-        .gte('date', currentMonthStart())
-        .is('deleted_at', null)
-        .order('date', { ascending: false });
-
-      setCoupleExpenses((expData ?? []) as CoupleExpense[]);
-      setViewState('couple');
-      setMembers(formatted);
-      return;
-    }
-
-    // Si es padre → obtener totales mensuales de los hijos
-    if (membership.role === 'parent') {
-      const childIds = formatted
-        .filter((m) => m.role === 'child')
-        .map((m) => m.user_id);
-
-      if (childIds.length > 0) {
-        const { data: expData } = await supabase
-          .from('expenses')
-          .select('user_id, amount')
-          .in('user_id', childIds)
-          .gte('date', currentMonthStart());
-
-        const totals: Record<string, number> = {};
-        expData?.forEach((e: any) => {
-          totals[e.user_id] = (totals[e.user_id] ?? 0) + Number(e.amount);
-        });
-
-        formatted.forEach((m) => {
-          if (m.role === 'child') m.monthly_total = totals[m.user_id] ?? 0;
-        });
-      }
-
-      setViewState('parent');
-    } else {
-      setViewState('child');
-    }
-
-    setMembers(formatted);
+  const loadGroups = useCallback(async () => {
+    if (!user?.id) return;
+    const data = await fetchGroups(user.id);
+    setGroups(data);
+    setLoading(false);
+    setRefreshing(false);
   }, [user?.id]);
 
-  useEffect(() => {
-    loadFamilyData();
-  }, [loadFamilyData]);
+  useEffect(() => { loadGroups(); }, [loadGroups]);
 
-  // ── Actions ──────────────────────────────────────────────────────────────
-
-  const handleCreateGroup = async (groupType: 'family' | 'couple' = 'family') => {
-    if (!user?.id || !groupName.trim()) return;
-    setIsSubmitting(true);
-    try {
-      const code = generateInviteCode();
-      const role = groupType === 'couple' ? 'partner' : 'parent';
-
-      const db2 = supabase as any;
-      const { data: newGroup, error: groupErr } = await db2
-        .from('family_groups')
-        .insert({ name: groupName.trim(), invite_code: code, group_type: groupType, owner_id: user.id })
-        .select()
-        .single();
-
-      if (groupErr) {
-        console.error('[Family] INSERT family_groups falló:', groupErr.code, groupErr.message);
-        throw groupErr;
-      }
-
-      console.log('[Family] Grupo creado OK:', newGroup.id, '| Insertando membresía...');
-
-      const { error: memberErr } = await db2
-        .from('family_members')
-        .insert({ group_id: newGroup.id, user_id: user.id, role });
-
-      if (memberErr) {
-        console.error('[Family] INSERT family_members falló:', memberErr.code, memberErr.message);
-        throw memberErr;
-      }
-
-      console.log('[Family] Membresía creada OK — recargando...');
-      setShowCreateModal(false);
-      setGroupName('');
-      await loadFamilyData();
-    } catch (err: any) {
-      const msg = err?.message ?? 'No se pudo crear el grupo.';
-      console.error('[Family] handleCreateGroup ERROR:', err);
-      // Traducir errores técnicos a mensajes entendibles
-      if (msg.includes('does not exist')) {
-        Alert.alert('Error de configuración', 'Las tablas de grupo familiar no están creadas en la base de datos. Contactá al soporte.');
-      } else if (msg.includes('duplicate') || err?.code === '23505') {
-        Alert.alert('Código repetido', 'Ocurrió un conflicto al generar el código. Intentá de nuevo.');
-      } else {
-        Alert.alert('Error', msg);
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
+  const openCreate = (kind: CreateKind = 'familiar') => {
+    setCreateKind(kind);
+    setGroupName('');
+    setShowCreate(true);
   };
 
-  const handleJoinGroup = async () => {
-    console.log('[Family] handleJoinGroup START | code:', joinCode);
-    if (!user?.id || joinCode.trim().length < 6) return;
-    setIsSubmitting(true);
+  const handleJoin = async () => {
+    if (joinCode.length < 6 || !user?.id) return;
+    setJoiningLoad(true);
+    setJoinError(null);
     try {
-      const db3 = supabase as any;
-      const { data: targetGroup, error: findErr } = await db3
-        .from('family_groups')
-        .select('id, name, group_type')
-        .eq('invite_code', joinCode.trim().toUpperCase())
-        .single();
-
-      if (findErr) {
-        console.error('[Family] SELECT family_groups falló:', findErr.code, findErr.message);
-        if (findErr.message.includes('does not exist')) {
-          Alert.alert('Error de configuración', 'Las tablas de grupo familiar no están creadas. Contactá al soporte.');
-          return;
-        }
-      }
-
-      if (!targetGroup) {
-        Alert.alert(
-          'Código inválido',
-          'No encontramos ningún grupo con ese código. Verificalo e intentá de nuevo.',
-        );
+      const db = supabase as any;
+      const { data: rows } = await db.rpc('find_group_by_invite_code', { p_code: joinCode.toUpperCase() });
+      const group = rows?.[0] ?? null;
+      if (!group) { setJoinError('Código inválido. Verificalo e intentá de nuevo.'); return; }
+      const role = 'member';
+      const { error } = await db
+        .from('family_members').insert({ group_id: group.id, user_id: user.id, role });
+      if (error?.code === '23505') { setJoinError('Ya sos miembro de ese grupo.'); return; }
+      if (error) {
+        setJoinError(`No pudimos unirte al grupo. ${error.message ?? 'Revisá el código e intentá de nuevo.'}`);
         return;
       }
-
-      const joinRole = targetGroup.group_type === 'couple' ? 'partner' : 'child';
-      const { error: joinErr } = await db3
-        .from('family_members')
-        .insert({ group_id: targetGroup.id, user_id: user.id, role: joinRole });
-
-      if (joinErr) {
-        if (joinErr.code === '23505') {
-          Alert.alert(
-            'Ya estás en un grupo',
-            'Salí de tu grupo actual antes de unirte a uno nuevo.',
-          );
-        } else {
-          throw joinErr;
-        }
-        return;
-      }
-
-      setShowJoinModal(false);
+      setShowJoin(false);
       setJoinCode('');
-      Alert.alert('¡Listo!', `Te uniste al grupo "${targetGroup.name}".`);
-      await loadFamilyData();
+      await loadGroups();
+      Alert.alert('¡Listo!', `Te uniste a "${group.name}".`);
     } catch (err: any) {
-      Alert.alert('Error', err.message ?? 'No se pudo unir al grupo.');
+      setJoinError(err?.message ?? 'No pudimos unirte al grupo. Revisá el código e intentá de nuevo.');
     } finally {
-      setIsSubmitting(false);
+      setJoiningLoad(false);
     }
   };
 
-  const handleLeave = () => {
-    const isParent  = myRole === 'parent';
-    const isPartner = myRole === 'partner';
-    const isAdmin   = isParent || isPartner;
-    Alert.alert(
-      isAdmin ? 'Disolver grupo' : 'Salir del grupo',
-      isAdmin
-        ? 'Si salís, el grupo se disuelve y todos los miembros quedan sin grupo. ¿Estás seguro?'
-        : '¿Seguro que querés salir del grupo familiar?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: isParent ? 'Disolver' : 'Salir',
-          style: 'destructive',
-          onPress: async () => {
-            if (!user?.id || !group?.id) return;
-            if (isAdmin) {
-              // Elimina el grupo → CASCADE borra todos los miembros
-              await (supabase as any).from('family_groups').delete().eq('id', group.id);
-            } else {
-              await (supabase as any)
-                .from('family_members')
-                .delete()
-                .eq('user_id', user.id)
-                .eq('group_id', group.id);
-            }
-            setGroup(null);
-            setMembers([]);
-            setMyRole(null);
-            setSelectedChildId(null);
-            setChildExpenses([]);
-            setViewState('empty');
-          },
-        },
-      ],
-    );
-  };
-
-  const handleSelectChild = async (childUserId: string) => {
-    // Toggle: si ya estaba seleccionado, colapsar
-    if (selectedChildId === childUserId) {
-      setSelectedChildId(null);
-      setChildExpenses([]);
-      return;
-    }
-    setSelectedChildId(childUserId);
-    setChildExpensesLoading(true);
+  const handleCreate = async () => {
+    if (!groupName.trim() || !user?.id) return;
+    setCreatingLoad(true);
     try {
-      const { data } = await supabase
-        .from('expenses')
-        .select('id, amount, description, date, classification, expense_categories:category_id(name_es)')
-        .eq('user_id', childUserId)
-        .gte('date', currentMonthStart())
-        .order('date', { ascending: false });
-
-      setChildExpenses((data ?? []) as ChildExpense[]);
+      const code   = generateCode();
+      const db     = supabase as any;
+      const dbType = createKind === 'amigos' ? 'friends' : 'family';
+      const role   = 'admin';
+      const { data: g, error: e1 } = await db
+        .from('family_groups')
+        .insert({ name: groupName.trim(), invite_code: code, group_type: dbType })
+        .select().single();
+      if (e1) throw e1;
+      const { error: e2 } = await db
+        .from('family_members').insert({ group_id: g.id, user_id: user.id, role });
+      if (e2) throw e2;
+      setShowCreate(false);
+      setGroupName('');
+      await loadGroups();
+      Alert.alert('Grupo creado 🎉', `Tu código de invitación: ${code}\n\nCompartilo para que otros se unan.`);
+    } catch (err: any) {
+      const msg = err?.message ?? err?.details ?? JSON.stringify(err) ?? 'Error desconocido.';
+      Alert.alert('No pudimos crear el grupo', msg + '\n\nAsegurate de haber corrido la migración groups_v2.sql en Supabase.');
     } finally {
-      setChildExpensesLoading(false);
+      setCreatingLoad(false);
     }
   };
-
-  // ── Render ───────────────────────────────────────────────────────────────
-
-  if (viewState === 'loading') {
-    return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.neon} size="large" />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const children      = members.filter((m) => m.role === 'child');
-  const selectedChild = members.find((m) => m.user_id === selectedChildId);
-  const hasGroup      = viewState !== 'empty' && group !== null;
-  const roleLabel     = myRole === 'parent' ? 'Admin' : myRole === 'partner' ? 'Admin' : 'Miembro';
-  const groupEmoji    = myRole === 'partner' ? '💑' : '👨‍👩‍👧‍👦';
-  const sharingDesc   = myRole === 'partner'
-    ? 'Compartimos todo (dividir gastos)'
-    : myRole === 'parent'
-      ? 'Compartimos categorías y montos totales'
-      : 'Solo ves tus propios gastos';
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={s.safe} edges={['top']}>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <Text variant="h4">Grupos</Text>
-        <TouchableOpacity
-          style={styles.addHeaderBtn}
-          onPress={() => { setCreatingCoupleMode(false); setShowCreateModal(true); }}
-        >
-          <Ionicons name="add" size={22} color={colors.primary} />
+      {/* Header */}
+      <View style={s.header}>
+        <Text style={s.headerTitle}>Grupos</Text>
+        <TouchableOpacity style={s.addBtn} onPress={() => openCreate()} activeOpacity={0.85}>
+          <Ionicons name="add" size={24} color={C.white} />
         </TouchableOpacity>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { setRefreshing(true); loadGroups(); }}
+            tintColor={C.purple}
+          />
+        }
       >
 
-        {/* ── Privacidad card (siempre visible) ─────────────────────────── */}
-        <View style={styles.privacyHeroCard}>
-          <Text variant="subtitle" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-            Vos decidís qué compartir
-          </Text>
-          <Text variant="bodySmall" color={colors.text.secondary} style={{ lineHeight: 20, marginTop: spacing[1] }}>
-            Compartí gastos y coordiná sin perder privacidad. Elegí qué información ve cada miembro.
-          </Text>
-          {!hasGroup && (
-            <TouchableOpacity
-              style={styles.createGroupBtn}
-              onPress={() => { setCreatingCoupleMode(false); setShowCreateModal(true); }}
-              activeOpacity={0.8}
-            >
-              <Text variant="label" color={colors.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                Crear grupo →
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* ── Mis grupos ────────────────────────────────────────────────── */}
-        <View style={styles.sectionHeader}>
-          <Text variant="label" color={colors.text.tertiary}>MIS GRUPOS</Text>
-        </View>
-
-        {!hasGroup ? (
-          <View style={styles.emptyGroupsCard}>
-            <Ionicons name="people-outline" size={32} color={colors.text.tertiary} />
-            <Text variant="bodySmall" color={colors.text.tertiary} style={{ textAlign: 'center', marginTop: spacing[2] }}>
-              Todavía no tenés grupos.{'\n'}Creá uno o uníte con un código.
-            </Text>
-            <TouchableOpacity
-              style={styles.joinBtn}
-              onPress={() => setShowJoinModal(true)}
-              activeOpacity={0.8}
-            >
-              <Text variant="label" color={colors.text.secondary}>Unirme con código →</Text>
-            </TouchableOpacity>
+        {/* Promo card */}
+        <View style={s.promoCard}>
+          <View style={s.promoIconWrap}>
+            <Ionicons name="people" size={26} color={C.green} />
           </View>
-        ) : (
-          <TouchableOpacity
-            style={styles.groupRow}
-            onPress={group?.invite_code ? () => {
-              Alert.alert(
-                group.name,
-                `Código de invitación: ${group.invite_code}\n\nMiembros: ${members.length}`,
-                [
-                  { text: 'Salir del grupo', style: 'destructive', onPress: handleLeave },
-                  { text: 'Cerrar', style: 'cancel' },
-                ],
-              );
-            } : undefined}
-            activeOpacity={0.8}
-          >
-            <View style={styles.groupRowEmoji}>
-              <Text style={{ fontSize: 22 }}>{groupEmoji}</Text>
-            </View>
-            <View style={{ flex: 1, gap: 2 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                  {group.name}
-                </Text>
-                <View style={styles.roleBadge}>
-                  <Text style={styles.roleBadgeText}>{roleLabel}</Text>
-                </View>
-              </View>
-              <Text variant="caption" color={colors.text.tertiary}>
-                {members.length} miembro{members.length !== 1 ? 's' : ''} · {sharingDesc}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+          <Text style={s.promoTitle}>Organizá tus gastos en grupo</Text>
+          <Text style={s.promoSub}>
+            Creá un grupo para compartir gastos, ver resúmenes y mantener todo claro.
+          </Text>
+          <TouchableOpacity style={s.promoBtn} onPress={() => openCreate()} activeOpacity={0.85}>
+            <Text style={s.promoBtnText}>Crear grupo</Text>
           </TouchableOpacity>
-        )}
-
-        {/* ── OLD PARENT VIEW INLINE (kept for data display) ─────────────── */}
-        {viewState === 'parent' && group && (
-          <>
-            {/* Group header */}
-            <Card variant="neon" style={styles.groupCard}>
-              <View style={styles.groupCardRow}>
-                <View style={{ flex: 1 }}>
-                  <Text variant="label" color={colors.text.secondary}>TU GRUPO</Text>
-                  <Text variant="h4" style={{ marginTop: spacing[1] }}>{group.name}</Text>
-                  <Text variant="caption" color={colors.neon} style={{ marginTop: spacing[1] }}>
-                    {members.length} MIEMBRO{members.length !== 1 ? 'S' : ''} · PADRE / MADRE
-                  </Text>
-                </View>
-                <View style={styles.parentIcon}>
-                  <Ionicons name="shield-checkmark" size={26} color={colors.neon} />
-                </View>
-              </View>
-            </Card>
-
-            {/* Código de invitación */}
-            <InviteCodeCard code={group.invite_code} />
-
-            {/* Miembros */}
-            <View style={styles.section}>
-              <Text variant="label" color={colors.text.secondary}>MIEMBROS</Text>
-              <Card style={{ padding: 0 }}>
-                {members.map((m, idx) => (
-                  <View key={m.id}>
-                    <MemberRow
-                      member={m}
-                      isCurrentUser={m.user_id === user?.id}
-                      showAmount={m.role === 'child'}
-                      onPress={m.role === 'child' ? () => handleSelectChild(m.user_id) : undefined}
-                    />
-                    {idx < members.length - 1 && <View style={styles.rowDivider} />}
-                  </View>
-                ))}
-
-                {children.length === 0 && (
-                  <View style={styles.emptyMembersNote}>
-                    <Ionicons name="people-outline" size={20} color={colors.text.tertiary} />
-                    <Text variant="caption" color={colors.text.tertiary} align="center">
-                      Todavía no hay hijos en el grupo.{'\n'}Compartí el código de invitación.
-                    </Text>
-                  </View>
-                )}
-              </Card>
-            </View>
-
-            {/* Gastos del hijo seleccionado */}
-            {selectedChild && (
-              <View style={styles.section}>
-                <View style={styles.sectionTitleRow}>
-                  <Text variant="label" color={colors.text.secondary}>
-                    GASTOS DE {selectedChild.full_name.toUpperCase()} — ESTE MES
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => { setSelectedChildId(null); setChildExpenses([]); }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="close" size={18} color={colors.text.tertiary} />
-                  </TouchableOpacity>
-                </View>
-                <Card style={{ padding: 0 }}>
-                  <ChildExpenseList expenses={childExpenses} loading={childExpensesLoading} />
-                </Card>
-              </View>
-            )}
-          </>
-        )}
-
-        {/* ════════════════════════════════════════════════════════════════
-            COUPLE VIEW — modo pareja
-        ════════════════════════════════════════════════════════════════ */}
-        {viewState === 'couple' && group && (() => {
-          const me      = members.find((m) => m.user_id === user?.id);
-          const partner = members.find((m) => m.user_id !== user?.id);
-          const myTotal      = coupleExpenses.filter(e => e.user_id === user?.id).reduce((s, e) => s + e.amount, 0);
-          const partnerTotal = coupleExpenses.filter(e => e.user_id !== user?.id).reduce((s, e) => s + e.amount, 0);
-          const combined     = myTotal + partnerTotal;
-          const myPct        = combined > 0 ? myTotal / combined : 0.5;
-
-          return (
-            <>
-              {/* Header */}
-              <Card variant="neon" style={styles.groupCard}>
-                <View style={styles.groupCardRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text variant="label" color={colors.text.secondary}>MODO PAREJA</Text>
-                    <Text variant="h4" style={{ marginTop: spacing[1] }}>{group.name}</Text>
-                    <Text variant="caption" color={colors.neon} style={{ marginTop: spacing[1] }}>
-                      {members.length === 2 ? '2 PERSONAS CONECTADAS' : 'ESPERANDO A TU PAREJA'}
-                    </Text>
-                  </View>
-                  <View style={styles.parentIcon}>
-                    <Ionicons name="heart" size={26} color={colors.neon} />
-                  </View>
-                </View>
-              </Card>
-
-              {/* Total combinado */}
-              <Card style={styles.combinedCard}>
-                <Text variant="label" color={colors.text.secondary}>TOTAL COMBINADO DEL MES</Text>
-                <Text variant="number" color={colors.text.primary} style={{ marginTop: spacing[1] }}>
-                  {formatCurrency(combined)}
-                </Text>
-
-                {/* Barra de proporción */}
-                {combined > 0 && (
-                  <View style={styles.proportionBar}>
-                    <View style={[styles.proportionFill, { flex: myPct, backgroundColor: colors.neon }]} />
-                    <View style={[styles.proportionFill, { flex: 1 - myPct, backgroundColor: colors.info }]} />
-                  </View>
-                )}
-
-                {/* Breakdown por persona */}
-                <View style={styles.partnerBreakdown}>
-                  <View style={styles.partnerBreakdownItem}>
-                    <View style={[styles.partnerDot, { backgroundColor: colors.neon }]} />
-                    <Text variant="caption" color={colors.text.secondary}>Vos</Text>
-                    <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(myTotal)}</Text>
-                  </View>
-                  {partner && (
-                    <View style={styles.partnerBreakdownItem}>
-                      <View style={[styles.partnerDot, { backgroundColor: colors.info }]} />
-                      <Text variant="caption" color={colors.text.secondary}>
-                        {partner.full_name.split(' ')[0]}
-                      </Text>
-                      <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(partnerTotal)}</Text>
-                    </View>
-                  )}
-                </View>
-              </Card>
-
-              {/* Código de invitación si la pareja aún no se unió */}
-              {members.length < 2 && (
-                <View style={styles.section}>
-                  <Text variant="label" color={colors.text.secondary}>INVITÁ A TU PAREJA</Text>
-                  <InviteCodeCard code={group.invite_code} />
-                </View>
-              )}
-
-              {/* Lista de gastos combinados */}
-              <View style={styles.section}>
-                <Text variant="label" color={colors.text.secondary}>GASTOS DEL MES</Text>
-                {coupleExpenses.length === 0 ? (
-                  <Card>
-                    <Text variant="caption" color={colors.text.tertiary} align="center">
-                      Sin gastos este mes
-                    </Text>
-                  </Card>
-                ) : (
-                  <Card style={{ padding: 0 }}>
-                    {coupleExpenses.map((exp, idx) => (
-                      <View key={exp.id}>
-                        <CoupleExpenseRow
-                          expense={exp}
-                          isMe={exp.user_id === user?.id}
-                          memberName={partner?.full_name ?? ''}
-                        />
-                        {idx < coupleExpenses.length - 1 && <View style={styles.rowDivider} />}
-                      </View>
-                    ))}
-                  </Card>
-                )}
-              </View>
-
-              {/* Salir */}
-              <Button
-                label="DISOLVER MODO PAREJA"
-                variant="ghost"
-                size="md"
-                fullWidth
-                leftIcon={<Ionicons name="exit-outline" size={18} color={colors.red} />}
-                onPress={handleLeave}
-                style={{ borderColor: colors.red + '66' }}
-              />
-            </>
-          );
-        })()}
-
-        {/* ════════════════════════════════════════════════════════════════
-            CHILD VIEW — hijo / hija
-        ════════════════════════════════════════════════════════════════ */}
-        {viewState === 'child' && group && (
-          <>
-            {/* Group card */}
-            <Card style={styles.groupCard}>
-              <View style={styles.groupCardRow}>
-                <View style={{ flex: 1 }}>
-                  <Text variant="label" color={colors.text.secondary}>TU GRUPO</Text>
-                  <Text variant="h4" style={{ marginTop: spacing[1] }}>{group.name}</Text>
-                  <Text variant="caption" color={colors.info} style={{ marginTop: spacing[1] }}>
-                    SOS HIJO / HIJA DE ESTE GRUPO
-                  </Text>
-                </View>
-                <Ionicons name="people" size={26} color={colors.text.tertiary} />
-              </View>
-            </Card>
-
-            {/* Miembros — sin montos */}
-            <View style={styles.section}>
-              <Text variant="label" color={colors.text.secondary}>MIEMBROS</Text>
-              <Card style={{ padding: 0 }}>
-                {members.map((m, idx) => (
-                  <View key={m.id}>
-                    <MemberRow
-                      member={m}
-                      isCurrentUser={m.user_id === user?.id}
-                      showAmount={false}
-                    />
-                    {idx < members.length - 1 && <View style={styles.rowDivider} />}
-                  </View>
-                ))}
-              </Card>
-            </View>
-
-            {/* Aviso de privacidad */}
-            <Card variant="neon" style={styles.privacyCard}>
-              <View style={styles.privacyRow}>
-                <Ionicons name="lock-closed" size={18} color={colors.neon} />
-                <View style={{ flex: 1, marginLeft: spacing[3] }}>
-                  <Text variant="label" color={colors.neon}>PRIVACIDAD</Text>
-                  <Text variant="caption" color={colors.text.secondary} style={{ marginTop: spacing[1] }}>
-                    Solo podés ver tus propios gastos. Los gastos del resto del grupo son privados y no están disponibles para vos.
-                  </Text>
-                </View>
-              </View>
-            </Card>
-
-            {/* Salir */}
-            <Button
-              label="SALIR DEL GRUPO"
-              variant="ghost"
-              size="md"
-              fullWidth
-              leftIcon={<Ionicons name="exit-outline" size={18} color={colors.red} />}
-              onPress={handleLeave}
-              style={{ borderColor: colors.red + '66' }}
-            />
-          </>
-        )}
-
-        {/* ── Privacidad en grupos ──────────────────────────────────────── */}
-        <View style={styles.sectionHeader}>
-          <Text variant="label" color={colors.text.tertiary}>PRIVACIDAD EN GRUPOS</Text>
         </View>
-        {[
-          { icon: 'shield-outline',      title: 'Elegí qué compartís',     desc: 'Montos, categorías, comercios o nada' },
-          { icon: 'person-outline',      title: 'Roles y permisos',         desc: 'Admin, miembro o invitado' },
-          { icon: 'lock-closed-outline', title: 'Tus datos, tuyos siempre', desc: 'Nadie ve lo que no decidís compartir' },
-        ].map((item, i) => (
-          <View key={i} style={styles.privacyFeatureRow}>
-            <View style={styles.privacyFeatureIcon}>
-              <Ionicons name={item.icon as any} size={18} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                {item.title}
-              </Text>
-              <Text variant="caption" color={colors.text.tertiary}>{item.desc}</Text>
-            </View>
-          </View>
-        ))}
+
+        {/* Mis grupos */}
+        {(loading || groups.length > 0) && (
+          <Text style={s.sectionLabel}>Mis grupos</Text>
+        )}
+
+        {loading ? (
+          <ActivityIndicator color={C.purple} style={{ marginVertical: 20 }} />
+        ) : (
+          groups.map(g => (
+            <GroupCard
+              key={g.id}
+              group={g}
+              onPress={() =>
+                router.push({ pathname: '/(app)/group-detail', params: { id: g.id } } as any)
+              }
+            />
+          ))
+        )}
+
+        {/* Unirme con código */}
+        <TouchableOpacity
+          style={s.joinDashed}
+          onPress={() => { setJoinCode(''); setJoinError(null); setShowJoin(true); }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="enter-outline" size={18} color={C.purple} />
+          <Text style={s.joinDashedText}>Unirme con código</Text>
+        </TouchableOpacity>
+
+        {/* Crear nuevo grupo */}
+        <TouchableOpacity style={s.createDashed} onPress={() => openCreate()} activeOpacity={0.8}>
+          <Ionicons name="add" size={20} color={C.muted} />
+          <Text style={s.createDashedText}>Crear nuevo grupo</Text>
+        </TouchableOpacity>
 
       </ScrollView>
 
-      {/* ── MODAL: Crear grupo ────────────────────────────────────────────── */}
+      {/* MODAL: Unirme ──────────────────────────────────────────────────────── */}
       <Modal
-        visible={showCreateModal}
-        animationType="slide"
-        presentationStyle="formSheet"
-        onRequestClose={() => setShowCreateModal(false)}
+        visible={showJoin} animationType="slide" presentationStyle="formSheet"
+        onRequestClose={() => setShowJoin(false)}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <SafeAreaView style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text variant="h4">{creatingCoupleMode ? 'Modo pareja' : 'Grupo familiar'}</Text>
-              <TouchableOpacity onPress={() => setShowCreateModal(false)}>
-                <Ionicons name="close" size={24} color={colors.text.primary} />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <SafeAreaView style={s.modal} edges={['top', 'bottom']}>
+
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>Unirme a un grupo</Text>
+              <TouchableOpacity onPress={() => setShowJoin(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={22} color={C.text2} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              contentContainerStyle={styles.modalBody}
-              keyboardShouldPersistTaps="handled"
-            >
-              <Text variant="body" color={colors.text.secondary}>
-                {creatingCoupleMode
-                  ? 'Ven los gastos de los dos en un solo lugar. Compartí el código con tu pareja para conectarse.'
-                  : 'Elegí un nombre para tu grupo. Vas a ser el administrador y podrás ver los gastos de tus hijos.'}
+            <View style={s.modalBody}>
+              <Text style={s.modalSub}>
+                Ingresá el código de 6 caracteres que te compartió el admin del grupo.
               </Text>
 
-              <Input
-                label="NOMBRE DEL GRUPO"
-                placeholder={creatingCoupleMode ? 'Ej: Agus y Franco' : 'Ej: Familia García'}
-                value={groupName}
-                onChangeText={setGroupName}
-                autoCapitalize="words"
-                autoFocus
-              />
-
-              <View style={styles.modalHints}>
-                {(creatingCoupleMode ? [
-                  'Se genera un código único de invitación',
-                  'Ambos ven los gastos del otro',
-                  'Podés marcar gastos como compartidos',
-                  'Cualquiera puede disolver el grupo',
-                ] : [
-                  'Se genera un código único de invitación',
-                  'Invitá a tu familia con ese código',
-                  'Podés ver los gastos de tus hijos',
-                  'Los hijos no ven los gastos ajenos',
-                ]).map((t, i) => (
-                  <View key={i} style={styles.featureRow}>
-                    <Ionicons name="checkmark" size={14} color={colors.neon} />
-                    <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }}>{t}</Text>
+              <View style={s.codeBoxRow}>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      s.codeBox,
+                      joinCode.length > i && { borderColor: C.purple, backgroundColor: C.purpleLt },
+                    ]}
+                  >
+                    <Text style={s.codeChar}>{joinCode[i] ?? ''}</Text>
                   </View>
                 ))}
               </View>
 
-              <Button
-                label={creatingCoupleMode ? 'CREAR MODO PAREJA' : 'CREAR GRUPO'}
-                variant="neon"
-                size="lg"
-                fullWidth
-                isLoading={isSubmitting}
-                disabled={!groupName.trim()}
-                onPress={() => handleCreateGroup(creatingCoupleMode ? 'couple' : 'family')}
-              />
-            </ScrollView>
-          </SafeAreaView>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ── MODAL: Unirse con código ──────────────────────────────────────── */}
-      <Modal
-        visible={showJoinModal}
-        animationType="slide"
-        presentationStyle="formSheet"
-        onRequestClose={() => setShowJoinModal(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <SafeAreaView style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text variant="h4">Unirse a grupo</Text>
-              <TouchableOpacity onPress={() => setShowJoinModal(false)}>
-                <Ionicons name="close" size={24} color={colors.text.primary} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              contentContainerStyle={styles.modalBody}
-              keyboardShouldPersistTaps="handled"
-            >
-              <Text variant="body" color={colors.text.secondary}>
-                Pedile el código de invitación a tu padre o madre e ingresalo acá.
-              </Text>
-
-              <Input
-                label="CÓDIGO DE INVITACIÓN"
-                placeholder="Ej: GF4K2X"
+              <TextInput
+                style={s.hiddenInput}
                 value={joinCode}
-                onChangeText={(t) =>
-                  setJoinCode(
-                    t.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6),
-                  )
-                }
+                onChangeText={t => {
+                  setJoinError(null);
+                  setJoinCode(t.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6));
+                }}
                 autoCapitalize="characters"
                 autoCorrect={false}
                 autoFocus
                 maxLength={6}
               />
 
-              {joinCode.length > 0 && joinCode.length < 6 && (
-                <Text variant="caption" color={colors.text.tertiary}>
-                  El código tiene 6 caracteres ({6 - joinCode.length} restantes)
-                </Text>
+              {joinError && (
+                <View style={s.errorBox}>
+                  <Ionicons name="alert-circle-outline" size={14} color={C.red} />
+                  <Text style={s.errorText}>{joinError}</Text>
+                </View>
               )}
 
-              <Button
-                label="UNIRME AL GRUPO"
-                variant="neon"
-                size="lg"
-                fullWidth
-                isLoading={isSubmitting}
-                disabled={joinCode.length < 6}
-                onPress={handleJoinGroup}
-              />
-            </ScrollView>
+              <TouchableOpacity
+                style={[s.primaryBtn, (joinCode.length < 6 || joiningLoad) && s.primaryBtnOff]}
+                onPress={handleJoin}
+                disabled={joinCode.length < 6 || joiningLoad}
+                activeOpacity={0.85}
+              >
+                {joiningLoad
+                  ? <ActivityIndicator color={C.white} size="small" />
+                  : <Text style={s.primaryBtnText}>Confirmar</Text>
+                }
+              </TouchableOpacity>
+            </View>
+
+          </SafeAreaView>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* MODAL: Crear ───────────────────────────────────────────────────────── */}
+      <Modal
+        visible={showCreate} animationType="slide" presentationStyle="formSheet"
+        onRequestClose={() => setShowCreate(false)}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <SafeAreaView style={s.modal} edges={['top', 'bottom']}>
+
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>Nuevo grupo</Text>
+              <TouchableOpacity onPress={() => setShowCreate(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={22} color={C.text2} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={s.modalBody}>
+              {/* Tipo */}
+              <Text style={s.inputLabel}>TIPO</Text>
+              <View style={s.typeRow}>
+                {([
+                  ['familiar', 'home',   'Familiar'],
+                  ['amigos',   'people', 'Amigos'],
+                ] as const).map(([kind, icon, label]) => (
+                  <TouchableOpacity
+                    key={kind}
+                    style={[s.typeBtn, createKind === kind && s.typeBtnActive]}
+                    onPress={() => setCreateKind(kind)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name={icon} size={18} color={createKind === kind ? C.purple : C.muted} />
+                    <Text style={[s.typeBtnText, createKind === kind && { color: C.purple }]}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Nombre */}
+              <View style={{ gap: sp.sm }}>
+                <Text style={s.inputLabel}>NOMBRE</Text>
+                <TextInput
+                  style={s.textInput}
+                  value={groupName}
+                  onChangeText={setGroupName}
+                  placeholder={createKind === 'amigos' ? 'Ej: Viaje a Bariloche' : 'Ej: Familia García'}
+                  placeholderTextColor={C.muted}
+                  autoCapitalize="words"
+                  autoFocus
+                  returnKeyType="done"
+                  onSubmitEditing={handleCreate}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[s.primaryBtn, (!groupName.trim() || creatingLoad) && s.primaryBtnOff]}
+                onPress={handleCreate}
+                disabled={!groupName.trim() || creatingLoad}
+                activeOpacity={0.85}
+              >
+                {creatingLoad
+                  ? <ActivityIndicator color={C.white} size="small" />
+                  : <Text style={s.primaryBtnText}>Crear grupo</Text>
+                }
+              </TouchableOpacity>
+            </View>
+
           </SafeAreaView>
         </KeyboardAvoidingView>
       </Modal>
@@ -1115,340 +515,130 @@ export default function FamilyScreen() {
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ─── Estilos ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: colors.bg.primary },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: C.bg },
 
+  // Header
   header: {
-    flexDirection:    'row',
-    justifyContent:   'space-between',
-    alignItems:       'center',
-    paddingHorizontal: layout.screenPadding,
-    paddingTop:       spacing[4],
-    paddingBottom:    spacing[3],
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: sp.xl, paddingTop: sp.lg, paddingBottom: sp.md,
   },
-  addHeaderBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    borderWidth: 1.5, borderColor: colors.primary + '50',
-    backgroundColor: colors.primary + '10',
+  headerTitle: { fontFamily: 'Montserrat_800ExtraBold', fontSize: 34, color: C.text, letterSpacing: -0.5 },
+  addBtn: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: C.green,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: C.green, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
+  },
+
+  // Scroll
+  scroll: { paddingHorizontal: sp.xl, paddingBottom: 100, gap: sp.md },
+
+  // Promo card
+  promoCard: {
+    backgroundColor: C.greenLt, borderRadius: 20, padding: sp.xl, gap: sp.md,
+  },
+  promoIconWrap: {
+    width: 52, height: 52, borderRadius: 26, backgroundColor: '#ffffff60',
+    alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start',
+  },
+  promoTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: C.text },
+  promoSub: {
+    fontFamily: 'Montserrat_400Regular', fontSize: 13, color: C.text2, lineHeight: 20,
+  },
+  promoBtn: {
+    backgroundColor: C.green, borderRadius: 999,
+    paddingVertical: 14, paddingHorizontal: sp.xxl,
+    alignItems: 'center', alignSelf: 'flex-start',
+  },
+  promoBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: C.white },
+
+  sectionLabel: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 16, color: C.text, marginTop: sp.xs,
+  },
+
+  // Group card
+  groupCard: {
+    backgroundColor: C.white, borderRadius: 20, padding: sp.xl, gap: sp.md,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
+  },
+  gcTop:     { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  gcIcon:    { width: 52, height: 52, borderRadius: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  gcName:    { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: C.text, letterSpacing: -0.2 },
+  gcMeta:    { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
+  gcTotalLbl:{ fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted },
+  gcTotalAmt:{ fontFamily: 'Montserrat_700Bold', fontSize: 20, letterSpacing: -0.5 },
+  gcBar:     { height: 6, backgroundColor: C.border, borderRadius: 999, overflow: 'hidden' },
+  gcBarFill: { height: '100%', borderRadius: 999 },
+  gcBottom:  { flexDirection: 'row', justifyContent: 'space-between' },
+  gcPartLbl: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
+  gcPartAmt: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: C.text2, marginTop: 2 },
+
+  // Dashed buttons
+  joinDashed: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: sp.sm,
+    borderRadius: 18, borderWidth: 1.5, borderColor: C.purple + '60', borderStyle: 'dashed',
+    padding: sp.lg, backgroundColor: C.purpleLt + '80',
+  },
+  joinDashedText: { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: C.purple },
+  createDashed: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: sp.sm,
+    borderRadius: 18, borderWidth: 1.5, borderColor: C.border, borderStyle: 'dashed',
+    padding: sp.lg, backgroundColor: C.white,
+  },
+  createDashedText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 15, color: C.muted },
+
+  // Modal
+  modal: { flex: 1, backgroundColor: C.white },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: sp.xl, paddingVertical: sp.lg,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  modalTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: C.text },
+  modalBody:  { paddingHorizontal: sp.xl, paddingTop: sp.xl, gap: sp.xl },
+  modalSub:   { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: C.text2, lineHeight: 20 },
+
+  codeBoxRow: { flexDirection: 'row', gap: sp.sm, justifyContent: 'center' },
+  codeBox: {
+    width: 46, height: 56, borderRadius: 12,
+    borderWidth: 1.5, borderColor: C.border, backgroundColor: C.bg,
     alignItems: 'center', justifyContent: 'center',
   },
+  codeChar:    { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: C.text },
+  hiddenInput: { position: 'absolute', opacity: 0, height: 0, width: 0 },
 
-  scroll: {
-    paddingHorizontal: layout.screenPadding,
-    paddingBottom:    layout.tabBarHeight + spacing[8],
-    gap:              spacing[4],
+  errorBox: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.sm,
+    backgroundColor: '#ef44441a', borderRadius: 10,
+    paddingHorizontal: sp.md, paddingVertical: sp.sm,
+    borderWidth: 1, borderColor: '#ef444430',
   },
+  errorText: { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: C.red, flex: 1 },
 
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginTop: spacing[2] },
+  inputLabel: { fontFamily: 'Montserrat_700Bold', fontSize: 10, color: C.muted, letterSpacing: 0.8 },
+  typeRow:    { flexDirection: 'row', gap: sp.sm },
+  typeBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: sp.sm,
+    borderRadius: 12, borderWidth: 1.5, borderColor: C.border,
+    paddingVertical: sp.md, backgroundColor: C.bg,
+  },
+  typeBtnActive: { borderColor: C.purple, backgroundColor: C.purpleLt },
+  typeBtnText:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: C.muted },
 
-  // ── Privacy hero card ──────────────────────────────────────────────────
-  privacyHeroCard: {
-    backgroundColor: colors.primary + '0D',
-    borderWidth: 1, borderColor: colors.primary + '25',
-    borderRadius: 16, padding: spacing[5], gap: spacing[2],
-  },
-  createGroupBtn: { alignSelf: 'flex-start', marginTop: spacing[2] },
-
-  // ── Groups list ────────────────────────────────────────────────────────
-  emptyGroupsCard: {
-    backgroundColor: colors.bg.card, borderWidth: 1,
-    borderColor: colors.border.default, borderRadius: 14,
-    padding: spacing[6], alignItems: 'center', gap: spacing[2],
-  },
-  joinBtn: { marginTop: spacing[2] },
-  groupRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.bg.card, borderWidth: 1,
-    borderColor: colors.border.default, borderRadius: 14, padding: spacing[4],
-  },
-  groupRowEmoji: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: colors.primary + '12',
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  },
-  roleBadge: {
-    backgroundColor: colors.primary + '18', borderRadius: 6,
-    paddingHorizontal: spacing[2], paddingVertical: 2,
-  },
-  roleBadgeText: {
-    fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.primary,
+  textInput: {
+    fontFamily: 'Montserrat_500Medium', fontSize: 16, color: C.text,
+    borderWidth: 1.5, borderColor: C.border, borderRadius: 14,
+    paddingHorizontal: sp.lg, paddingVertical: sp.md, backgroundColor: C.bg,
   },
 
-  // ── Privacy features ──────────────────────────────────────────────────
-  privacyFeatureRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.bg.card, borderWidth: 1,
-    borderColor: colors.border.default, borderRadius: 12, padding: spacing[4],
+  primaryBtn: {
+    backgroundColor: C.purple, borderRadius: 14, paddingVertical: sp.md + 2,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: C.purple, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
   },
-  privacyFeatureIcon: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: colors.primary + '12',
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  },
-
-  // ── Empty ──────────────────────────────────────────────────────────────
-  emptyHero: {
-    alignItems:    'center',
-    paddingTop:    spacing[10],
-    paddingBottom: spacing[6],
-    gap:           spacing[3],
-  },
-  emptyIcon: {
-    width:           88,
-    height:          88,
-    borderRadius:    44,
-    backgroundColor: colors.neon + '15',
-    borderWidth:     1,
-    borderColor:     colors.neon + '30',
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-  emptyActions: {
-    gap: spacing[3],
-  },
-  orDivider: {
-    flexDirection:  'row',
-    alignItems:     'center',
-    marginVertical: spacing[1],
-  },
-  orLine: {
-    flex:            1,
-    height:          1,
-    backgroundColor: colors.border.subtle,
-  },
-  featureList: {
-    gap:            spacing[3],
-    paddingTop:     spacing[5],
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
-  },
-  featureRow: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[3],
-  },
-  featureIconWrap: {
-    width:           32,
-    height:          32,
-    borderRadius:    16,
-    backgroundColor: colors.neon + '12',
-    alignItems:      'center',
-    justifyContent:  'center',
-    flexShrink:      0,
-  },
-
-  // ── Group card ─────────────────────────────────────────────────────────
-  groupCard: {
-    padding: spacing[5],
-  },
-  groupCardRow: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
-  },
-  parentIcon: {
-    width:           48,
-    height:          48,
-    borderRadius:    24,
-    backgroundColor: colors.neon + '15',
-    borderWidth:     1,
-    borderColor:     colors.neon + '40',
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-
-  // ── Invite code ────────────────────────────────────────────────────────
-  codeCard: {
-    padding: spacing[5],
-    gap:     spacing[3],
-  },
-  codeRow: {
-    flexDirection:  'row',
-    alignItems:     'center',
-    justifyContent: 'space-between',
-  },
-  codeLetters: {
-    flexDirection: 'row',
-    gap:           spacing[2],
-  },
-  codeLetter: {
-    width:           34,
-    height:          42,
-    backgroundColor: colors.neon + '15',
-    borderWidth:     1,
-    borderColor:     colors.neon + '40',
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-  shareBtn: {
-    alignItems:      'center',
-    gap:             spacing[1],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    borderWidth:     1,
-    borderColor:     colors.border.default,
-  },
-
-  // ── Section ────────────────────────────────────────────────────────────
-  section: {
-    gap: spacing[3],
-  },
-  sectionTitleRow: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
-  },
-
-  // ── Members ────────────────────────────────────────────────────────────
-  memberRow: {
-    flexDirection:    'row',
-    alignItems:       'center',
-    paddingHorizontal: spacing[5],
-    paddingVertical:  spacing[4],
-    gap:              spacing[4],
-  },
-  memberAvatar: {
-    width:        40,
-    height:       40,
-    borderRadius: 20,
-    borderWidth:  1,
-    alignItems:   'center',
-    justifyContent: 'center',
-  },
-  memberInfo:    { flex: 1, gap: spacing[1] },
-  memberNameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  memberRight:   { flexDirection: 'row', alignItems: 'center' },
-  youBadge: {
-    backgroundColor:   colors.neon,
-    paddingHorizontal: spacing[2],
-    paddingVertical:   2,
-    borderRadius:      4,
-  },
-  youBadgeText: {
-    fontFamily:    'Montserrat_700Bold',
-    fontSize:      9,
-    color:         colors.white,
-    letterSpacing: 0.5,
-  },
-  rowDivider: {
-    height:          1,
-    backgroundColor: colors.border.subtle,
-    marginLeft:      spacing[5] + 36 + spacing[4], // indent to content start
-  },
-  emptyMembersNote: {
-    alignItems:    'center',
-    gap:           spacing[3],
-    paddingVertical: spacing[6],
-    paddingHorizontal: spacing[5],
-  },
-
-  // ── Child expenses ─────────────────────────────────────────────────────
-  listPlaceholder: {
-    alignItems:    'center',
-    justifyContent: 'center',
-    paddingVertical: spacing[6],
-  },
-  childTotal: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.default,
-    backgroundColor: colors.bg.elevated,
-  },
-  expRow: {
-    flexDirection:  'row',
-    alignItems:     'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
-    gap: spacing[3],
-  },
-
-  // ── Privacy ────────────────────────────────────────────────────────────
-  privacyCard: {
-    padding: spacing[5],
-  },
-  privacyRow: {
-    flexDirection: 'row',
-    alignItems:    'flex-start',
-  },
-
-  // ── Modals ─────────────────────────────────────────────────────────────
-  modal: {
-    flex:            1,
-    backgroundColor: colors.bg.primary,
-  },
-  modalHeader: {
-    flexDirection:    'row',
-    justifyContent:   'space-between',
-    alignItems:       'center',
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical:  spacing[4],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
-  },
-  modalBody: {
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical:   spacing[6],
-    paddingBottom:     spacing[12],
-    gap:               spacing[5],
-  },
-  modalHints: {
-    gap:             spacing[3],
-    padding:         spacing[4],
-    backgroundColor: colors.bg.elevated,
-    borderWidth:     1,
-    borderColor:     colors.border.default,
-  },
-
-  // ── Couple ─────────────────────────────────────────────────────────────
-  combinedCard: {
-    padding: spacing[5],
-    gap:     spacing[4],
-  },
-  proportionBar: {
-    flexDirection:   'row',
-    height:          6,
-    overflow:        'hidden',
-    gap:             2,
-  },
-  proportionFill: {
-    height: 6,
-  },
-  partnerBreakdown: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-  },
-  partnerBreakdownItem: {
-    flexDirection: 'row',
-    alignItems:    'center',
-    gap:           spacing[2],
-  },
-  partnerDot: {
-    width:  8,
-    height: 8,
-  },
-  coupleAvatar: {
-    width:           36,
-    height:          36,
-    borderWidth:     1,
-    alignItems:      'center',
-    justifyContent:  'center',
-    marginRight:     spacing[3],
-  },
-  sharedBadge: {
-    paddingHorizontal: spacing[2],
-    paddingVertical:   2,
-    borderWidth:       1,
-    borderColor:       colors.yellow + '60',
-    backgroundColor:   colors.yellow + '15',
-  },
+  primaryBtnOff:  { opacity: 0.4 },
+  primaryBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: C.white },
 });
