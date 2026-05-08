@@ -238,6 +238,7 @@ export default function ReportsScreen() {
           .select('amount, category:expense_categories(id, name_es, color), classification')
           .eq('user_id', user.id)
           .is('deleted_at', null)
+          .not('category_id', 'is', null)
           .gte('date', startDate)
           .lt('date', endDate),
         supabase

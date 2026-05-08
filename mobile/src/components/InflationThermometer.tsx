@@ -292,7 +292,8 @@ export function InflationThermometer({ userId, year, month }: InflationThermomet
         .eq('user_id', userId)
         .gte('date', from)
         .lte('date', to)
-        .is('deleted_at', null);
+        .is('deleted_at', null)
+        .not('category_id', 'is', null);
 
       if (error || !data) { setResult(null); return; }
 
