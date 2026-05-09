@@ -72,10 +72,19 @@ const qr = StyleSheet.create({
 // ─── Pantalla ─────────────────────────────────────────────────────────────────
 
 export default function GroupCodeScreen() {
-  const { code = '', groupName = 'tu grupo' } = useLocalSearchParams<{
+  const { code = '', groupName = 'tu grupo', groupId = '' } = useLocalSearchParams<{
     code: string;
     groupName: string;
+    groupId: string;
   }>();
+
+  const handleBack = () => {
+    if (groupId) {
+      router.replace({ pathname: '/(app)/group-detail', params: { id: groupId } } as any);
+    } else {
+      router.replace('/(app)/family' as any);
+    }
+  };
 
   const handleShare = async () => {
     try {
@@ -96,7 +105,7 @@ export default function GroupCodeScreen() {
       {/* Header */}
       <View style={s.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={handleBack}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           activeOpacity={0.7}
         >
@@ -119,7 +128,16 @@ export default function GroupCodeScreen() {
 
         {/* Card */}
         <View style={s.codeCard}>
-          <Text style={s.codeValue}>{code}</Text>
+          <View style={s.codeValueWrap}>
+            <Text
+              style={s.codeValue}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              {code}
+            </Text>
+          </View>
           <Text style={s.codeSub}>Código de tu grupo</Text>
 
           <View style={s.qrArea}>
@@ -186,9 +204,15 @@ const s = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.07, shadowRadius: 16, elevation: 4,
   },
+  codeValueWrap: {
+    width: '100%', minHeight: 72,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: sp.lg, overflow: 'visible',
+  },
   codeValue: {
-    fontFamily: 'Montserrat_800ExtraBold', fontSize: 38,
-    color: C.purple, letterSpacing: 8,
+    fontFamily: 'Montserrat_800ExtraBold', fontSize: 46,
+    lineHeight: 58, color: C.purple,
+    letterSpacing: 4, textAlign: 'center',
   },
   codeSub: { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: C.muted },
 

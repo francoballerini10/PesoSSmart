@@ -9,7 +9,14 @@ import {
   ScrollView,
   Modal,
   Animated,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import { Swipeable } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@/theme';
@@ -425,7 +432,6 @@ const AnimatedTxCard = forwardRef<AnimatedTxCardHandle, AnimatedTxCardProps>(
     // Exit animation
     const exitOpacity    = useRef(new Animated.Value(1)).current;
     const translateX     = useRef(new Animated.Value(0)).current;
-    const height         = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
       const delay = index * 70;
@@ -443,7 +449,8 @@ const AnimatedTxCard = forwardRef<AnimatedTxCardHandle, AnimatedTxCardProps>(
         Animated.timing(exitOpacity, { toValue: 0, duration: 220, useNativeDriver: true }),
         Animated.timing(translateX,  { toValue: direction === 'right' ? 300 : -300, duration: 220, useNativeDriver: true }),
       ]).start(() => {
-        Animated.timing(height, { toValue: 0, duration: 160, useNativeDriver: false }).start(callback);
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        callback();
       });
     }, []);
 
@@ -471,8 +478,6 @@ const AnimatedTxCard = forwardRef<AnimatedTxCardHandle, AnimatedTxCardProps>(
           style={{
             opacity: exitOpacity,
             transform: [{ translateX }],
-            maxHeight: height.interpolate({ inputRange: [0, 1], outputRange: [0, 500] }),
-            overflow: 'hidden',
           }}
         >
           <Swipeable

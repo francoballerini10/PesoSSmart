@@ -84,6 +84,7 @@ export default function AppLayout() {
       <Tabs.Screen name="grupo-familia"  options={{ href: null }} />
       <Tabs.Screen name="group-detail"   options={{ href: null }} />
       <Tabs.Screen name="group-code"     options={{ href: null }} />
+      <Tabs.Screen name="member-detail"  options={{ href: null }} />
       <Tabs.Screen name="plans"          options={{ href: null }} />
       <Tabs.Screen name="simulator"      options={{ href: null }} />
       <Tabs.Screen name="gmail-connect"  options={{ href: null }} />
