@@ -1307,16 +1307,17 @@ function MonthSpendingMini({
   totalThisMonth:  number;
   estimatedIncome: number | null;
 }) {
-  if (!estimatedIncome || estimatedIncome <= 0 || totalThisMonth <= 0) return null;
-
-  const pct      = Math.min(totalThisMonth / estimatedIncome, 1);
-  const pctInt   = Math.round(pct * 100);
-  const barColor = pct > 1 ? '#C62828' : pct > 0.85 ? '#E65100' : '#2E7D32';
-
   const barAnim   = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
+  const pct      = estimatedIncome && estimatedIncome > 0
+    ? Math.min(totalThisMonth / estimatedIncome, 1)
+    : 0;
+  const pctInt   = Math.round(pct * 100);
+  const barColor = pct > 1 ? '#C62828' : pct > 0.85 ? '#E65100' : '#2E7D32';
+
   useEffect(() => {
+    if (!estimatedIncome || estimatedIncome <= 0 || totalThisMonth <= 0) return;
     Animated.timing(barAnim, {
       toValue: pct,
       duration: 800,
@@ -1324,6 +1325,8 @@ function MonthSpendingMini({
       useNativeDriver: false,
     }).start();
   }, [pct]);
+
+  if (!estimatedIncome || estimatedIncome <= 0 || totalThisMonth <= 0) return null;
 
   const pressIn  = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true, speed: 60, bounciness: 0 }).start();
   const pressOut = () => Animated.spring(scaleAnim, { toValue: 1,    useNativeDriver: true, speed: 50, bounciness: 4 }).start();

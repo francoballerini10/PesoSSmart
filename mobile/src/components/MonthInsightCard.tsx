@@ -99,22 +99,7 @@ function computeInsight(
     }
   }
 
-  // Regla 3: gastos sin clasificar
-  if (pendingCount >= 3) {
-    return {
-      icon: 'help-circle-outline',
-      iconColor: '#607D8B',
-      bg: '#ECEFF1',
-      border: '#CFD8DC',
-      label: 'GASTOS PENDIENTES',
-      title: `Tenés ${pendingCount} gastos sin clasificar`,
-      body: 'Clasificalos para mejorar tu análisis.',
-      ctaLabel: 'Clasificar ahora',
-      ctaRoute: '/(app)/expenses',
-    };
-  }
-
-  // Regla 4: concentración > 35% en una categoría (mínimo 3 gastos clasificados)
+  // Regla 3: concentración > 35% en una categoría (mínimo 3 gastos clasificados)
   if (classifiedTotal > 0 && expenses.length >= 3) {
     const topEntry = Object.entries(spendByCat).sort((a, b) => b[1] - a[1])[0];
     if (topEntry) {
