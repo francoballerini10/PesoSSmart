@@ -425,21 +425,28 @@ export default function FamilyScreen() {
       const code   = generateCode();
       const db     = supabase as any;
       const dbType = createKind === 'amigos' ? 'friends' : 'family';
-      const { data: g, error: e1 } = await db
-        .from('family_groups')
-        .insert({ name: groupName.trim(), invite_code: code, group_type: dbType })
-        .select().single();
-      if (e1) throw e1;
-      const { error: e2 } = await db
-        .from('family_members').insert({ group_id: g.id, user_id: user.id, role: 'admin' });
-      if (e2) throw e2;
+
+      const { data, error } = await db.rpc('create_group_with_admin', {
+        p_name:        groupName.trim(),
+        p_group_type:  dbType,
+        p_invite_code: code,
+      });
+
+      if (error) {
+        console.error('[handleCreate] rpc error', {
+          code: error.code, message: error.message,
+          details: error.details, hint: error.hint,
+          p_name: groupName.trim(), p_group_type: dbType, userId: user.id,
+        });
+        throw error;
+      }
+
       setShowCreate(false);
       setGroupName('');
       await loadGroups();
       Alert.alert('Grupo creado 🎉', `Tu código de invitación: ${code}\n\nCompartilo para que otros se unan.`);
     } catch (err: any) {
-      const msg = err?.message ?? err?.details ?? JSON.stringify(err) ?? 'Error desconocido.';
-      Alert.alert('No pudimos crear el grupo', msg);
+      Alert.alert('No pudimos crear el grupo', 'Intentá nuevamente.');
     } finally {
       setCreatingLoad(false);
     }

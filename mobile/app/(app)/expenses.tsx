@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Svg, { Circle as SvgCircle } from 'react-native-svg';
 import { ExpensesSkeletonLoader, SmartLoadingState } from '@/components/ui/SkeletonLoader';
 import { useRouter } from 'expo-router';
@@ -27,7 +27,6 @@ import { colors, spacing, layout } from '@/theme';
 import { Text, Button, Input, Badge } from '@/components/ui';
 import { useAuthStore } from '@/store/authStore';
 import { useExpensesStore } from '@/store/expensesStore';
-import type { DetectedSubscription } from '@/store/expensesStore';
 import { useRoundUpStore } from '@/store/roundUpStore';
 import { useStreakStore } from '@/store/streakStore';
 import { hapticMedium, hapticWarning, hapticSuccess } from '@/lib/haptics';
@@ -35,7 +34,7 @@ import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/utils/format';
 import type { PaymentMethod, Expense, ExpenseClassification } from '@/types';
 import { PendingTransactions } from '@/components/PendingTransactions';
-import { BudgetCard } from '@/components/BudgetCard';
+import { BudgetRingIndicator } from '@/components/BudgetCard';
 import { useFirstVisit } from '@/hooks/useFirstVisit';
 import { FirstVisitSheet } from '@/components/FirstVisitSheet';
 import { useSavingsStore } from '@/store/savingsStore';
@@ -307,6 +306,374 @@ const teaserS = StyleSheet.create({
   amount:   { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#2E7D32' },
 });
 
+// ─── ShareInGroupModal ────────────────────────────────────────────────────────
+
+const SHARE_PURPLE    = '#8B5CF6';
+const SHARE_PURPLE_LT = '#F5F3FF';
+
+function ShareInGroupModal({ visible, expense, userId, onClose }: {
+  visible:  boolean;
+  expense:  Expense | null;
+  userId:   string;
+  onClose:  () => void;
+}) {
+  type ShareStep = 'group' | 'details' | 'confirm';
+  interface FriendGroup { id: string; name: string; memberCount: number; members: { userId: string; name: string; color: string; initial: string; isMe: boolean }[] }
+
+  const AVATAR_COLORS = ['#4361ee', '#e63946', '#2d6a4f', '#f4a261', '#7209b7', '#3a86ff'];
+  function hashIdx(str: string, len: number) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
+    return Math.abs(h) % len;
+  }
+
+  const [step,        setStep]        = useState<ShareStep>('group');
+  const [groups,      setGroups]      = useState<FriendGroup[]>([]);
+  const [loadingGrp,  setLoadingGrp]  = useState(false);
+  const [selectedGrp, setSelectedGrp] = useState<FriendGroup | null>(null);
+  const [paidById,    setPaidById]    = useState(userId);
+  const [included,    setIncluded]    = useState<Set<string>>(new Set());
+  const [splitMode,   setSplitMode]   = useState<'equal' | 'custom'>('equal');
+  const [saving,      setSaving]      = useState(false);
+  const [confirmed,   setConfirmed]   = useState(false);
+
+  const reset = useCallback(() => {
+    setStep('group'); setGroups([]); setSelectedGrp(null);
+    setPaidById(userId); setIncluded(new Set());
+    setSplitMode('equal'); setSaving(false); setConfirmed(false);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!visible) { reset(); return; }
+    setLoadingGrp(true);
+    (async () => {
+      try {
+        const { data: memberships } = await (supabase as any)
+          .from('family_members')
+          .select('group_id, family_groups(id, name, group_type)')
+          .eq('user_id', userId);
+        const friendGroups = (memberships ?? [])
+          .filter((m: any) => m.family_groups?.group_type === 'friends')
+          .map((m: any) => m.family_groups);
+
+        const result: FriendGroup[] = [];
+        for (const fg of friendGroups) {
+          const { data: members } = await (supabase as any)
+            .rpc('get_group_members', { p_group_id: fg.id });
+          const memberList = (members ?? []).map((m: any) => {
+            const name = m.full_name?.trim() || m.email?.split('@')[0] || 'Usuario';
+            return {
+              userId: m.user_id, name,
+              color: AVATAR_COLORS[hashIdx(m.user_id, AVATAR_COLORS.length)],
+              initial: name.charAt(0).toUpperCase(),
+              isMe: m.user_id === userId,
+            };
+          });
+          result.push({ id: fg.id, name: fg.name, memberCount: memberList.length, members: memberList });
+        }
+        setGroups(result);
+      } finally {
+        setLoadingGrp(false);
+      }
+    })();
+  }, [visible, userId, reset]);
+
+  const handleSelectGroup = (grp: FriendGroup) => {
+    setSelectedGrp(grp);
+    setPaidById(userId);
+    setIncluded(new Set(grp.members.map(m => m.userId)));
+  };
+
+  const handleContinueToDetails = async () => {
+    if (!selectedGrp || !expense) return;
+    // Check for duplicate
+    const { data: existing } = await (supabase as any)
+      .from('group_expenses')
+      .select('id')
+      .eq('group_id', selectedGrp.id)
+      .eq('source_expense_id', expense.id)
+      .maybeSingle();
+    if (existing) {
+      Alert.alert('Ya compartido', 'Este gasto ya fue compartido en este grupo.');
+      return;
+    }
+    setStep('details');
+  };
+
+  const handleSave = async () => {
+    if (!selectedGrp || !expense) return;
+    const participantes = selectedGrp.members.filter(m => included.has(m.userId));
+    if (participantes.length === 0) { Alert.alert('Seleccioná al menos un participante.'); return; }
+    setSaving(true);
+    try {
+      const { data: ge, error: e1 } = await (supabase as any)
+        .from('group_expenses')
+        .insert({
+          group_id:          selectedGrp.id,
+          source_expense_id: expense.id,
+          paid_by:           paidById,
+          description:       expense.description,
+          amount:            expense.amount,
+          date:              expense.date,
+          split_type:        splitMode,
+          created_by:        userId,
+        })
+        .select().single();
+      if (e1) throw e1;
+
+      const splitAmt = expense.amount / participantes.length;
+      const splits = participantes.map(m => ({
+        group_expense_id: ge.id, user_id: m.userId,
+        amount: parseFloat(splitAmt.toFixed(2)), settled: m.userId === paidById,
+      }));
+      const { error: e2 } = await (supabase as any).from('group_expense_splits').insert(splits);
+      if (e2) throw e2;
+
+      setConfirmed(true);
+      setStep('confirm');
+    } catch (err: any) {
+      Alert.alert('Error', err.message ?? 'No se pudo compartir el gasto.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!expense) return null;
+  const members = selectedGrp?.members ?? [];
+  const splitAmt = members.filter(m => included.has(m.userId)).length > 0
+    ? expense.amount / members.filter(m => included.has(m.userId)).length
+    : 0;
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <SafeAreaView style={shareStyles.modal}>
+
+          <View style={shareStyles.header}>
+            {step === 'confirm' ? (
+              <View style={{ width: 22 }} />
+            ) : (
+              <TouchableOpacity
+                onPress={step === 'group' ? onClose : () => setStep(step === 'details' ? 'group' : 'group')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name={step === 'group' ? 'close' : 'arrow-back'} size={22} color="#444" />
+              </TouchableOpacity>
+            )}
+            <Text style={shareStyles.headerTitle}>
+              {step === 'group' ? 'Compartir en grupo' : step === 'details' ? 'Detalles del gasto' : 'Gasto compartido'}
+            </Text>
+            <View style={{ width: 22 }} />
+          </View>
+
+          {/* Step: choose group */}
+          {step === 'group' && (
+            <ScrollView contentContainerStyle={shareStyles.body}>
+              {/* Expense preview */}
+              <View style={shareStyles.expPreview}>
+                <View style={{ flex: 1 }}>
+                  <Text style={shareStyles.expPreviewName} numberOfLines={1}>{expense.description}</Text>
+                  <Text style={shareStyles.expPreviewMeta}>{expense.date}</Text>
+                </View>
+                <Text style={shareStyles.expPreviewAmt}>{formatCurrency(expense.amount)}</Text>
+              </View>
+
+              <Text style={shareStyles.sectionLabel}>ELEGIR GRUPO DE AMIGOS</Text>
+
+              {loadingGrp ? (
+                <ActivityIndicator color={SHARE_PURPLE} style={{ marginTop: 32 }} />
+              ) : groups.length === 0 ? (
+                <View style={shareStyles.emptyBox}>
+                  <Ionicons name="people-outline" size={36} color="#E5E7EB" />
+                  <Text style={shareStyles.emptyTitle}>Sin grupos de amigos</Text>
+                  <Text style={shareStyles.emptySub}>Creá un grupo de amigos primero desde la sección Grupos.</Text>
+                </View>
+              ) : (
+                <View style={shareStyles.card}>
+                  {groups.map((grp, i) => (
+                    <View key={grp.id}>
+                      {i > 0 && <View style={shareStyles.divider} />}
+                      <TouchableOpacity
+                        style={shareStyles.groupRow}
+                        onPress={() => handleSelectGroup(grp)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={shareStyles.groupIcon}>
+                          <Ionicons name="people" size={20} color={SHARE_PURPLE} />
+                        </View>
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text style={shareStyles.groupName}>{grp.name}</Text>
+                          <Text style={shareStyles.groupMeta}>{grp.memberCount} miembro{grp.memberCount !== 1 ? 's' : ''}</Text>
+                        </View>
+                        {selectedGrp?.id === grp.id
+                          ? <Ionicons name="checkmark-circle" size={22} color={SHARE_PURPLE} />
+                          : <Ionicons name="chevron-forward" size={18} color="#9E9E9E" />
+                        }
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[shareStyles.btn, !selectedGrp && { opacity: 0.4 }]}
+                onPress={handleContinueToDetails} disabled={!selectedGrp} activeOpacity={0.85}
+              >
+                <Text style={shareStyles.btnText}>Continuar</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {/* Step: details */}
+          {step === 'details' && selectedGrp && (
+            <ScrollView contentContainerStyle={shareStyles.body} keyboardShouldPersistTaps="handled">
+              <View style={shareStyles.expPreview}>
+                <View style={{ flex: 1 }}>
+                  <Text style={shareStyles.expPreviewName} numberOfLines={1}>{expense.description}</Text>
+                  <Text style={shareStyles.expPreviewMeta}>{selectedGrp.name} · {expense.date}</Text>
+                </View>
+                <Text style={shareStyles.expPreviewAmt}>{formatCurrency(expense.amount)}</Text>
+              </View>
+
+              {/* Quién pagó */}
+              <Text style={shareStyles.sectionLabel}>¿QUIÉN PAGÓ?</Text>
+              <View style={shareStyles.card}>
+                {members.map((m, i) => (
+                  <View key={m.userId}>
+                    {i > 0 && <View style={shareStyles.divider} />}
+                    <TouchableOpacity style={shareStyles.memberRow} onPress={() => setPaidById(m.userId)} activeOpacity={0.8}>
+                      <View style={[shareStyles.avatar, { backgroundColor: m.color + '22' }]}>
+                        <Text style={[shareStyles.avatarText, { color: m.color }]}>{m.initial}</Text>
+                      </View>
+                      <Text style={shareStyles.memberName}>{m.isMe ? `${m.name} (vos)` : m.name}</Text>
+                      {paidById === m.userId && <Ionicons name="checkmark-circle" size={20} color={SHARE_PURPLE} />}
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+
+              {/* Entre quiénes */}
+              <Text style={shareStyles.sectionLabel}>¿ENTRE QUIÉNES SE DIVIDE?</Text>
+              <View style={shareStyles.avatarRow}>
+                {members.map(m => {
+                  const isIn = included.has(m.userId);
+                  return (
+                    <TouchableOpacity
+                      key={m.userId}
+                      onPress={() => setIncluded(prev => {
+                        const next = new Set(prev);
+                        if (next.has(m.userId)) next.delete(m.userId); else next.add(m.userId);
+                        return next;
+                      })}
+                      activeOpacity={0.8}
+                      style={{ alignItems: 'center', gap: 4 }}
+                    >
+                      <View style={[
+                        shareStyles.avatar, { width: 50, height: 50, borderRadius: 25, backgroundColor: m.color + '22' },
+                        isIn && { borderWidth: 2.5, borderColor: SHARE_PURPLE },
+                        !isIn && { opacity: 0.35 },
+                      ]}>
+                        <Text style={[shareStyles.avatarText, { color: m.color, fontSize: 18 }]}>{m.initial}</Text>
+                      </View>
+                      <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 10, color: isIn ? '#111' : '#9E9E9E' }}>
+                        {m.isMe ? 'Vos' : m.name.split(' ')[0]}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Split mode */}
+              <Text style={shareStyles.sectionLabel}>¿CÓMO SE DIVIDE?</Text>
+              {([
+                { val: 'equal'  as const, label: 'Partes iguales', desc: `${formatCurrency(splitAmt)} c/u` },
+                { val: 'custom' as const, label: 'Personalizado',  desc: 'Definir montos diferentes' },
+              ]).map(opt => (
+                <TouchableOpacity
+                  key={opt.val}
+                  style={[shareStyles.radioRow, splitMode === opt.val && { borderColor: SHARE_PURPLE + '80', backgroundColor: SHARE_PURPLE + '06' }]}
+                  onPress={() => setSplitMode(opt.val)} activeOpacity={0.8}
+                >
+                  <View style={[shareStyles.radioCircle, splitMode === opt.val && { borderColor: SHARE_PURPLE }]}>
+                    {splitMode === opt.val && <View style={[shareStyles.radioDot, { backgroundColor: SHARE_PURPLE }]} />}
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[shareStyles.radioTitle, splitMode === opt.val && { color: SHARE_PURPLE }]}>{opt.label}</Text>
+                    <Text style={shareStyles.radioDesc}>{opt.desc}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+
+              <TouchableOpacity
+                style={[shareStyles.btn, saving && { opacity: 0.5 }]}
+                onPress={handleSave} disabled={saving || included.size === 0} activeOpacity={0.85}
+              >
+                {saving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={shareStyles.btnText}>Guardar gasto</Text>
+                }
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {/* Step: confirm */}
+          {step === 'confirm' && (
+            <ScrollView contentContainerStyle={[shareStyles.body, { alignItems: 'center', paddingTop: 40 }]}>
+              <Ionicons name="checkmark-circle" size={80} color={SHARE_PURPLE} />
+              <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 22, color: '#111', textAlign: 'center', marginTop: 12 }}>
+                ¡Gasto compartido!
+              </Text>
+              <Text style={{ fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#9E9E9E', textAlign: 'center' }}>
+                El gasto se agregó correctamente al grupo {selectedGrp?.name}.
+              </Text>
+              <TouchableOpacity
+                style={[shareStyles.btn, { width: '100%', marginTop: 32 }]}
+                onPress={() => { reset(); onClose(); }} activeOpacity={0.85}
+              >
+                <Text style={shareStyles.btnText}>Listo</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const shareStyles = StyleSheet.create({
+  modal:        { flex: 1, backgroundColor: '#FFFFFF' },
+  header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  headerTitle:  { fontFamily: 'Montserrat_700Bold', fontSize: 17, color: '#111' },
+  body:         { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 60, gap: 16 },
+  sectionLabel: { fontFamily: 'Montserrat_700Bold', fontSize: 10, color: '#9E9E9E', letterSpacing: 0.8 },
+  card:         { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16 },
+  divider:      { height: 1, backgroundColor: '#E5E7EB' },
+  emptyBox:     { alignItems: 'center', gap: 8, paddingVertical: 32 },
+  emptyTitle:   { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: '#111' },
+  emptySub:     { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: '#9E9E9E', textAlign: 'center' },
+  expPreview:   { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: SHARE_PURPLE + '30', borderRadius: 14, padding: 14 },
+  expPreviewName: { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#111' },
+  expPreviewMeta: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#9E9E9E' },
+  expPreviewAmt:  { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: SHARE_PURPLE, flexShrink: 0 },
+  groupRow:     { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  groupIcon:    { width: 40, height: 40, borderRadius: 12, backgroundColor: SHARE_PURPLE + '18', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  groupName:    { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#111' },
+  groupMeta:    { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#9E9E9E' },
+  memberRow:    { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12 },
+  memberName:   { fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#111', flex: 1 },
+  avatar:       { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  avatarText:   { fontFamily: 'Montserrat_700Bold', fontSize: 15 },
+  avatarRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  radioRow:     { flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E7EB', padding: 14, backgroundColor: '#fff' },
+  radioCircle:  { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
+  radioDot:     { width: 10, height: 10, borderRadius: 5 },
+  radioTitle:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: '#111' },
+  radioDesc:    { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E' },
+  btn:          { backgroundColor: SHARE_PURPLE, borderRadius: 14, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, shadowColor: SHARE_PURPLE, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 4 },
+  btnText:      { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#fff' },
+});
+
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ExpensesScreen() {
@@ -333,7 +700,6 @@ export default function ExpensesScreen() {
     hasMore,
     filter,
     setFilter,
-    subscriptions,
   } = useExpensesStore();
 
   const { rates, labels: dolarLabels } = useDolarRates();
@@ -348,8 +714,6 @@ export default function ExpensesScreen() {
     roundUpStore.checkReset();
     streakStore.load();
   }, []);
-
-  const [showSubscriptions, setShowSubscriptions] = useState(false);
 
   const expenseSections = useMemo(() => {
     const grouped: Record<string, { date: string; items: Expense[]; total: number }> = {};
@@ -383,6 +747,10 @@ export default function ExpensesScreen() {
     category_id: string | null;
   } | null>(null);
   const [isSavingEdit,       setIsSavingEdit]       = useState(false);
+
+  // Compartir en grupo
+  const [showShareModal,     setShowShareModal]      = useState(false);
+  const [shareExpense,       setShareExpense]        = useState<Expense | null>(null);
 
   const pickAndProcessScreenshot = async () => {
     if (!user?.id) return;
@@ -878,16 +1246,6 @@ export default function ExpensesScreen() {
         </View>
       </View>
 
-      {/* Presupuestos del mes */}
-      {user?.id && (
-        <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[2] }}>
-          <BudgetCard
-            userId={user.id}
-            expenses={expenses}
-            categories={categories}
-          />
-        </View>
-      )}
 
       {/* Aviso: token de Gmail vencido */}
       {gmailTokenExpired && (
@@ -968,29 +1326,6 @@ export default function ExpensesScreen() {
         )}
       </View>
 
-      {/* Suscripciones detectadas — banner compacto */}
-      {subscriptions.length > 0 && (
-        <TouchableOpacity
-          style={styles.subsBanner}
-          onPress={() => setShowSubscriptions(true)}
-          activeOpacity={0.85}
-        >
-          <View style={styles.subsBannerLeft}>
-            <View style={styles.subsBannerIcon}>
-              <Ionicons name="repeat-outline" size={16} color={colors.yellow} />
-            </View>
-            <View style={{ gap: 2 }}>
-              <Text variant="label" color={colors.yellow}>
-                {subscriptions.length} SUSCRIPCIÓN{subscriptions.length > 1 ? 'ES' : ''} DETECTADA{subscriptions.length > 1 ? 'S' : ''}
-              </Text>
-              <Text variant="caption" color={colors.text.secondary}>
-                {formatCurrency(subscriptions.reduce((s, sub) => s + sub.averageAmount, 0))} / mes · Tocá para ver el detalle
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-        </TouchableOpacity>
-      )}
     </>
   );
 
@@ -1017,6 +1352,15 @@ export default function ExpensesScreen() {
             >
               <Ionicons name="options-outline" size={20} color={colors.text.secondary} />
             </TouchableOpacity>
+            {user?.id && (
+              <BudgetRingIndicator
+                userId={user.id}
+                expenses={expenses}
+                categories={categories}
+                month={filter.month ?? new Date().getMonth() + 1}
+                year={filter.year ?? new Date().getFullYear()}
+              />
+            )}
           </View>
         </View>
 
@@ -1194,105 +1538,6 @@ export default function ExpensesScreen() {
           <Ionicons name="add" size={26} color={colors.white} />
         </TouchableOpacity>
       )}
-
-      {/* Bottom sheet — Suscripciones detectadas */}
-      <Modal
-        visible={showSubscriptions}
-        animationType="slide"
-        presentationStyle="formSheet"
-        onRequestClose={() => setShowSubscriptions(false)}
-      >
-        <SafeAreaView style={styles.modal}>
-          {/* Header */}
-          <View style={styles.modalHeader}>
-            <View style={{ gap: 2 }}>
-              <Text variant="h4">Suscripciones detectadas</Text>
-              <Text variant="caption" color={colors.text.secondary}>
-                Débitos recurrentes en los últimos 90 días
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setShowSubscriptions(false)}>
-              <Ionicons name="close" size={24} color={colors.text.primary} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView contentContainerStyle={{ padding: layout.screenPadding, gap: spacing[4] }} showsVerticalScrollIndicator={false}>
-
-            {/* Total mensual destacado */}
-            <View style={subsSheetStyles.totalCard}>
-              <Ionicons name="repeat-outline" size={20} color={colors.yellow} />
-              <View style={{ flex: 1 }}>
-                <Text variant="caption" color={colors.text.secondary}>Total mensual en suscripciones</Text>
-                <Text style={subsSheetStyles.totalAmount}>
-                  {formatCurrency(subscriptions.reduce((s, sub) => s + sub.averageAmount, 0))}
-                </Text>
-              </View>
-              <View style={subsSheetStyles.countBadge}>
-                <Text style={subsSheetStyles.countText}>{subscriptions.length}</Text>
-              </View>
-            </View>
-
-            {/* Lista */}
-            {subscriptions.map((sub, idx) => (
-              <View key={sub.description} style={subsSheetStyles.card}>
-                <View style={subsSheetStyles.cardHeader}>
-                  <View style={subsSheetStyles.cardIcon}>
-                    <Ionicons
-                      name={sub.category === 'Entretenimiento' ? 'play-circle-outline' : sub.category === 'Salud' ? 'fitness-outline' : 'card-outline'}
-                      size={18}
-                      color={colors.yellow}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                      {sub.description}
-                    </Text>
-                    {sub.category && (
-                      <Text variant="caption" color={colors.text.tertiary}>{sub.category}</Text>
-                    )}
-                  </View>
-                  <View style={subsSheetStyles.amountCol}>
-                    <Text style={subsSheetStyles.subAmount}>{formatCurrency(sub.averageAmount)}</Text>
-                    <Text variant="caption" color={colors.text.tertiary}>/mes</Text>
-                  </View>
-                </View>
-
-                <View style={subsSheetStyles.metaRow}>
-                  <View style={subsSheetStyles.metaChip}>
-                    <Ionicons name="calendar-outline" size={11} color={colors.text.tertiary} />
-                    <Text variant="caption" color={colors.text.tertiary}>
-                      {sub.occurrences} veces en 90 días
-                    </Text>
-                  </View>
-                  <View style={subsSheetStyles.metaChip}>
-                    <Ionicons name="time-outline" size={11} color={colors.text.tertiary} />
-                    <Text variant="caption" color={colors.text.tertiary}>
-                      Último: {sub.lastDate}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Tip de ahorro anual */}
-                <View style={subsSheetStyles.tipRow}>
-                  <Ionicons name="bulb-outline" size={12} color={colors.text.tertiary} />
-                  <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1 }}>
-                    Son {formatCurrency(sub.averageAmount * 12)} al año
-                  </Text>
-                </View>
-              </View>
-            ))}
-
-            {/* Disclaimer */}
-            <View style={subsSheetStyles.disclaimer}>
-              <Ionicons name="information-circle-outline" size={13} color={colors.text.tertiary} />
-              <Text variant="caption" color={colors.text.tertiary} style={{ flex: 1, lineHeight: 17 }}>
-                Detectamos estos débitos automáticamente a partir de tus gastos registrados. Pueden incluir suscripciones, servicios o pagos recurrentes.
-              </Text>
-            </View>
-
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
 
       {/* Modal agregar gasto */}
       <Modal
@@ -1639,6 +1884,19 @@ export default function ExpensesScreen() {
                 />
 
                 <TouchableOpacity
+                  style={styles.shareBtn}
+                  onPress={() => {
+                    setShareExpense(editingExpense);
+                    setEditingExpense(null);
+                    setEditExpenseValues(null);
+                    setShowShareModal(true);
+                  }}
+                >
+                  <Ionicons name="people-outline" size={16} color="#8B5CF6" />
+                  <Text style={styles.shareBtnText}>COMPARTIR EN GRUPO</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
                   style={styles.deleteBtn}
                   onPress={() => handleDeleteExpense(editingExpense!.id)}
                 >
@@ -1650,6 +1908,13 @@ export default function ExpensesScreen() {
           </SafeAreaView>
         </KeyboardAvoidingView>
       </Modal>
+
+      <ShareInGroupModal
+        visible={showShareModal}
+        expense={shareExpense}
+        userId={user?.id ?? ''}
+        onClose={() => { setShowShareModal(false); setShareExpense(null); }}
+      />
 
       <FirstVisitSheet
         visible={isFirstVisit}
@@ -2136,6 +2401,23 @@ const styles = StyleSheet.create({
     borderColor:     colors.neon,
     backgroundColor: colors.neon + '15',
   },
+  shareBtn: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    justifyContent:  'center',
+    gap:             spacing[2],
+    paddingVertical: spacing[3],
+    borderWidth:     1,
+    borderColor:     '#8B5CF640',
+    borderRadius:    8,
+    backgroundColor: '#F5F3FF',
+  },
+  shareBtnText: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 12,
+    color: '#8B5CF6',
+    letterSpacing: 0.4,
+  },
   deleteBtn: {
     flexDirection:   'row',
     alignItems:      'center',
@@ -2237,58 +2519,6 @@ const styles = StyleSheet.create({
   reportTabTextActive: {
     fontFamily: 'Montserrat_600SemiBold',
     color:      colors.primary,
-  },
-  // Subscriptions banner (list header)
-  subsBanner: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginHorizontal: layout.screenPadding, marginBottom: spacing[2],
-    backgroundColor: colors.yellow + '0D', borderWidth: 1, borderColor: colors.yellow + '33',
-    borderRadius: 12, padding: spacing[3],
-  },
-  subsBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], flex: 1 },
-  subsBannerIcon: {
-    width: 32, height: 32, borderRadius: 16, backgroundColor: colors.yellow + '20',
-    alignItems: 'center', justifyContent: 'center',
-  },
-});
-
-const subsSheetStyles = StyleSheet.create({
-  totalCard: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.yellow + '10', borderWidth: 1, borderColor: colors.yellow + '30',
-    borderRadius: 14, padding: spacing[4],
-  },
-  totalAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: colors.yellow, flexShrink: 1 },
-  countBadge: {
-    width: 32, height: 32, borderRadius: 16, backgroundColor: colors.yellow + '20',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  countText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.yellow },
-  card: {
-    backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default,
-    borderRadius: 14, padding: spacing[4], gap: spacing[2],
-  },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  cardIcon: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: colors.yellow + '15',
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  },
-  amountCol: { alignItems: 'flex-end', gap: 1 },
-  subAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: colors.yellow },
-  metaRow: { flexDirection: 'row', gap: spacing[2] },
-  metaChip: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[1],
-    backgroundColor: colors.bg.elevated, borderRadius: 6,
-    paddingHorizontal: spacing[2], paddingVertical: spacing[1],
-  },
-  tipRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    backgroundColor: colors.border.subtle + '60', borderRadius: 6,
-    paddingHorizontal: spacing[2], paddingVertical: spacing[1],
-  },
-  disclaimer: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2],
-    paddingTop: spacing[2],
   },
 });
 
