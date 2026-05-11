@@ -80,15 +80,27 @@ interface MemberDetail {
 }
 
 interface GroupExpense {
-  id:          string;
-  amount:      number;
-  date:        string;
-  description: string;
-  paidByName:  string;
-  paidById:    string;
-  icon:        string;
-  iconBg:      string;
-  iconColor:   string;
+  id:             string;
+  amount:         number;
+  date:           string;
+  description:    string;
+  paidByName:     string;
+  paidById:       string;
+  icon:           string;
+  iconBg:         string;
+  iconColor:      string;
+  participantCount: number;
+  splitType:      string;
+}
+
+interface PersonalExpense {
+  id:            string;
+  amount:        number;
+  date:          string;
+  description:   string;
+  categoryName:  string;
+  categoryIcon:  string | null;
+  categoryColor: string | null;
 }
 
 interface DebtEntry {
@@ -274,11 +286,10 @@ async function fetchGroupDetail(groupId: string, userId: string): Promise<FetchR
       : Promise.resolve({ data: [] }),
     isFriends
       ? db.from('group_expenses')
-          .select('id, paid_by, description, amount, date')
+          .select('id, paid_by, description, amount, date, split_type')
           .eq('group_id', groupId)
-          .gte('date', currentMonthStart())
           .order('date', { ascending: false })
-          .limit(50)
+          .limit(100)
       : Promise.resolve({ data: [] }),
   ]);
 
@@ -288,7 +299,7 @@ async function fetchGroupDetail(groupId: string, userId: string): Promise<FetchR
   const totals:    Record<string, number>   = {};
   const expByUser: Record<string, any[]>    = {};
   if (!isFriends) {
-    for (const e of expResult.data ?? []) {
+    for (const e of (expResult.data as any[]) ?? []) {
       totals[e.user_id] = (totals[e.user_id] ?? 0) + Number(e.amount);
       if (!expByUser[e.user_id]) expByUser[e.user_id] = [];
       expByUser[e.user_id].push(e);
@@ -361,15 +372,23 @@ async function fetchGroupDetail(groupId: string, userId: string): Promise<FetchR
 
     debts = computeDebts(rawSplits, rawExpenses, members, userId);
 
+    // Build a participant count map from rawSplits
+    const participantCountMap: Record<string, number> = {};
+    for (const split of rawSplits) {
+      participantCountMap[split.group_expense_id] = (participantCountMap[split.group_expense_id] ?? 0) + 1;
+    }
+
     expenses = (groupExpResult.data ?? []).map((e: any) => {
       const payer = members.find(m => m.userId === e.paid_by);
       return {
-        id:          e.id,
-        amount:      Number(e.amount),
-        date:        e.date,
-        description: e.description || 'Sin descripción',
-        paidByName:  payer?.isMe ? 'Vos' : (payer?.name ?? 'Miembro'),
-        paidById:    e.paid_by,
+        id:               e.id,
+        amount:           Number(e.amount),
+        date:             e.date,
+        description:      e.description || 'Sin descripción',
+        paidByName:       payer?.isMe ? 'Vos' : (payer?.name ?? 'Miembro'),
+        paidById:         e.paid_by,
+        participantCount: participantCountMap[e.id] ?? 0,
+        splitType:        e.split_type ?? 'equal',
         ...expenseIcon(e.description ?? ''),
       };
     });
@@ -377,12 +396,14 @@ async function fetchGroupDetail(groupId: string, userId: string): Promise<FetchR
     expenses = (expResult.data ?? []).map((e: any) => {
       const payer = members.find(m => m.userId === e.user_id);
       return {
-        id:          e.id,
-        amount:      Number(e.amount),
-        date:        e.date,
-        description: e.description || 'Sin descripción',
-        paidByName:  payer?.isMe ? 'Vos' : (payer?.name ?? 'Miembro'),
-        paidById:    e.user_id,
+        id:               e.id,
+        amount:           Number(e.amount),
+        date:             e.date,
+        description:      e.description || 'Sin descripción',
+        paidByName:       payer?.isMe ? 'Vos' : (payer?.name ?? 'Miembro'),
+        paidById:         e.user_id,
+        participantCount: 0,
+        splitType:        'equal',
         ...expenseIcon(e.description ?? ''),
       };
     });
@@ -437,6 +458,7 @@ function Avatar({ name, color, size = 44 }: { name: string; color: string; size?
 // ─── ExpenseRow ───────────────────────────────────────────────────────────────
 
 function ExpenseRow({ expense }: { expense: GroupExpense }) {
+  const splitLabel = expense.splitType === 'equal' ? 'Partes iguales' : 'Personalizado';
   return (
     <View style={s.expRow}>
       <View style={[s.expIcon, { backgroundColor: expense.iconBg }]}>
@@ -444,7 +466,16 @@ function ExpenseRow({ expense }: { expense: GroupExpense }) {
       </View>
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={s.expName} numberOfLines={1}>{expense.description}</Text>
-        <Text style={s.expMeta}>{dateLabel(expense.date)} · {expense.paidByName}</Text>
+        <Text style={s.expMeta}>{dateLabel(expense.date)} · Pagó: {expense.paidByName}</Text>
+        {expense.participantCount > 0 && (
+          <View style={s.expSplitRow}>
+            <Text style={s.expSplitText}>{splitLabel}</Text>
+            <View style={s.expParticipants}>
+              <Ionicons name="people-outline" size={11} color={C.purple} />
+              <Text style={s.expParticipantsText}>{expense.participantCount}</Text>
+            </View>
+          </View>
+        )}
       </View>
       <Text style={s.expAmount}>{formatCurrency(expense.amount)}</Text>
     </View>
@@ -719,10 +750,13 @@ function FamilyResumenTab({ detail, isAdmin, onInvite, onMemberPress }: {
 function FriendsResumenTab({ detail, onAddExpense, myUserId }: {
   detail: GroupDetail; onAddExpense: () => void; myUserId: string;
 }) {
-  const me       = detail.members.find(m => m.isMe);
-  const owedToMe = detail.debts.filter(d => d.toUserId === me?.userId);
-  const myDebts  = detail.debts.filter(d => d.fromUserId === me?.userId);
-  const owedAmt  = owedToMe.reduce((s, d) => s + d.amount, 0);
+  const me         = detail.members.find(m => m.isMe);
+  const owedToMe   = detail.debts.filter(d => d.toUserId === me?.userId);
+  const myDebts    = detail.debts.filter(d => d.fromUserId === me?.userId);
+  const owedAmt    = owedToMe.reduce((s, d) => s + d.amount, 0);
+  const iOweAmt    = myDebts.reduce((s, d) => s + d.amount, 0);
+  const netBalance = owedAmt - iOweAmt;
+  const netColor   = netBalance > 0.01 ? C.green : netBalance < -0.01 ? C.red : C.text2;
 
   return (
     <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
@@ -734,6 +768,10 @@ function FriendsResumenTab({ detail, onAddExpense, myUserId }: {
           <View style={s.summaryCol}>
             <Text style={s.summaryLabel}>Total compartido</Text>
             <Text style={s.summaryAmt}>{formatCurrency(detail.totalMonth)}</Text>
+          </View>
+          <View style={[s.summaryCol, { alignItems: 'flex-end' }]}>
+            <Text style={s.summaryLabel}>Balance neto</Text>
+            <Text style={[s.summaryAmt, { color: netColor }]}>{netBalance > 0.01 ? '+' : ''}{formatCurrency(netBalance)}</Text>
           </View>
         </View>
         <View style={s.divider} />
@@ -747,6 +785,17 @@ function FriendsResumenTab({ detail, onAddExpense, myUserId }: {
             <Text style={[s.summaryAmt, { color: C.green }]}>{formatCurrency(owedAmt)}</Text>
           </View>
         </View>
+        {iOweAmt > 0.01 && (
+          <>
+            <View style={s.divider} />
+            <View style={s.summaryRow}>
+              <View style={s.summaryCol}>
+                <Text style={s.summaryLabel}>Yo debo</Text>
+                <Text style={[s.summaryAmt, { color: C.red }]}>{formatCurrency(iOweAmt)}</Text>
+              </View>
+            </View>
+          </>
+        )}
       </View>
 
       {/* Deudas entre amigos */}
@@ -792,12 +841,153 @@ function FriendsResumenTab({ detail, onAddExpense, myUserId }: {
   );
 }
 
+// ─── Modal: Detalle de gasto ──────────────────────────────────────────────────
+
+function ExpenseDetailModal({
+  visible, expense, splits, members, myUserId, onClose, onRefresh,
+}: {
+  visible:    boolean;
+  expense:    GroupExpense | null;
+  splits:     FetchResult['rawSplits'];
+  members:    MemberDetail[];
+  myUserId:   string;
+  onClose:    () => void;
+  onRefresh:  () => void;
+}) {
+  const [settling, setSettling] = useState<string | null>(null);
+  const PURPLE = '#8B5CF6';
+
+  if (!expense) return null;
+
+  const expSplits = splits.filter(sp => sp.group_expense_id === expense.id);
+
+  const handleSettle = async (splitUserId: string) => {
+    setSettling(splitUserId);
+    try {
+      const { error } = await (supabase as any)
+        .from('group_expense_splits')
+        .update({ settled: true })
+        .eq('group_expense_id', expense.id)
+        .eq('user_id', splitUserId);
+      if (error) throw error;
+      onRefresh();
+      onClose();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'No se pudo saldar.');
+    } finally {
+      setSettling(null);
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
+      <SafeAreaView style={s.modal} edges={['top', 'bottom']}>
+        <View style={s.modalHeader}>
+          <View style={{ width: 22 }} />
+          <Text style={s.modalTitle}>Detalle del gasto</Text>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={22} color={C.text2} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView contentContainerStyle={s.modalBody} showsVerticalScrollIndicator={false}>
+          {/* Expense preview */}
+          <View style={s.miniExpCard}>
+            <View style={[s.expIcon, { backgroundColor: expense.iconBg }]}>
+              <Ionicons name={expense.icon as any} size={18} color={expense.iconColor} />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={s.expName} numberOfLines={1}>{expense.description}</Text>
+              <Text style={s.expMeta}>{dateLabel(expense.date)} · Pagó: {expense.paidByName}</Text>
+            </View>
+            <Text style={[s.expAmount, { color: PURPLE }]}>{formatCurrency(expense.amount)}</Text>
+          </View>
+
+          {/* Balances */}
+          <View style={{ gap: sp.md }}>
+            <Text style={s.sectionLabel}>BALANCES DEL GASTO</Text>
+            <View style={s.card}>
+              {expSplits.map((split, i) => {
+                const member    = members.find(m => m.userId === split.user_id);
+                const isPayer   = split.user_id === expense.paidById;
+                const isMe      = split.user_id === myUserId;
+                const iAmPayer  = expense.paidById === myUserId;
+                const canSettle = iAmPayer && !split.settled && !isPayer;
+
+                let badge: { label: string; color: string; bg: string };
+                if (isPayer) {
+                  badge = { label: 'Pagó', color: PURPLE, bg: PURPLE + '14' };
+                } else if (split.settled) {
+                  badge = { label: 'Saldado', color: C.muted, bg: '#F3F4F6' };
+                } else if (iAmPayer) {
+                  badge = { label: 'Te debe', color: C.green, bg: C.greenLt };
+                } else if (isMe) {
+                  badge = { label: 'Debés', color: C.red, bg: '#FFF0F0' };
+                } else {
+                  badge = { label: 'Debe', color: C.text2, bg: C.bg };
+                }
+
+                return (
+                  <View key={split.user_id}>
+                    {i > 0 && <View style={s.divider} />}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: sp.md, paddingHorizontal: sp.lg, paddingVertical: sp.md }}>
+                      <Avatar name={member?.name ?? '?'} color={member?.color ?? C.muted} size={38} />
+                      <View style={{ flex: 1, gap: 4 }}>
+                        <Text style={s.memberName}>{member?.isMe ? 'Vos' : (member?.name ?? 'Miembro')}</Text>
+                        <View style={[s.roleBadge, { backgroundColor: badge.bg, alignSelf: 'flex-start' }]}>
+                          <Text style={[s.roleBadgeText, { color: badge.color }]}>{badge.label}</Text>
+                        </View>
+                      </View>
+                      <View style={{ alignItems: 'flex-end', gap: sp.xs }}>
+                        <Text style={s.expAmount}>{formatCurrency(split.amount)}</Text>
+                        {canSettle && (
+                          <TouchableOpacity
+                            style={{ backgroundColor: C.green, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 }}
+                            onPress={() => handleSettle(split.user_id)}
+                            disabled={settling === split.user_id}
+                          >
+                            {settling === split.user_id
+                              ? <ActivityIndicator size="small" color={C.white} />
+                              : <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 11, color: C.white }}>Saldar</Text>
+                            }
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+
+          {expense.paidById === myUserId && expSplits.some(s => !s.settled && s.user_id !== myUserId) && (
+            <View style={[s.infoBox, { backgroundColor: C.greenLt, borderColor: C.green + '30' }]}>
+              <Ionicons name="information-circle-outline" size={15} color={C.green} style={{ marginTop: 1 }} />
+              <Text style={[s.infoText, { color: C.text2 }]}>
+                Tocá "Saldar" en el deudor cuando te hayan pagado para marcar la deuda como saldada.
+              </Text>
+            </View>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 // ─── Tab: Gastos ──────────────────────────────────────────────────────────────
 
-function GastosTab({ detail, onAddExpense, isFriends }: {
-  detail: GroupDetail; onAddExpense: () => void; isFriends: boolean;
+function GastosTab({ detail, onAddExpense, isFriends, rawSplits, myUserId, onRefresh }: {
+  detail:      GroupDetail;
+  onAddExpense: () => void;
+  isFriends:   boolean;
+  rawSplits:   FetchResult['rawSplits'];
+  myUserId:    string;
+  onRefresh:   () => void;
 }) {
+  const [selectedExpense, setSelectedExpense] = useState<GroupExpense | null>(null);
+
   return (
+    <>
     <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text style={s.sectionTitle}>{monthLabel()}</Text>
@@ -812,28 +1002,71 @@ function GastosTab({ detail, onAddExpense, isFriends }: {
       {detail.expenses.length === 0 ? (
         <View style={s.emptyBox}>
           <Ionicons name="receipt-outline" size={36} color={C.border} />
-          <Text style={s.emptyTitle}>Sin gastos este mes</Text>
+          <Text style={s.emptyTitle}>Sin gastos todavía</Text>
           <Text style={s.emptySub}>
             {isFriends ? 'Agregá el primer gasto compartido.' : 'Los gastos del grupo aparecerán acá.'}
           </Text>
         </View>
-      ) : (
-        <View style={s.card}>
-          {detail.expenses.map((e, i) => (
-            <View key={e.id}>
-              {i > 0 && <View style={s.divider} />}
-              <ExpenseRow expense={e} />
-            </View>
-          ))}
-        </View>
-      )}
+      ) : (() => {
+        // Group expenses by date
+        const byDate: { date: string; label: string; items: GroupExpense[] }[] = [];
+        for (const e of detail.expenses) {
+          const last = byDate[byDate.length - 1];
+          if (last && last.date === e.date) { last.items.push(e); }
+          else byDate.push({ date: e.date, label: dateLabel(e.date), items: [e] });
+        }
+        return (
+          <>
+            {byDate.map(group => (
+              <View key={group.date} style={{ gap: sp.sm }}>
+                <Text style={s.sectionLabel}>{group.label.toUpperCase()}</Text>
+                <View style={s.card}>
+                  {group.items.map((e, i) => (
+                    <View key={e.id}>
+                      {i > 0 && <View style={s.divider} />}
+                      <TouchableOpacity
+                        onPress={() => isFriends ? setSelectedExpense(e) : undefined}
+                        activeOpacity={isFriends ? 0.75 : 1}
+                        disabled={!isFriends}
+                      >
+                        <ExpenseRow expense={e} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </>
+        );
+      })()}
     </ScrollView>
+
+    {isFriends && (
+      <ExpenseDetailModal
+        visible={selectedExpense !== null}
+        expense={selectedExpense}
+        splits={rawSplits}
+        members={detail.members}
+        myUserId={myUserId}
+        onClose={() => setSelectedExpense(null)}
+        onRefresh={() => { setSelectedExpense(null); onRefresh(); }}
+      />
+    )}
+    </>
   );
 }
 
 // ─── Tab: Deudas ─────────────────────────────────────────────────────────────
 
 function DeudasTab({ detail, myUserId }: { detail: GroupDetail; myUserId: string }) {
+  const owedToMe  = detail.debts.filter(d => d.toUserId === myUserId);
+  const myDebts   = detail.debts.filter(d => d.fromUserId === myUserId);
+  const otherDebts = detail.debts.filter(d => d.fromUserId !== myUserId && d.toUserId !== myUserId);
+  const owedAmt   = owedToMe.reduce((s, d) => s + d.amount, 0);
+  const iOweAmt   = myDebts.reduce((s, d) => s + d.amount, 0);
+  const netBalance = owedAmt - iOweAmt;
+  const netColor  = netBalance > 0.01 ? C.green : netBalance < -0.01 ? C.red : C.text2;
+
   if (detail.debts.length === 0) {
     return (
       <View style={[s.tabContent, s.centered]}>
@@ -846,32 +1079,89 @@ function DeudasTab({ detail, myUserId }: { detail: GroupDetail; myUserId: string
 
   return (
     <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={s.sectionTitle}>Deudas pendientes</Text>
+
+      {/* Balance neto */}
       <View style={s.card}>
-        {detail.debts.map((d, i) => {
-          const iOweThem  = d.fromUserId === myUserId;
-          const theyOweMe = d.toUserId === myUserId;
-          const debtColor = iOweThem ? C.red : theyOweMe ? C.green : C.text2;
-          const label = iOweThem
-            ? `Yo le debo a ${d.toName}`
-            : theyOweMe
-              ? `${d.fromName} me debe`
-              : `${d.fromName} le debe a ${d.toName}`;
-          return (
-            <View key={`${d.fromUserId}-${d.toUserId}`}>
-              {i > 0 && <View style={s.divider} />}
-              <View style={s.debtRow}>
-                <Avatar name={d.fromName} color={d.fromColor} size={40} />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={s.debtLabel}>{label}</Text>
-                  {iOweThem && <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 11, color: C.red }}>Tenés que pagar esto</Text>}
-                </View>
-                <Text style={[s.debtAmt, { color: debtColor }]}>{formatCurrency(d.amount)}</Text>
-              </View>
-            </View>
-          );
-        })}
+        <Text style={s.cardSectionTitle}>Tu balance neto</Text>
+        <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 26, color: netColor, paddingHorizontal: sp.lg, paddingBottom: sp.md, letterSpacing: -0.5 }}>
+          {netBalance > 0.01 ? '+' : ''}{formatCurrency(netBalance)}
+        </Text>
+        <View style={s.divider} />
+        <View style={[s.summaryRow, { paddingVertical: sp.md }]}>
+          <View style={s.summaryCol}>
+            <Text style={s.summaryLabel}>Te deben</Text>
+            <Text style={[s.summaryAmt, { color: C.green, fontSize: 16 }]}>{formatCurrency(owedAmt)}</Text>
+          </View>
+          <View style={[s.summaryCol, { alignItems: 'flex-end' }]}>
+            <Text style={s.summaryLabel}>Debés</Text>
+            <Text style={[s.summaryAmt, { color: C.red, fontSize: 16 }]}>{formatCurrency(iOweAmt)}</Text>
+          </View>
+        </View>
       </View>
+
+      {/* TE DEBEN */}
+      {owedToMe.length > 0 && (
+        <>
+          <Text style={s.sectionTitle}>Te deben</Text>
+          <View style={s.card}>
+            {owedToMe.map((d, i) => (
+              <View key={`${d.fromUserId}-${d.toUserId}`}>
+                {i > 0 && <View style={s.divider} />}
+                <View style={s.debtRow}>
+                  <Avatar name={d.fromName} color={d.fromColor} size={40} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={s.debtLabel}>{d.fromName}</Text>
+                    <Text style={{ fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted }}>te debe</Text>
+                  </View>
+                  <Text style={[s.debtAmt, { color: C.green }]}>{formatCurrency(d.amount)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </>
+      )}
+
+      {/* DEBÉS */}
+      {myDebts.length > 0 && (
+        <>
+          <Text style={s.sectionTitle}>Debés</Text>
+          <View style={s.card}>
+            {myDebts.map((d, i) => (
+              <View key={`${d.fromUserId}-${d.toUserId}`}>
+                {i > 0 && <View style={s.divider} />}
+                <View style={s.debtRow}>
+                  <Avatar name={d.toName} color={d.fromColor} size={40} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={s.debtLabel}>a {d.toName}</Text>
+                    <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 11, color: C.red }}>tenés que pagar</Text>
+                  </View>
+                  <Text style={[s.debtAmt, { color: C.red }]}>{formatCurrency(d.amount)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </>
+      )}
+
+      {/* ENTRE EL GRUPO */}
+      {otherDebts.length > 0 && (
+        <>
+          <Text style={s.sectionTitle}>Entre el grupo</Text>
+          <View style={s.card}>
+            {otherDebts.map((d, i) => (
+              <View key={`${d.fromUserId}-${d.toUserId}`}>
+                {i > 0 && <View style={s.divider} />}
+                <View style={s.debtRow}>
+                  <Avatar name={d.fromName} color={d.fromColor} size={40} />
+                  <Text style={s.debtLabel} numberOfLines={1}>{d.fromName} le debe a {d.toName}</Text>
+                  <Text style={[s.debtAmt, { color: C.text2 }]}>{formatCurrency(d.amount)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </>
+      )}
+
       <View style={s.infoBox}>
         <Ionicons name="information-circle-outline" size={16} color={C.purple} />
         <Text style={s.infoText}>Las deudas se calculan según los gastos compartidos cargados en el grupo.</Text>
@@ -1000,7 +1290,10 @@ function PermisosTab({ detail }: { detail: GroupDetail }) {
   );
 }
 
-// ─── Modal: Agregar gasto compartido ─────────────────────────────────────────
+// ─── Modal: Agregar gasto compartido (multi-step) ────────────────────────────
+
+type AddExpenseStep = 'source' | 'pick' | 'form' | 'details' | 'confirm';
+type SplitMode      = 'equal' | 'custom';
 
 function AddExpenseModal({
   visible, onClose, members, groupId, userId, onSaved,
@@ -1008,60 +1301,139 @@ function AddExpenseModal({
   visible: boolean; onClose: () => void; members: MemberDetail[];
   groupId: string; userId: string; onSaved: () => void;
 }) {
-  type ExpenseSource = 'manual' | 'existing';
-  type SplitMode     = 'equal' | 'custom';
+  const [step,              setStep]             = useState<AddExpenseStep>('source');
+  const [source,            setSource]           = useState<'manual' | 'existing'>('manual');
+  const [personalExpenses,  setPersonalExpenses] = useState<PersonalExpense[]>([]);
+  const [loadingExp,        setLoadingExp]       = useState(false);
+  const [expSearch,         setExpSearch]        = useState('');
+  const [selectedExpId,     setSelectedExpId]    = useState<string | null>(null);
+  const [description,       setDescription]      = useState('');
+  const [amountStr,         setAmountStr]        = useState('');
+  const [dateStr,           setDateStr]          = useState(new Date().toISOString().split('T')[0]);
+  const [paidById,          setPaidById]         = useState(userId);
+  const [splitMode,         setSplitMode]        = useState<SplitMode>('equal');
+  const [included,          setIncluded]         = useState<Set<string>>(new Set(members.map(m => m.userId)));
+  const [customAmounts,    setCustomAmounts]    = useState<Record<string, string>>({});
+  const [saving,            setSaving]           = useState(false);
+  const [savedExpense,      setSavedExpense]      = useState<{ description: string; amount: number; paidByName: string; count: number } | null>(null);
 
-  const [source,      setSource]      = useState<ExpenseSource>('manual');
-  const [description, setDescription] = useState('');
-  const [amountStr,   setAmountStr]   = useState('');
-  const [paidById,    setPaidById]    = useState(userId);
-  const [splitMode,   setSplitMode]   = useState<SplitMode>('equal');
-  const [saving,      setSaving]      = useState(false);
-  const [included,    setIncluded]    = useState<Set<string>>(new Set(members.map(m => m.userId)));
-
-  const reset = () => {
-    setDescription(''); setAmountStr(''); setPaidById(userId);
-    setSplitMode('equal'); setSource('manual');
+  const reset = useCallback(() => {
+    setStep('source'); setSource('manual'); setPersonalExpenses([]); setExpSearch('');
+    setSelectedExpId(null); setDescription(''); setAmountStr('');
+    setDateStr(new Date().toISOString().split('T')[0]);
+    setPaidById(userId); setSplitMode('equal'); setCustomAmounts({});
     setIncluded(new Set(members.map(m => m.userId)));
+    setSaving(false); setSavedExpense(null);
+  }, [userId, members]);
+
+  useEffect(() => { if (!visible) reset(); }, [visible, reset]);
+
+  const loadPersonalExpenses = async () => {
+    setLoadingExp(true);
+    try {
+      const since = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+      const { data } = await (supabase as any)
+        .from('expenses')
+        .select('id, amount, date, description, category_id, category:expense_categories(name_es, icon, color)')
+        .eq('user_id', userId)
+        .gte('date', since)
+        .is('deleted_at', null)
+        .order('date', { ascending: false })
+        .limit(100);
+      setPersonalExpenses((data ?? []).map((e: any) => ({
+        id:            e.id,
+        amount:        Number(e.amount),
+        date:          e.date,
+        description:   e.description || 'Sin descripción',
+        categoryName:  (e.category as any)?.name_es ?? 'Sin clasificar',
+        categoryIcon:  (e.category as any)?.icon ?? null,
+        categoryColor: (e.category as any)?.color ?? null,
+      })));
+    } finally {
+      setLoadingExp(false);
+    }
   };
 
-  const toggleMember = (uid: string) => {
-    setIncluded(prev => {
-      const next = new Set(prev);
-      if (next.has(uid)) { next.delete(uid); } else { next.add(uid); }
-      return next;
-    });
+  const handleContinueSource = () => {
+    if (source === 'existing') { setStep('pick'); loadPersonalExpenses(); }
+    else setStep('form');
+  };
+
+  const handleSelectExpense = (exp: PersonalExpense) => {
+    setSelectedExpId(exp.id); setDescription(exp.description);
+    setAmountStr(String(exp.amount)); setDateStr(exp.date);
+  };
+
+  const handleContinuePick = () => {
+    if (!selectedExpId) { Alert.alert('Seleccioná un gasto para continuar.'); return; }
+    setStep('details');
+  };
+
+  const handleContinueForm = () => {
+    const amt = parseFloat(amountStr.replace(',', '.'));
+    if (!description.trim() || isNaN(amt) || amt <= 0) {
+      Alert.alert('Completá la descripción y el monto.'); return;
+    }
+    setStep('details');
   };
 
   const handleSave = async () => {
     const amount = parseFloat(amountStr.replace(',', '.'));
-    if (!description.trim() || isNaN(amount) || amount <= 0) return;
     const participantes = members.filter(m => included.has(m.userId));
     if (participantes.length === 0) { Alert.alert('Seleccioná al menos un participante.'); return; }
+    if (splitMode === 'custom') {
+      const ct = participantes.reduce(
+        (s, m) => s + (parseFloat((customAmounts[m.userId] || '0').replace(',', '.')) || 0), 0
+      );
+      if (Math.abs(ct - amount) >= 0.5) {
+        Alert.alert('Los montos no cuadran', `El total asignado (${formatCurrency(ct)}) no coincide con el gasto (${formatCurrency(amount)}).`);
+        return;
+      }
+    }
     setSaving(true);
     try {
       const db = supabase as any;
+      // Check for duplicate if sharing an existing expense
+      if (source === 'existing' && selectedExpId) {
+        const { data: existing } = await db
+          .from('group_expenses')
+          .select('id')
+          .eq('group_id', groupId)
+          .eq('source_expense_id', selectedExpId)
+          .maybeSingle();
+        if (existing) {
+          Alert.alert('Gasto ya compartido', 'Este gasto ya fue compartido en este grupo.');
+          setSaving(false); return;
+        }
+      }
+      const insertData: any = {
+        group_id: groupId, paid_by: paidById,
+        description: description.trim(), amount,
+        date: dateStr, split_type: splitMode, created_by: userId,
+      };
+      if (source === 'existing' && selectedExpId) insertData.source_expense_id = selectedExpId;
+
       const { data: expense, error: e1 } = await db
-        .from('group_expenses')
-        .insert({
-          group_id: groupId, paid_by: paidById,
-          description: description.trim(), amount,
-          date: new Date().toISOString().split('T')[0],
-        })
-        .select().single();
+        .from('group_expenses').insert(insertData).select().single();
       if (e1) throw e1;
 
-      const splitAmt = amount / participantes.length;
-      const splits = participantes.map(m => ({
-        group_expense_id: expense.id,
-        user_id:          m.userId,
-        amount:           parseFloat(splitAmt.toFixed(2)),
-        settled:          m.userId === paidById,
-      }));
+      const splits = participantes.map(m => {
+        const amt = splitMode === 'custom'
+          ? parseFloat((customAmounts[m.userId] || '0').replace(',', '.')) || 0
+          : parseFloat((amount / participantes.length).toFixed(2));
+        return { group_expense_id: expense.id, user_id: m.userId, amount: amt, settled: m.userId === paidById };
+      });
       const { error: e2 } = await db.from('group_expense_splits').insert(splits);
       if (e2) throw e2;
 
-      reset(); onClose(); onSaved();
+      const payer = members.find(m => m.userId === paidById);
+      setSavedExpense({
+        description: description.trim(), amount,
+        paidByName: payer?.isMe ? 'Vos' : (payer?.name ?? 'Miembro'),
+        count: participantes.length,
+      });
+      setStep('confirm');
+      onSaved();
     } catch (err: any) {
       Alert.alert('Error', err.message ?? 'No se pudo guardar el gasto.');
     } finally {
@@ -1069,147 +1441,405 @@ function AddExpenseModal({
     }
   };
 
-  const canSave = description.trim().length > 0 && parseFloat(amountStr.replace(',', '.')) > 0 && !saving;
-  const me = members.find(m => m.userId === userId);
+  const handleBack = () => {
+    if (step === 'pick' || step === 'form') setStep('source');
+    else if (step === 'details') setStep(source === 'existing' ? 'pick' : 'form');
+  };
+
+  const filteredExpenses = expSearch.trim()
+    ? personalExpenses.filter(e =>
+        e.description.toLowerCase().includes(expSearch.toLowerCase()) ||
+        e.categoryName.toLowerCase().includes(expSearch.toLowerCase())
+      )
+    : personalExpenses;
+
+  const totalAmt       = parseFloat(amountStr.replace(',', '.')) || 0;
+  const includedMembers = members.filter(m => included.has(m.userId));
+  const customTotal    = includedMembers.reduce(
+    (s, m) => s + (parseFloat((customAmounts[m.userId] || '0').replace(',', '.')) || 0), 0
+  );
+  const isCustomValid  = splitMode === 'equal' || Math.abs(customTotal - totalAmt) < 0.5;
+
+  const PURPLE = '#8B5CF6';
+  const PURPLE_LT = '#F5F3FF';
+
+  const stepTitle: Record<AddExpenseStep, string> = {
+    source:  'Agregar gasto compartido',
+    pick:    'Elegir de mis gastos',
+    form:    'Crear gasto manual',
+    details: 'Detalles del gasto',
+    confirm: 'Gasto compartido',
+  };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={step === 'confirm' ? () => { reset(); onClose(); } : onClose}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <SafeAreaView style={s.modal} edges={['top', 'bottom']}>
 
+          {/* Header */}
           <View style={s.modalHeader}>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="arrow-back" size={22} color={C.text2} />
-            </TouchableOpacity>
-            <Text style={s.modalTitle}>Nuevo gasto compartido</Text>
+            {step === 'confirm' ? (
+              <View style={{ width: 22 }} />
+            ) : (
+              <TouchableOpacity
+                onPress={step === 'source' ? onClose : handleBack}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name={step === 'source' ? 'close' : 'arrow-back'} size={22} color={C.text2} />
+              </TouchableOpacity>
+            )}
+            <Text style={s.modalTitle}>{stepTitle[step]}</Text>
             <View style={{ width: 22 }} />
           </View>
 
-          <ScrollView contentContainerStyle={s.modalBody} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-
-            {/* Sección 1 */}
-            <View style={{ gap: sp.md }}>
+          {/* ── Step: source ── */}
+          {step === 'source' && (
+            <ScrollView contentContainerStyle={[s.modalBody, { gap: sp.xl }]} keyboardShouldPersistTaps="handled">
               <Text style={s.sectionLabel}>¿QUÉ GASTO QUERÉS COMPARTIR?</Text>
               {([
-                { val: 'manual'   as ExpenseSource, title: 'Crear gasto manual',      sub: 'Ingresá un gasto nuevo para compartir.' },
-                { val: 'existing' as ExpenseSource, title: 'Elegir de mis gastos',    sub: 'Seleccioná un gasto existente y compartilo con el grupo.' },
+                { val: 'existing' as const, title: 'Elegir de mis gastos', sub: 'Seleccioná un gasto existente y compartilo con el grupo.', icon: 'receipt-outline' },
+                { val: 'manual'   as const, title: 'Crear gasto manual',   sub: 'Ingresá un gasto nuevo para compartir.',                  icon: 'create-outline'  },
               ]).map(opt => (
                 <TouchableOpacity
                   key={opt.val}
-                  style={[s.radioRow, source === opt.val && s.radioRowActive]}
+                  style={[s.sourceCard, source === opt.val && { borderColor: PURPLE, backgroundColor: PURPLE_LT }]}
                   onPress={() => setSource(opt.val)}
                   activeOpacity={0.8}
                 >
-                  <View style={[s.radioCircle, source === opt.val && s.radioCircleActive]}>
-                    {source === opt.val && <View style={s.radioDot} />}
+                  <View style={[s.sourceIcon, { backgroundColor: source === opt.val ? PURPLE + '18' : C.bg }]}>
+                    <Ionicons name={opt.icon as any} size={22} color={source === opt.val ? PURPLE : C.muted} />
                   </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={[s.radioTitle, source === opt.val && { color: C.purple }]}>{opt.title}</Text>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text style={[s.radioTitle, source === opt.val && { color: PURPLE }]}>{opt.title}</Text>
                     <Text style={s.radioDesc}>{opt.sub}</Text>
+                  </View>
+                  <View style={[s.radioCircle, source === opt.val && { borderColor: PURPLE }]}>
+                    {source === opt.val && <View style={[s.radioDot, { backgroundColor: PURPLE }]} />}
                   </View>
                 </TouchableOpacity>
               ))}
-            </View>
-
-            {/* Descripción + Monto */}
-            <View style={{ gap: sp.sm }}>
-              <Text style={s.sectionLabel}>DESCRIPCIÓN</Text>
-              <TextInput
-                style={s.textInput} value={description} onChangeText={setDescription}
-                placeholder="Ej: Cena en el restorán" placeholderTextColor={C.muted}
-                returnKeyType="next"
-              />
-            </View>
-            <View style={{ gap: sp.sm }}>
-              <Text style={s.sectionLabel}>MONTO TOTAL</Text>
-              <TextInput
-                style={s.textInput} value={amountStr} onChangeText={setAmountStr}
-                placeholder="$ 0" placeholderTextColor={C.muted}
-                keyboardType="decimal-pad" returnKeyType="done"
-              />
-            </View>
-
-            {/* Quién pagó */}
-            <View style={{ gap: sp.md }}>
-              <Text style={s.sectionLabel}>¿QUIÉN PAGÓ?</Text>
-              <View style={s.card}>
-                {members.map((m, i) => (
-                  <View key={m.userId}>
-                    {i > 0 && <View style={s.divider} />}
-                    <TouchableOpacity
-                      style={s.payerRow}
-                      onPress={() => setPaidById(m.userId)}
-                      activeOpacity={0.8}
-                    >
-                      <Avatar name={m.name} color={m.color} size={36} />
-                      <Text style={s.payerName}>{m.isMe ? `${m.name} (vos)` : m.name}</Text>
-                      {paidById === m.userId && (
-                        <Ionicons name="checkmark-circle" size={20} color={C.purple} />
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                ))}
+              <TouchableOpacity style={s.purpleBtn} onPress={handleContinueSource} activeOpacity={0.85}>
+                <Text style={s.purpleBtnText}>Continuar</Text>
+              </TouchableOpacity>
+              <View style={[s.infoBox, { backgroundColor: '#F5F3FF', borderColor: PURPLE + '30' }]}>
+                <Ionicons name="lock-closed-outline" size={15} color={PURPLE} style={{ marginTop: 1 }} />
+                <Text style={[s.infoText, { color: C.text2 }]}>
+                  Tus gastos personales siguen privados. Solo se comparte lo que elegís cargar.
+                </Text>
               </View>
-            </View>
+            </ScrollView>
+          )}
 
-            {/* Entre quiénes */}
-            <View style={{ gap: sp.md }}>
-              <Text style={s.sectionLabel}>¿ENTRE QUIÉNES SE DIVIDE?</Text>
-              <View style={s.avatarRow}>
-                {members.map(m => (
-                  <TouchableOpacity
-                    key={m.userId}
-                    onPress={() => toggleMember(m.userId)}
-                    activeOpacity={0.8}
-                    style={{ alignItems: 'center', gap: sp.xs }}
-                  >
-                    <View style={[
-                      s.avatarBase,
-                      { width: 48, height: 48, borderRadius: 24, backgroundColor: m.color + '22' },
-                      !included.has(m.userId) && { opacity: 0.35 },
-                    ]}>
-                      <Text style={[s.avatarInitial, { color: m.color, fontSize: 18 }]}>{m.initial}</Text>
+          {/* ── Step: pick personal expense ── */}
+          {step === 'pick' && (
+            <>
+              <View style={{ paddingHorizontal: sp.xl, paddingTop: sp.md, paddingBottom: sp.sm }}>
+                <View style={s.searchBox}>
+                  <Ionicons name="search-outline" size={16} color={C.muted} />
+                  <TextInput
+                    style={s.searchInput} value={expSearch} onChangeText={setExpSearch}
+                    placeholder="Buscar gasto..." placeholderTextColor={C.muted}
+                  />
+                  {expSearch.length > 0 && (
+                    <TouchableOpacity onPress={() => setExpSearch('')}>
+                      <Ionicons name="close-circle" size={16} color={C.muted} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              {loadingExp ? (
+                <View style={s.centered}><ActivityIndicator color={PURPLE} /></View>
+              ) : (
+                <ScrollView
+                  contentContainerStyle={{ paddingHorizontal: sp.xl, paddingTop: sp.sm, paddingBottom: 120, gap: sp.sm }}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {filteredExpenses.length === 0 ? (
+                    <View style={[s.emptyBox, { marginTop: sp.xxl }]}>
+                      <Ionicons name="receipt-outline" size={36} color={C.border} />
+                      <Text style={s.emptyTitle}>{expSearch ? 'Sin resultados' : 'Sin gastos recientes'}</Text>
+                      <Text style={s.emptySub}>
+                        {expSearch ? 'Probá con otra búsqueda.' : 'No tenés gastos en los últimos 90 días.'}
+                      </Text>
                     </View>
-                    <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 10, color: C.muted }}>
-                      {m.isMe ? 'Vos' : m.name.split(' ')[0]}
+                  ) : (
+                    filteredExpenses.map(exp => {
+                      const isSelected = selectedExpId === exp.id;
+                      const ic = expenseIcon(exp.description);
+                      return (
+                        <TouchableOpacity
+                          key={exp.id}
+                          style={[s.pickExpRow, isSelected && { borderColor: PURPLE, backgroundColor: '#F5F3FF' }]}
+                          onPress={() => handleSelectExpense(exp)}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[s.expIcon, { backgroundColor: exp.categoryColor ? exp.categoryColor + '20' : ic.iconBg }]}>
+                            <Ionicons name={(exp.categoryIcon ?? ic.icon) as any} size={18} color={exp.categoryColor ?? ic.iconColor} />
+                          </View>
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Text style={s.expName} numberOfLines={1}>{exp.description}</Text>
+                            <Text style={s.expMeta}>{dateLabel(exp.date)} · {exp.categoryName}</Text>
+                          </View>
+                          <Text style={[s.expAmount, isSelected && { color: PURPLE }]}>{formatCurrency(exp.amount)}</Text>
+                          <View style={[s.radioCircle, { marginLeft: sp.sm, flexShrink: 0 }, isSelected && { borderColor: PURPLE }]}>
+                            {isSelected && <View style={[s.radioDot, { backgroundColor: PURPLE }]} />}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                  <TouchableOpacity
+                    style={s.createManualRow}
+                    onPress={() => { setSource('manual'); setStep('form'); }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="create-outline" size={17} color={PURPLE} />
+                    <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: PURPLE, flex: 1 }}>
+                      Crear gasto manual
                     </Text>
+                    <Ionicons name="chevron-forward" size={15} color={PURPLE} />
+                  </TouchableOpacity>
+                </ScrollView>
+              )}
+
+              <View style={{ padding: sp.xl, paddingTop: sp.md }}>
+                <TouchableOpacity
+                  style={[s.purpleBtn, !selectedExpId && { opacity: 0.4 }]}
+                  onPress={handleContinuePick} disabled={!selectedExpId} activeOpacity={0.85}
+                >
+                  <Text style={s.purpleBtnText}>Continuar</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+
+          {/* ── Step: manual form ── */}
+          {step === 'form' && (
+            <ScrollView contentContainerStyle={s.modalBody} keyboardShouldPersistTaps="handled">
+              <View style={{ gap: sp.sm }}>
+                <Text style={s.sectionLabel}>DESCRIPCIÓN</Text>
+                <TextInput
+                  style={s.textInput} value={description} onChangeText={setDescription}
+                  placeholder="Ej: Cena en el restorán" placeholderTextColor={C.muted}
+                  autoFocus autoCapitalize="sentences"
+                />
+              </View>
+              <View style={{ gap: sp.sm }}>
+                <Text style={s.sectionLabel}>MONTO TOTAL (ARS)</Text>
+                <TextInput
+                  style={s.textInput} value={amountStr} onChangeText={setAmountStr}
+                  placeholder="$ 0" placeholderTextColor={C.muted} keyboardType="decimal-pad"
+                />
+              </View>
+              <View style={{ gap: sp.sm }}>
+                <Text style={s.sectionLabel}>FECHA</Text>
+                <TextInput
+                  style={s.textInput} value={dateStr} onChangeText={setDateStr}
+                  placeholder="YYYY-MM-DD" placeholderTextColor={C.muted}
+                  keyboardType="numbers-and-punctuation"
+                />
+              </View>
+              <TouchableOpacity
+                style={[s.purpleBtn, (!description.trim() || !amountStr) && { opacity: 0.4 }]}
+                onPress={handleContinueForm} disabled={!description.trim() || !amountStr} activeOpacity={0.85}
+              >
+                <Text style={s.purpleBtnText}>Continuar</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {/* ── Step: details (payer, participants, split) ── */}
+          {step === 'details' && (
+            <ScrollView contentContainerStyle={s.modalBody} keyboardShouldPersistTaps="handled">
+              {/* Mini expense preview */}
+              <View style={s.miniExpCard}>
+                <View style={[s.expIcon, { backgroundColor: expenseIcon(description).iconBg }]}>
+                  <Ionicons name={expenseIcon(description).icon as any} size={18} color={expenseIcon(description).iconColor} />
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={s.expName} numberOfLines={1}>{description || 'Sin descripción'}</Text>
+                  <Text style={s.expMeta}>{dateStr}</Text>
+                </View>
+                <Text style={s.expAmount}>{formatCurrency(parseFloat(amountStr.replace(',', '.')) || 0)}</Text>
+              </View>
+
+              {/* Quién pagó */}
+              <View style={{ gap: sp.md }}>
+                <Text style={s.sectionLabel}>¿QUIÉN PAGÓ?</Text>
+                <View style={s.card}>
+                  {members.map((m, i) => (
+                    <View key={m.userId}>
+                      {i > 0 && <View style={s.divider} />}
+                      <TouchableOpacity style={s.payerRow} onPress={() => setPaidById(m.userId)} activeOpacity={0.8}>
+                        <Avatar name={m.name} color={m.color} size={36} />
+                        <Text style={s.payerName}>{m.isMe ? `${m.name} (vos)` : m.name}</Text>
+                        {paidById === m.userId && <Ionicons name="checkmark-circle" size={20} color={PURPLE} />}
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              {/* Entre quiénes */}
+              <View style={{ gap: sp.md }}>
+                <Text style={s.sectionLabel}>¿ENTRE QUIÉNES SE DIVIDE?</Text>
+                <View style={s.avatarRow}>
+                  {members.map(m => {
+                    const isIn = included.has(m.userId);
+                    return (
+                      <TouchableOpacity
+                        key={m.userId}
+                        onPress={() => setIncluded(prev => {
+                          const next = new Set(prev);
+                          if (next.has(m.userId)) next.delete(m.userId); else next.add(m.userId);
+                          return next;
+                        })}
+                        activeOpacity={0.8}
+                        style={{ alignItems: 'center', gap: sp.xs }}
+                      >
+                        <View style={[
+                          s.avatarBase,
+                          { width: 52, height: 52, borderRadius: 26, backgroundColor: m.color + '22' },
+                          isIn && { borderWidth: 2.5, borderColor: PURPLE },
+                          !isIn && { opacity: 0.35 },
+                        ]}>
+                          {isIn && (
+                            <View style={{ position: 'absolute', bottom: -3, right: -3, backgroundColor: PURPLE, borderRadius: 9, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: C.white }}>
+                              <Ionicons name="checkmark" size={11} color={C.white} />
+                            </View>
+                          )}
+                          <Text style={[s.avatarInitial, { color: m.color, fontSize: 20 }]}>{m.initial}</Text>
+                        </View>
+                        <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 10, color: isIn ? C.text : C.muted }}>
+                          {m.isMe ? 'Vos' : m.name.split(' ')[0]}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* Cómo se divide */}
+              <View style={{ gap: sp.md }}>
+                <Text style={s.sectionLabel}>¿CÓMO SE DIVIDE?</Text>
+                {([
+                  { val: 'equal'  as SplitMode, label: 'Partes iguales',   desc: `${formatCurrency(totalAmt / Math.max(included.size, 1))} c/u` },
+                  { val: 'custom' as SplitMode, label: 'Personalizado',    desc: 'Definir montos diferentes por persona' },
+                ]).map(opt => (
+                  <TouchableOpacity
+                    key={opt.val}
+                    style={[s.radioRow, splitMode === opt.val && { borderColor: PURPLE + '80', backgroundColor: PURPLE + '06' }]}
+                    onPress={() => setSplitMode(opt.val)}
+                    activeOpacity={0.8}
+                  >
+                    <View style={[s.radioCircle, splitMode === opt.val && { borderColor: PURPLE }]}>
+                      {splitMode === opt.val && <View style={[s.radioDot, { backgroundColor: PURPLE }]} />}
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={[s.radioTitle, splitMode === opt.val && { color: PURPLE }]}>{opt.label}</Text>
+                      <Text style={s.radioDesc}>{opt.desc}</Text>
+                    </View>
                   </TouchableOpacity>
                 ))}
               </View>
-            </View>
 
-            {/* Cómo se divide */}
-            <View style={{ gap: sp.md }}>
-              <Text style={s.sectionLabel}>¿CÓMO SE DIVIDE?</Text>
-              {([
-                { val: 'equal'  as SplitMode, label: 'Partes iguales'  },
-                { val: 'custom' as SplitMode, label: 'Personalizado'   },
-              ]).map(opt => (
-                <TouchableOpacity
-                  key={opt.val}
-                  style={[s.radioRow, splitMode === opt.val && s.radioRowActive]}
-                  onPress={() => setSplitMode(opt.val)}
-                  activeOpacity={0.8}
-                >
-                  <View style={[s.radioCircle, splitMode === opt.val && s.radioCircleActive]}>
-                    {splitMode === opt.val && <View style={s.radioDot} />}
+              {/* Custom amount inputs */}
+              {splitMode === 'custom' && (
+                <View style={{ gap: sp.md }}>
+                  <Text style={s.sectionLabel}>MONTOS POR PERSONA</Text>
+                  {includedMembers.map(m => (
+                    <View key={m.userId} style={{ flexDirection: 'row', alignItems: 'center', gap: sp.md }}>
+                      <Avatar name={m.name} color={m.color} size={34} />
+                      <Text style={[s.payerName, { flex: 1 }]}>{m.isMe ? 'Vos' : m.name.split(' ')[0]}</Text>
+                      <TextInput
+                        style={[s.textInput, { width: 130, textAlign: 'right', paddingVertical: sp.sm }]}
+                        value={customAmounts[m.userId] ?? ''}
+                        onChangeText={v => setCustomAmounts(prev => ({ ...prev, [m.userId]: v }))}
+                        placeholder="$ 0"
+                        placeholderTextColor={C.muted}
+                        keyboardType="decimal-pad"
+                      />
+                    </View>
+                  ))}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: sp.xs }}>
+                    {isCustomValid
+                      ? <><Ionicons name="checkmark-circle" size={15} color={C.green} /><Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: C.green }}>Montos completos</Text></>
+                      : totalAmt - customTotal > 0
+                        ? <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 12, color: '#D97706' }}>Faltan {formatCurrency(totalAmt - customTotal)} por asignar</Text>
+                        : <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 12, color: C.red }}>Te pasaste por {formatCurrency(customTotal - totalAmt)}</Text>
+                    }
                   </View>
-                  <Text style={[s.radioTitle, splitMode === opt.val && { color: C.purple }]}>{opt.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                </View>
+              )}
 
-            <TouchableOpacity
-              style={[s.purpleBtn, !canSave && { opacity: 0.4 }]}
-              onPress={handleSave} disabled={!canSave} activeOpacity={0.85}
-            >
-              {saving
-                ? <ActivityIndicator color={C.white} size="small" />
-                : <Text style={s.purpleBtnText}>Guardar gasto</Text>
-              }
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.purpleBtn, (saving || included.size === 0 || !isCustomValid) && { opacity: 0.4 }]}
+                onPress={handleSave} disabled={saving || included.size === 0 || !isCustomValid} activeOpacity={0.85}
+              >
+                {saving
+                  ? <ActivityIndicator color={C.white} size="small" />
+                  : <Text style={s.purpleBtnText}>Guardar gasto</Text>
+                }
+              </TouchableOpacity>
+            </ScrollView>
+          )}
 
-          </ScrollView>
+          {/* ── Step: confirm ── */}
+          {step === 'confirm' && savedExpense && (
+            <ScrollView contentContainerStyle={[s.modalBody, { alignItems: 'center', paddingTop: sp.xxl }]}>
+              <Ionicons name="checkmark-circle" size={80} color={PURPLE} />
+              <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 22, color: C.text, textAlign: 'center', marginTop: sp.md }}>
+                ¡Gasto compartido!
+              </Text>
+              <Text style={{ fontFamily: 'Montserrat_400Regular', fontSize: 14, color: C.muted, textAlign: 'center' }}>
+                El gasto se agregó correctamente al grupo.
+              </Text>
+
+              <View style={[s.card, { width: '100%', marginTop: sp.xl }]}>
+                <View style={{ padding: sp.lg, gap: sp.md }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={[s.expName, { flex: 1 }]} numberOfLines={1}>{savedExpense.description}</Text>
+                    <Text style={[s.expAmount, { color: PURPLE }]}>{formatCurrency(savedExpense.amount)}</Text>
+                  </View>
+                  <View style={s.divider} />
+                  <View style={{ gap: sp.sm }}>
+                    {[
+                      { label: 'Pagó', value: savedExpense.paidByName },
+                      { label: 'Se divide entre', value: `${savedExpense.count} personas` },
+                      { label: 'Por persona', value: formatCurrency(savedExpense.amount / savedExpense.count) },
+                    ].map(row => (
+                      <View key={row.label} style={{ flexDirection: 'row', gap: sp.sm, alignItems: 'center' }}>
+                        <Text style={s.radioDesc}>{row.label}:</Text>
+                        <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.text }}>{row.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[s.purpleBtn, { width: '100%', marginTop: sp.xl }]}
+                onPress={() => { reset(); onClose(); }} activeOpacity={0.85}
+              >
+                <Text style={s.purpleBtnText}>Ver en el grupo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ paddingVertical: sp.md, marginTop: sp.sm }}
+                onPress={() => {
+                  setStep('source'); setSavedExpense(null); setSource('manual');
+                  setDescription(''); setAmountStr('');
+                  setDateStr(new Date().toISOString().split('T')[0]);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: C.text2 }}>
+                  Agregar otro gasto
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
         </SafeAreaView>
       </KeyboardAvoidingView>
     </Modal>
@@ -1356,7 +1986,10 @@ export default function GroupDetailScreen() {
                 <FriendsResumenTab detail={detail} onAddExpense={() => setShowAddExp(true)} myUserId={user!.id} />
               )}
               {activeTab === 'gastos'   && (
-                <GastosTab detail={detail} onAddExpense={() => setShowAddExp(true)} isFriends />
+                <GastosTab
+                  detail={detail} onAddExpense={() => setShowAddExp(true)} isFriends
+                  rawSplits={detail.rawSplits} myUserId={user!.id} onRefresh={load}
+                />
               )}
               {activeTab === 'deudas'   && <DeudasTab detail={detail} myUserId={user!.id} />}
               {activeTab === 'miembros' && (
@@ -1372,7 +2005,9 @@ export default function GroupDetailScreen() {
                 <MiembrosTab detail={detail} isAdmin={isAdmin} isFriends={false} onEdit={setEditingMember} onInvite={handleInvite} />
               )}
               {activeTab === 'gastos'   && (
-                <GastosTab detail={detail} onAddExpense={() => {}} isFriends={false} />
+                <GastosTab detail={detail} onAddExpense={() => {}} isFriends={false}
+                  rawSplits={[]} myUserId={user!.id} onRefresh={load}
+                />
               )}
               {activeTab === 'permisos' && <PermisosTab detail={detail} />}
             </>
@@ -1616,4 +2251,49 @@ const s = StyleSheet.create({
     paddingHorizontal: sp.lg, paddingVertical: sp.md,
   },
   payerName: { fontFamily: 'Montserrat_500Medium', fontSize: 14, color: C.text, flex: 1 },
+
+  // Source cards (step 1)
+  sourceCard: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.md,
+    borderWidth: 1.5, borderColor: C.border, borderRadius: 16,
+    padding: sp.lg, backgroundColor: C.white,
+  },
+  sourceIcon: {
+    width: 46, height: 46, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+
+  // Personal expense picker (step 2)
+  searchBox: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.sm,
+    backgroundColor: C.white, borderWidth: 1, borderColor: C.border,
+    borderRadius: 12, paddingHorizontal: sp.md, paddingVertical: sp.sm,
+  },
+  searchInput: {
+    flex: 1, fontFamily: 'Montserrat_400Regular', fontSize: 14,
+    color: C.text, paddingVertical: 0,
+  },
+  pickExpRow: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.md,
+    backgroundColor: C.white, borderWidth: 1.5, borderColor: C.border,
+    borderRadius: 14, padding: sp.md,
+  },
+  createManualRow: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.md,
+    borderRadius: 12, borderWidth: 1, borderColor: '#8B5CF630',
+    backgroundColor: '#F5F3FF', padding: sp.md, marginTop: sp.sm,
+  },
+
+  // Mini expense preview (details step)
+  miniExpCard: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.md,
+    backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
+    borderRadius: 14, padding: sp.md,
+  },
+
+  // Expense row split info
+  expSplitRow: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
+  expSplitText: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted },
+  expParticipants: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#8B5CF614', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+  expParticipantsText: { fontFamily: 'Montserrat_700Bold', fontSize: 10, color: '#8B5CF6' },
 });

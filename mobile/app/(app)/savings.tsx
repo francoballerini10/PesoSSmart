@@ -22,8 +22,6 @@ import { useAuthStore } from '@/store/authStore';
 import {
   useSavingsStore,
   type Saving,
-  type Investment,
-  type InstrumentType,
   type SavingCurrency,
 } from '@/store/savingsStore';
 import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
@@ -56,14 +54,14 @@ function SavingsEmptyIllustration() {
   );
 }
 
-function SavingsEmptyState({ onAddCash, onAddInvestment, onAddGoal }: { onAddCash: () => void; onAddInvestment: () => void; onAddGoal: () => void }) {
+function SavingsEmptyState({ onAddCash, onAddGoal }: { onAddCash: () => void; onAddGoal: () => void }) {
   return (
     <View style={emptyStyles.container}>
       <SavingsEmptyIllustration />
       <View style={emptyStyles.textBlock}>
         <Text variant="subtitle" color={colors.text.primary} align="center">Tu capital quieto pierde contra la inflación</Text>
         <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
-          Registrá tus ahorros e inversiones para ver cuánto podés generar y cómo protegerlos del peso.
+          Registrá tus ahorros y metas para ver cómo está tu capital y protegerlo.
         </Text>
       </View>
       <View style={emptyStyles.buttons}>
@@ -73,11 +71,7 @@ function SavingsEmptyState({ onAddCash, onAddInvestment, onAddGoal }: { onAddCas
         </TouchableOpacity>
         <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.primary }]} onPress={onAddCash} activeOpacity={0.85}>
           <Ionicons name="cash-outline" size={18} color={colors.white} />
-          <Text style={emptyStyles.btnText}>Convertí ahorro en inversión</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.bg.elevated, borderWidth: 1, borderColor: colors.border.default }]} onPress={onAddInvestment} activeOpacity={0.85}>
-          <Ionicons name="trending-up-outline" size={18} color={colors.primary} />
-          <Text style={[emptyStyles.btnText, { color: colors.primary }]}>Simulá cuánto podrías generar</Text>
+          <Text style={emptyStyles.btnText}>Agregar efectivo</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -94,58 +88,26 @@ const emptyStyles = StyleSheet.create({
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const INSTRUMENT_CONFIG: Record<InstrumentType, { label: string; icon: string; color: string }> = {
-  fci:        { label: 'FCI Money Market', icon: 'trending-up-outline',  color: colors.neon    },
-  cedear:     { label: 'Cedears',          icon: 'business-outline',      color: colors.primary },
-  plazo_fijo: { label: 'Plazo Fijo UVA',   icon: 'timer-outline',         color: colors.yellow  },
-  crypto:     { label: 'Criptomonedas',    icon: 'cube-outline',          color: '#F7931A'      },
-  bonds:      { label: 'Bonos / Letras',   icon: 'document-text-outline', color: '#A78BFA'      },
-  acciones:   { label: 'Acciones',         icon: 'stats-chart-outline',   color: '#22D3EE'      },
-  other:      { label: 'Otro',             icon: 'wallet-outline',        color: colors.text.secondary },
-};
-
-const INSTRUMENT_TYPES = Object.keys(INSTRUMENT_CONFIG) as InstrumentType[];
-
 const GOAL_EMOJIS = ['🎯', '🏖️', '🚗', '🏠', '✈️', '📱', '👶', '💍', '🎓', '💪', '🐕', '🌱', '💻', '🎸', '🏋️', '🍕'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function calcEstimatedGain(inv: Investment): number | null {
-  if (!inv.annual_return || !inv.start_date) return null;
-  const start  = new Date(inv.start_date);
-  const now    = new Date();
-  const months = Math.max(
-    (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()), 0,
-  );
-  if (months === 0) return null;
-  const monthly = Math.pow(1 + inv.annual_return / 100, 1 / 12) - 1;
-  return Math.round(inv.amount * (Math.pow(1 + monthly, months) - 1));
-}
-
-function buildInsights(totalARS: number, totalUSDInARS: number, totalInvested: number, investments: Investment[]): string[] {
-  const total = totalARS + totalUSDInARS + totalInvested;
-  if (total === 0) return ['Cargá tus ahorros e inversiones para ver cómo está tu capital.'];
+function buildInsights(totalARS: number, totalUSDInARS: number): string[] {
+  const total = totalARS + totalUSDInARS;
+  if (total === 0) return ['Cargá tus ahorros para ver cómo está tu capital.'];
   const insights: string[] = [];
-  const cashPct     = total > 0 ? ((totalARS + totalUSDInARS) / total) * 100 : 0;
-  const usdPct      = total > 0 ? (totalUSDInARS / total) * 100 : 0;
-  const investedPct = total > 0 ? (totalInvested / total) * 100 : 0;
-  if (cashPct > 60) insights.push(`El ${Math.round(cashPct)}% de tu capital está sin invertir — esos pesos pierden valor contra la inflación.`);
+  const usdPct = total > 0 ? (totalUSDInARS / total) * 100 : 0;
   if (usdPct < 15 && total > 100000) insights.push('Poca dolarización: tu cartera es vulnerable a la inflación en pesos.');
-  if (investments.length === 0) insights.push('No tenés inversiones registradas. Empezar con FCI Money Market es lo más simple.');
-  else {
-    const types = new Set(investments.map(i => i.instrument_type));
-    if (types.size === 1 && types.has('fci')) insights.push('Tu cartera es conservadora — todo en FCI. Podrías sumar Cedears para más rendimiento.');
-    if (investedPct > 80) insights.push(`Buen nivel de inversión (${Math.round(investedPct)}%). Mantené siempre algo líquido para emergencias.`);
-  }
+  insights.push('Usá el simulador para ver cómo hacer rendir tu capital en Argentina hoy.');
   return insights.slice(0, 2);
 }
 
 // ─── TotalCapitalCard ─────────────────────────────────────────────────────────
 
-function TotalCapitalCard({ totalARS, totalUSDInARS, totalInvested, totalGain }: {
-  totalARS: number; totalUSDInARS: number; totalInvested: number; totalGain: number; usdRate: number | null;
+function TotalCapitalCard({ totalARS, totalUSDInARS }: {
+  totalARS: number; totalUSDInARS: number;
 }) {
-  const total = totalARS + totalUSDInARS + totalInvested;
+  const total = totalARS + totalUSDInARS;
 
   return (
     <View style={cardStyles.card}>
@@ -154,12 +116,6 @@ function TotalCapitalCard({ totalARS, totalUSDInARS, totalInvested, totalGain }:
         {formatCurrency(total)}
       </Text>
       <Text style={cardStyles.sublabel}>En pesos argentinos</Text>
-      {totalGain > 0 && (
-        <View style={cardStyles.gainBadge}>
-          <Ionicons name="trending-up-outline" size={11} color={colors.neon} />
-          <Text style={cardStyles.gainText}>+{formatCurrency(totalGain)} ganados</Text>
-        </View>
-      )}
     </View>
   );
 }
@@ -169,8 +125,6 @@ const cardStyles = StyleSheet.create({
   label:     { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#757575' },
   total:     { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: '#212121', lineHeight: 42 },
   sublabel:  { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E', marginTop: -4 },
-  gainBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.neon + '15', borderRadius: 20, paddingHorizontal: spacing[2], paddingVertical: 3, alignSelf: 'flex-start', marginTop: spacing[1] },
-  gainText:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.neon },
 });
 
 // ─── GoalCard ─────────────────────────────────────────────────────────────────
@@ -298,59 +252,6 @@ const savingCardStyles = StyleSheet.create({
   leftBar: { width: 4, alignSelf: 'stretch' },
   iconBox: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginLeft: spacing[3], marginVertical: spacing[4] },
   amount:  { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.text.primary },
-});
-
-// ─── InvestmentCard ───────────────────────────────────────────────────────────
-
-function InvestmentCard({ inv, usdRate, onEdit, onDelete }: {
-  inv: Investment; usdRate: number | null; onEdit: (i: Investment) => void; onDelete: (id: string) => void;
-}) {
-  const cfg      = INSTRUMENT_CONFIG[inv.instrument_type];
-  const arsValue = inv.currency === 'USD' && usdRate ? inv.amount * usdRate : inv.amount;
-  const gain     = calcEstimatedGain(inv);
-
-  return (
-    <TouchableOpacity style={invStyles.card} onPress={() => onEdit(inv)} activeOpacity={0.8}>
-      <View style={[invStyles.leftBar, { backgroundColor: cfg.color }]} />
-      <View style={[invStyles.iconBox, { backgroundColor: cfg.color + '18' }]}>
-        <Ionicons name={cfg.icon as any} size={20} color={cfg.color} />
-      </View>
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>{inv.name}</Text>
-        <View style={invStyles.tagRow}>
-          <View style={[invStyles.tag, { backgroundColor: cfg.color + '18', borderColor: cfg.color + '40' }]}>
-            <Text style={[invStyles.tagText, { color: cfg.color }]}>{cfg.label}</Text>
-          </View>
-          {inv.annual_return != null && (
-            <Text variant="caption" color={colors.text.tertiary}>{inv.annual_return}% anual</Text>
-          )}
-        </View>
-      </View>
-      <View style={{ alignItems: 'flex-end', gap: 3 }}>
-        <Text style={invStyles.amount}>{formatCurrency(arsValue)}</Text>
-        {gain != null && gain > 0 && (
-          <View style={invStyles.gainPill}>
-            <Text style={invStyles.gainText}>+{formatCurrency(gain)}</Text>
-          </View>
-        )}
-      </View>
-      <TouchableOpacity onPress={() => onDelete(inv.id)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={{ paddingRight: spacing[4] }}>
-        <Ionicons name="trash-outline" size={15} color={colors.text.tertiary} />
-      </TouchableOpacity>
-    </TouchableOpacity>
-  );
-}
-
-const invStyles = StyleSheet.create({
-  card:     { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.subtle, borderRadius: 14, overflow: 'hidden' },
-  leftBar:  { width: 4, alignSelf: 'stretch' },
-  iconBox:  { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginLeft: spacing[3], marginVertical: spacing[4] },
-  tagRow:   { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  tag:      { borderRadius: 6, borderWidth: 1, paddingHorizontal: spacing[2], paddingVertical: 2 },
-  tagText:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 10 },
-  amount:   { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.text.primary },
-  gainPill: { backgroundColor: colors.neon + '18', borderRadius: 20, paddingHorizontal: spacing[2], paddingVertical: 2 },
-  gainText: { fontFamily: 'Montserrat_700Bold', fontSize: 10, color: colors.neon },
 });
 
 // ─── AddGoalModal ─────────────────────────────────────────────────────────────
@@ -618,109 +519,6 @@ function AddSavingModal({ visible, initial, onClose, onSave }: {
   );
 }
 
-// ─── AddInvestmentModal ───────────────────────────────────────────────────────
-
-function AddInvestmentModal({ visible, initial, onClose, onSave }: {
-  visible: boolean; initial: Partial<Investment> | null; onClose: () => void;
-  onSave: (data: Omit<Investment, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => Promise<void>;
-}) {
-  const [name,      setName]      = useState('');
-  const [instrType, setInstrType] = useState<InstrumentType>('fci');
-  const [amount,    setAmount]    = useState('');
-  const [currency,  setCurrency]  = useState<SavingCurrency>('ARS');
-  const [annReturn, setAnnReturn] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [saving,    setSaving]    = useState(false);
-
-  useEffect(() => {
-    if (visible) {
-      setName(initial?.name ?? '');
-      setInstrType(initial?.instrument_type ?? 'fci');
-      setAmount(initial?.amount?.toString() ?? '');
-      setCurrency(initial?.currency ?? 'ARS');
-      setAnnReturn(initial?.annual_return?.toString() ?? '');
-      setStartDate(initial?.start_date ?? '');
-    }
-  }, [visible, initial]);
-
-  const handleSave = async () => {
-    const amt = parseFloat(amount.replace(',', '.'));
-    if (!name.trim()) { Alert.alert('', 'Ingresá un nombre.'); return; }
-    if (isNaN(amt) || amt <= 0) { Alert.alert('', 'Ingresá un monto válido.'); return; }
-    setSaving(true);
-    try {
-      await onSave({ name: name.trim(), instrument_type: instrType, amount: amt, currency, annual_return: annReturn ? parseFloat(annReturn) : null, start_date: startDate || null, notes: null });
-      onClose();
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar. Intentá de nuevo.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <SafeAreaView style={modalStyles.sheet}>
-          <View style={modalStyles.handle} />
-          <View style={modalStyles.header}>
-            <Text variant="subtitle">{initial?.id ? 'Editar inversión' : 'Agregar inversión'}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color={colors.text.secondary} />
-            </TouchableOpacity>
-          </View>
-          <ScrollView contentContainerStyle={modalStyles.body} keyboardShouldPersistTaps="handled">
-            <Text variant="label" color={colors.text.secondary}>TIPO DE INSTRUMENTO</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -spacing[5] }}>
-              <View style={{ flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[5], paddingVertical: spacing[2] }}>
-                {INSTRUMENT_TYPES.map(t => {
-                  const cfg    = INSTRUMENT_CONFIG[t];
-                  const active = instrType === t;
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      onPress={() => setInstrType(t)}
-                      style={[modalStyles.instrChip, active && { backgroundColor: cfg.color, borderColor: cfg.color }]}
-                    >
-                      <Ionicons name={cfg.icon as any} size={14} color={active ? colors.white : cfg.color} />
-                      <Text style={[modalStyles.instrChipText, { color: active ? colors.white : colors.text.secondary }]}>{cfg.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
-            <Text variant="label" color={colors.text.secondary}>MONEDA</Text>
-            <View style={modalStyles.segRow}>
-              {(['ARS', 'USD'] as SavingCurrency[]).map(c => (
-                <TouchableOpacity key={c} style={[modalStyles.seg, currency === c && modalStyles.segActive]} onPress={() => setCurrency(c)}>
-                  <Text variant="label" style={{ color: currency === c ? colors.white : colors.text.secondary }}>{c}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text variant="label" color={colors.text.secondary}>NOMBRE / DESCRIPCIÓN</Text>
-            <TextInput style={modalStyles.input} value={name} onChangeText={setName} placeholder={INSTRUMENT_CONFIG[instrType].label} placeholderTextColor={colors.text.tertiary} maxLength={80} />
-            <Text variant="label" color={colors.text.secondary}>MONTO ({currency})</Text>
-            <TextInput style={modalStyles.input} value={amount} onChangeText={setAmount} placeholder={currency === 'USD' ? '1000' : '500000'} placeholderTextColor={colors.text.tertiary} keyboardType="decimal-pad" />
-            <Text variant="label" color={colors.text.secondary}>
-              RENDIMIENTO ANUAL %{'  '}
-              <Text variant="caption" color={colors.text.tertiary}>(opcional)</Text>
-            </Text>
-            <TextInput style={modalStyles.input} value={annReturn} onChangeText={setAnnReturn} placeholder="Ej: 36" placeholderTextColor={colors.text.tertiary} keyboardType="decimal-pad" />
-            <Text variant="label" color={colors.text.secondary}>
-              FECHA DE INICIO{'  '}
-              <Text variant="caption" color={colors.text.tertiary}>(YYYY-MM-DD, opcional)</Text>
-            </Text>
-            <TextInput style={modalStyles.input} value={startDate} onChangeText={setStartDate} placeholder={new Date().toISOString().split('T')[0]} placeholderTextColor={colors.text.tertiary} />
-            <TouchableOpacity style={[modalStyles.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
-              {saving ? <ActivityIndicator size="small" color={colors.bg.primary} /> : <Text style={modalStyles.saveBtnText}>Guardar</Text>}
-            </TouchableOpacity>
-          </ScrollView>
-        </SafeAreaView>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
 const modalStyles = StyleSheet.create({
   sheet:       { flex: 1, backgroundColor: colors.bg.primary },
   handle:      { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border.default, alignSelf: 'center', marginTop: spacing[3] },
@@ -730,8 +528,6 @@ const modalStyles = StyleSheet.create({
   seg:         { flex: 1, paddingVertical: spacing[3], borderRadius: 10, borderWidth: 1, borderColor: colors.border.default, backgroundColor: colors.bg.card, alignItems: 'center' },
   segActive:   { backgroundColor: colors.primary, borderColor: colors.primary },
   input:       { backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, borderRadius: 10, paddingHorizontal: spacing[4], paddingVertical: spacing[4], color: colors.text.primary, fontFamily: 'Montserrat_400Regular', fontSize: 14 },
-  instrChip:   { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: 20, borderWidth: 1, borderColor: colors.border.default, backgroundColor: colors.bg.card },
-  instrChipText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 11 },
   saveBtn:     { marginTop: spacing[4], backgroundColor: colors.neon, borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center' },
   saveBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.bg.primary },
 });
@@ -740,16 +536,14 @@ const modalStyles = StyleSheet.create({
 
 export default function SavingsScreen() {
   const { user } = useAuthStore();
-  const { savings, investments, isLoading: isSavingsLoading, fetchAll, addSaving, updateSaving, deleteSaving, addInvestment, updateInvestment, deleteInvestment } = useSavingsStore();
+  const { savings, isLoading: isSavingsLoading, fetchAll, addSaving, updateSaving, deleteSaving } = useSavingsStore();
   const { goals, fetchGoals, addGoal, updateGoal, deleteGoal, addToGoal } = useGoalsStore();
 
   const [usdRate,          setUsdRate]          = useState<number | null>(null);
   const [showGoalModal,    setShowGoalModal]     = useState(false);
   const [showSavingModal,  setShowSavingModal]   = useState(false);
-  const [showInvModal,     setShowInvModal]      = useState(false);
   const [editingGoal,      setEditingGoal]       = useState<Partial<SavingsGoal> | null>(null);
   const [editingSaving,    setEditingSaving]      = useState<Partial<Saving> | null>(null);
-  const [editingInv,       setEditingInv]        = useState<Partial<Investment> | null>(null);
   const [aportarGoal,      setAportarGoal]       = useState<SavingsGoal | null>(null);
   const [isRefreshing,     setIsRefreshing]      = useState(false);
 
@@ -774,17 +568,12 @@ export default function SavingsScreen() {
   // ── Totals ────────────────────────────────────────────────────────────────
   const totalARS      = savings.filter(s => s.currency === 'ARS').reduce((s, v) => s + v.amount, 0);
   const totalUSDInARS = savings.filter(s => s.currency === 'USD').reduce((s, v) => s + (usdRate ? v.amount * usdRate : 0), 0);
-  const totalInvested = investments.reduce((s, i) => s + (i.currency === 'USD' && usdRate ? i.amount * usdRate : i.amount), 0);
-  const totalGain     = investments.reduce((s, i) => s + (calcEstimatedGain(i) ?? 0), 0);
-  const hasData       = totalARS + totalUSDInARS + totalInvested > 0 || goals.length > 0;
+  const hasData       = totalARS + totalUSDInARS > 0 || goals.length > 0;
 
-  const insights     = buildInsights(totalARS, totalUSDInARS, totalInvested, investments);
-  const advisorCtx   = [
-    `Tengo un capital total de ${formatCurrency(totalARS + totalUSDInARS + totalInvested)}.`,
-    `Distribución: ${formatCurrency(totalARS)} en pesos, ${formatCurrency(totalUSDInARS)} en dólares (en pesos), ${formatCurrency(totalInvested)} invertidos.`,
-    investments.length > 0
-      ? `Mis inversiones: ${investments.map(i => `${i.name} (${INSTRUMENT_CONFIG[i.instrument_type].label}) por ${formatCurrency(i.amount)}`).join(', ')}.`
-      : 'No tengo inversiones registradas.',
+  const insights   = buildInsights(totalARS, totalUSDInARS);
+  const advisorCtx = [
+    `Tengo un capital total de ${formatCurrency(totalARS + totalUSDInARS)}.`,
+    `Distribución: ${formatCurrency(totalARS)} en pesos, ${formatCurrency(totalUSDInARS)} en dólares (en pesos).`,
     goals.length > 0
       ? `Mis metas de ahorro: ${goals.map(g => `"${g.title}" — ${formatCurrency(g.current_amount)} de ${formatCurrency(g.target_amount)}`).join(', ')}.`
       : '',
@@ -796,8 +585,6 @@ export default function SavingsScreen() {
   const openEditGoal   = (g: SavingsGoal) => { setEditingGoal(g); setShowGoalModal(true); };
   const openAddSaving  = () => { setEditingSaving(null);  setShowSavingModal(true); };
   const openEditSaving = (s: Saving) => { setEditingSaving(s); setShowSavingModal(true); };
-  const openAddInv     = () => { setEditingInv(null);     setShowInvModal(true); };
-  const openEditInv    = (i: Investment) => { setEditingInv(i); setShowInvModal(true); };
 
   const handleSaveGoal = async (data: Omit<SavingsGoal, 'id' | 'user_id' | 'created_at'>) => {
     if (!user?.id) return;
@@ -811,15 +598,8 @@ export default function SavingsScreen() {
     else await addSaving(user.id, data);
   };
 
-  const handleSaveInv = async (data: Omit<Investment, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
-    if (!user?.id) return;
-    if (editingInv?.id) await updateInvestment(editingInv.id, data);
-    else await addInvestment(user.id, data);
-  };
-
-  const confirmDeleteGoal    = (id: string) => Alert.alert('Eliminar meta', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteGoal(id) }]);
-  const confirmDeleteSaving  = (id: string) => Alert.alert('Eliminar ahorro', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteSaving(id) }]);
-  const confirmDeleteInv     = (id: string) => Alert.alert('Eliminar inversión', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteInvestment(id) }]);
+  const confirmDeleteGoal   = (id: string) => Alert.alert('Eliminar meta', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteGoal(id) }]);
+  const confirmDeleteSaving = (id: string) => Alert.alert('Eliminar ahorro', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteSaving(id) }]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -832,7 +612,7 @@ export default function SavingsScreen() {
         <View style={styles.header}>
           <View>
             <Text variant="h4">Ahorros</Text>
-            <Text variant="caption" color={colors.text.tertiary}>Capital, metas e inversiones</Text>
+            <Text variant="caption" color={colors.text.tertiary}>Capital y metas de ahorro</Text>
           </View>
           <TouchableOpacity onPress={openAddSaving} style={styles.addHeaderBtn}>
             <Ionicons name="add" size={22} color={colors.primary} />
@@ -841,22 +621,19 @@ export default function SavingsScreen() {
 
         {/* ── Empty State ──────────────────────────────────────────────────── */}
         {!hasData && !isSavingsLoading ? (
-          <SavingsEmptyState onAddCash={openAddSaving} onAddInvestment={openAddInv} onAddGoal={openAddGoal} />
+          <SavingsEmptyState onAddCash={openAddSaving} onAddGoal={openAddGoal} />
         ) : (<>
 
           {/* ── Capital total ────────────────────────────────────────────── */}
-          {(totalARS + totalUSDInARS + totalInvested) > 0 && (
+          {(totalARS + totalUSDInARS) > 0 && (
             <TotalCapitalCard
               totalARS={totalARS}
               totalUSDInARS={totalUSDInARS}
-              totalInvested={totalInvested}
-              totalGain={totalGain}
-              usdRate={usdRate}
             />
           )}
 
           {/* ── Alerta inflación ─────────────────────────────────────────── */}
-          {(totalARS + totalUSDInARS) > 0 && totalInvested === 0 && (() => {
+          {(totalARS + totalUSDInARS) > 0 && (() => {
             const capitalSinInvertir = totalARS + totalUSDInARS;
             const perdidaProyectada = Math.round(capitalSinInvertir * 0.36);
             return (
@@ -946,69 +723,6 @@ export default function SavingsScreen() {
             ))
           )}
 
-          {/* ── Inversiones ──────────────────────────────────────────────── */}
-          <View style={styles.sectionHeader}>
-            <Text variant="label" color={colors.text.tertiary}>INVERSIONES</Text>
-            <TouchableOpacity onPress={openAddInv} style={styles.addBtn}>
-              <Ionicons name="add" size={15} color={colors.neon} />
-              <Text variant="label" color={colors.neon}>Agregar</Text>
-            </TouchableOpacity>
-          </View>
-
-          {investments.length === 0 ? (
-            <TouchableOpacity style={styles.emptySection} onPress={openAddInv} activeOpacity={0.8}>
-              <View style={[styles.emptySectionIcon, { backgroundColor: '#A78BFA18' }]}>
-                <Ionicons name="trending-up-outline" size={20} color="#A78BFA" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>Agregar inversión</Text>
-                <Text variant="caption" color={colors.text.tertiary}>FCI, Cedears, Plazo Fijo, Cripto...</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-            </TouchableOpacity>
-          ) : (
-            investments.map(i => (
-              <InvestmentCard key={i.id} inv={i} usdRate={usdRate} onEdit={openEditInv} onDelete={confirmDeleteInv} />
-            ))
-          )}
-
-          {/* ── Opciones para tu dinero ──────────────────────────────────── */}
-          <View style={styles.sectionHeader}>
-            <Text variant="label" color={colors.text.tertiary}>OPCIONES PARA TU DINERO</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.investOptionCard}
-            onPress={() => router.push('/(app)/simulator' as any)}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.investOptionIcon, { backgroundColor: colors.primary + '18' }]}>
-              <Ionicons name="shield-checkmark-outline" size={20} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                Plazo Fijo UVA
-              </Text>
-              <Text variant="caption" color={colors.text.tertiary}>Protegé tu capital de la inflación</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.investOptionCard}
-            onPress={() => router.push('/(app)/simulator' as any)}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.investOptionIcon, { backgroundColor: '#A78BFA18' }]}>
-              <Ionicons name="flash-outline" size={20} color="#A78BFA" />
-            </View>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                FCI Money Market
-              </Text>
-              <Text variant="caption" color={colors.text.tertiary}>Liquidez diaria y bajo riesgo</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-          </TouchableOpacity>
-
           {/* ── Insights ─────────────────────────────────────────────────── */}
           {insights.map((insight, idx) => (
             <View key={idx} style={styles.insightCard}>
@@ -1049,12 +763,6 @@ export default function SavingsScreen() {
         onClose={() => setShowSavingModal(false)}
         onSave={handleSaveSaving}
       />
-      <AddInvestmentModal
-        visible={showInvModal}
-        initial={editingInv}
-        onClose={() => setShowInvModal(false)}
-        onSave={handleSaveInv}
-      />
       <AportarModal
         goal={aportarGoal}
         onClose={() => setAportarGoal(null)}
@@ -1083,6 +791,4 @@ const styles = StyleSheet.create({
   inflationAlert: { backgroundColor: '#FEEBEE', borderWidth: 1, borderColor: '#FFCDD2', borderRadius: 14, padding: spacing[4], gap: spacing[2] },
   inflationAlertTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   inflationAlertCta: { alignSelf: 'flex-start', paddingVertical: spacing[1] },
-  investOptionCard: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, borderRadius: 14, padding: spacing[4] },
-  investOptionIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 });

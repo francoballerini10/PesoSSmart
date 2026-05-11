@@ -23,7 +23,6 @@ import { useExpensesStore } from '@/store/expensesStore';
 import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
 import { useSavingsStore } from '@/store/savingsStore';
 import type { Expense } from '@/types';
-import type { DetectedSubscription } from '@/store/expensesStore';
 import { GoalsSection } from '@/components/GoalsSection';
 import { StreakCard } from '@/components/StreakCard';
 import { HealthScoreCard, computeHealthScore } from '@/components/HealthScore';
@@ -660,11 +659,10 @@ interface DataInsight {
 }
 
 function buildKeyInsights({
-  expenses, subscriptions, totalThisMonth, totalDisposable,
+  expenses, totalThisMonth, totalDisposable,
   totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
 }: {
   expenses:        Expense[];
-  subscriptions:   DetectedSubscription[];
   totalThisMonth:  number;
   totalDisposable: number;
   totalInvestable: number;
@@ -751,20 +749,7 @@ function buildKeyInsights({
     }
   }
 
-  // ── 4. SUSCRIPCIONES ───────────────────────────────────────────────────────
-  if (subscriptions.length > 0) {
-    const totalSubs = subscriptions.reduce((s, sub) => s + sub.averageAmount, 0);
-    items.push({
-      id: 'subscriptions',
-      icon: 'repeat-outline',
-      iconColor: colors.yellow,
-      title: `${subscriptions.length} suscripciones: ${formatCurrency(Math.round(totalSubs))}/mes`,
-      body: `Tenés ${subscriptions.length} suscripciones activas por ${formatCurrency(Math.round(totalSubs))}/mes. ¿Usaste todas este mes? Te mostramos cuáles no tocaste.`,
-      cta: { label: 'Ver suscripciones', route: '/(app)/expenses' },
-    });
-  }
-
-  // ── 5. COMERCIO REPETIDO ESTA SEMANA ──────────────────────────────────────
+  // ── 4. COMERCIO REPETIDO ESTA SEMANA ──────────────────────────────────────
   if (weekExps.length > 0) {
     const descCount: Record<string, { count: number; total: number }> = {};
     weekExps.forEach(e => {
@@ -1954,7 +1939,6 @@ export default function HomeScreen() {
     projectedBalance,
     estimatedIncome,
     isLoading,
-    subscriptions,
   } = useExpensesStore();
   const { goals, fetchGoals }                = useGoalsStore();
   const { investments, fetchAll: loadSavings } = useSavingsStore();
@@ -2105,7 +2089,7 @@ export default function HomeScreen() {
 
   const keyInsights = buildKeyInsights({
     expenses: expenses.filter(e => e.category_id !== null),
-    subscriptions, totalThisMonth, totalDisposable,
+    totalThisMonth, totalDisposable,
     totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
   });
 
