@@ -868,8 +868,16 @@ export default function ExpensesScreen() {
             await deleteExpense(id);
             setEditingExpense(null);
             setEditExpenseValues(null);
-          } catch {
-            Alert.alert('Error', 'No se pudo eliminar el gasto.');
+          } catch (err: any) {
+            if (err?.code === 'GROUP_LINKED') {
+              Alert.alert(
+                'Gasto grupal',
+                'Este gasto está compartido con un grupo. No podés eliminarlo desde tu vista personal para preservar el historial del grupo.',
+                [{ text: 'Entendido' }],
+              );
+            } else {
+              Alert.alert('Error', 'No se pudo eliminar el gasto.');
+            }
           }
         },
       },
@@ -1270,11 +1278,11 @@ export default function ExpensesScreen() {
           <SmartLoadingState text="Buscando gastos en Gmail..." />
         </View>
       )}
-      {(pendingTxs.length > 0 || isPolling) && (
+      {(pendingTxs.length > 0 || isPolling) && user?.id && (
         <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[4] }}>
           <PendingTransactions
             transactions={pendingTxs}
-            userId={user!.id}
+            userId={user.id}
             isPolling={isPolling}
             categories={categories}
             confirmedExpenses={expenses.filter(e => e.category_id !== null).map(e => ({ amount: e.amount, date: e.date, description: e.description }))}

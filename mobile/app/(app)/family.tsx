@@ -108,11 +108,11 @@ async function fetchGroups(userId: string): Promise<Group[]> {
     db.from('family_members').select('user_id, role, group_id').in('group_id', groupIds),
   ]);
 
-  const allUserIds: string[] = [...new Set((membersRaw ?? []).map((m: any) => m.user_id as string))];
+  const allUserIds: string[] = Array.from(new Set<string>((membersRaw ?? []).map((m: any) => m.user_id as string)));
 
   const [{ data: profilesRaw }, { data: expensesRaw }] = await Promise.all([
     db.from('profiles').select('id, full_name, email').in('id', allUserIds),
-    supabase.from('expenses').select('user_id, amount, date')
+    db.from('expenses').select('user_id, amount, date')
       .in('user_id', allUserIds).gte('date', currentMonthStart()).is('deleted_at', null),
   ]);
 

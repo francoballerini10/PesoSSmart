@@ -32,7 +32,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 type View    = 'bots' | 'threads' | 'chat';
-type BotId   = 'general' | 'inversiones' | 'ahorro' | 'gastos';
+type BotId   = 'general' | 'ahorro' | 'gastos';
 
 interface ChatMessage {
   id:         string;
@@ -90,18 +90,6 @@ const BOTS: Record<BotId, {
       return actions;
     },
   },
-  inversiones: {
-    name:        'Inversiones',
-    emoji:       '📈',
-    description: 'Cedears · FCI · Bonos · Dólar MEP',
-    color:       colors.accent,
-    quickActions: (ctx) => [
-      ctx.recoverable > 0 ? `Tengo ${formatCurrency(ctx.recoverable)} para invertir — ¿en qué?` : '¿Con $50.000 cómo empiezo a invertir?',
-      '¿Cedears o dólar MEP hoy?',
-      '¿Vale la pena el Plazo Fijo UVA ahora?',
-      '¿Cómo armo una cartera diversificada?',
-    ],
-  },
   ahorro: {
     name:        'Ahorro',
     emoji:       '💰',
@@ -128,7 +116,7 @@ const BOTS: Record<BotId, {
   },
 };
 
-const BOT_IDS: BotId[] = ['general', 'inversiones', 'ahorro', 'gastos'];
+const BOT_IDS: BotId[] = ['general', 'ahorro', 'gastos'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -186,7 +174,6 @@ export default function AdvisorScreen() {
   // ── Estado de datos ──────────────────────────────────────────────────────
   const [botSummaries,  setBotSummaries]  = useState<Record<BotId, BotSummary>>({
     general: { thread_count: 0, last_active: null },
-    inversiones: { thread_count: 0, last_active: null },
     ahorro: { thread_count: 0, last_active: null },
     gastos: { thread_count: 0, last_active: null },
   });
@@ -661,7 +648,7 @@ export default function AdvisorScreen() {
         </View>
 
         <ScrollView contentContainerStyle={styles.botsScroll} showsVerticalScrollIndicator={false}>
-          {BOT_IDS.map(botId => {
+{BOT_IDS.map(botId => {
             const b   = BOTS[botId];
             const sum = botSummaries[botId];
             return (
@@ -1042,7 +1029,7 @@ export default function AdvisorScreen() {
         screenIcon="chatbubble-ellipses-outline"
         iconColor={colors.yellow}
         features={[
-          { icon: 'sparkles-outline', color: colors.yellow, title: 'Tu asesor financiero personal', body: 'Hacele cualquier pregunta sobre tus gastos, inversiones o cómo mejorar tu situación financiera en Argentina.' },
+          { icon: 'sparkles-outline', color: colors.yellow, title: 'Tu asesor financiero personal', body: 'Hacele cualquier pregunta sobre tus gastos, ahorro o cómo mejorar tu situación financiera en Argentina.' },
           { icon: 'analytics-outline', color: colors.primary, title: 'Contexto personalizado', body: 'El asesor ve tus gastos del mes, tus metas y tu perfil para darte recomendaciones específicas para vos, no genéricas.' },
           { icon: 'flash-outline', color: colors.neon, title: 'Acciones rápidas', body: 'Usá los botones de acceso rápido para consultas frecuentes: qué hacer con el sueldo, cómo recortar, dónde invertir.' },
         ]}

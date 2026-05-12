@@ -25,6 +25,7 @@ function TabIcon({ name, focused, color }: TabIconProps) {
 export default function AppLayout() {
   return (
     <Tabs
+      backBehavior="history"
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
@@ -88,6 +89,7 @@ export default function AppLayout() {
       <Tabs.Screen name="plans"          options={{ href: null }} />
       <Tabs.Screen name="simulator"      options={{ href: null }} />
       <Tabs.Screen name="gmail-connect"  options={{ href: null }} />
+      <Tabs.Screen name="insight"         options={{ href: null }} />
     </Tabs>
   );
 }

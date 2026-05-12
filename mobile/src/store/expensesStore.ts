@@ -259,6 +259,19 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
   deleteExpense: async (id) => {
     set({ isLoading: true, error: null });
     try {
+      // Guard: if this expense is linked to a group, block deletion from personal view.
+      // Group expenses are independent (separate table) but the reference must stay intact.
+      const { data: hasGroup, error: rpcError } = await supabase
+        .rpc('expense_has_group_link', { p_expense_id: id });
+
+      if (rpcError) throw rpcError;
+
+      if (hasGroup) {
+        const err = new Error('Este gasto forma parte de un grupo compartido y no puede eliminarse desde tu vista personal.');
+        (err as any).code = 'GROUP_LINKED';
+        throw err;
+      }
+
       const { error } = await supabase
         .from('expenses')
         .update({ deleted_at: new Date().toISOString() })

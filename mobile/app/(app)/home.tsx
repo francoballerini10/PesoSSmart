@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Image,
@@ -32,7 +32,6 @@ import { RoundUpSummary } from '@/components/RoundUpSummary';
 import { useStreakStore } from '@/store/streakStore';
 import { useRoundUpStore } from '@/store/roundUpStore';
 import { scheduleBudgetAlert } from '@/lib/notifications';
-import { BudgetHomeWidget } from '@/components/BudgetCard';
 import { MonthInsightCard } from '@/components/MonthInsightCard';
 import { getGreeting, formatCurrency } from '@/utils/format';
 import { useFirstVisit } from '@/hooks/useFirstVisit';
@@ -40,6 +39,8 @@ import { FirstVisitSheet } from '@/components/FirstVisitSheet';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 import { calculatePersonalInflation } from '@/utils/inflationCalc';
 import { HomeSkeletonLoader } from '@/components/ui/SkeletonLoader';
+import { SmartWidget } from '@/components/SmartWidget';
+import { computeAllWidgets } from '@/lib/widgetEngine';
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -1565,17 +1566,118 @@ function MiniLineChart({ data, color }: { data: number[]; color: string }) {
 
 // ─── OpportunityHeroCard ──────────────────────────────────────────────────────
 
+interface OppInsight {
+  label:    string;
+  sublabel: string;
+  amount:   string;
+  sub:      string;
+}
+
+function buildOppInsights(
+  recoverable:     number,
+  totalThisMonth:  number,
+  totalDisposable: number,
+  estimatedIncome: number | null,
+): OppInsight[] {
+  const list: OppInsight[] = [];
+  const now        = new Date();
+  const day        = now.getDate();
+  const daysTotal  = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+  if (recoverable > 0) {
+    const spotify = Math.floor(recoverable / 4_500);
+    list.push({
+      label:    'TU OPORTUNIDAD ESTE MES',
+      sublabel: 'Podés recuperar',
+      amount:   formatCurrency(recoverable),
+      sub:      spotify >= 2 ? `= ${spotify} meses de Spotify si ajustás estos gastos` : 'Si ajustás estos gastos',
+    });
+  }
+
+  if (totalThisMonth > 0 && day >= 5) {
+    const projected = Math.round((totalThisMonth / day) * daysTotal);
+    const subText   = estimatedIncome && estimatedIncome > 0
+      ? projected > estimatedIncome
+        ? '⚠️ Superarías tu ingreso estimado'
+        : `${Math.round((projected / estimatedIncome) * 100)}% de tu ingreso estimado`
+      : `Quedan ${daysTotal - day} días del mes`;
+    list.push({
+      label:    'PREDICCIÓN DE FIN DE MES',
+      sublabel: 'A este ritmo cerrás en',
+      amount:   formatCurrency(projected),
+      sub:      subText,
+    });
+  }
+
+  if (totalThisMonth > 0) {
+    list.push({
+      label:    'IMPACTO ANUAL',
+      sublabel: 'Tus gastos de este mes × 12',
+      amount:   formatCurrency(totalThisMonth * 12),
+      sub:      'Parece poco mes a mes. Anualizado ya no.',
+    });
+  }
+
+  if (totalDisposable >= 15_000) {
+    const nafta  = Math.floor(totalDisposable / 1_500);
+    const cafes  = Math.floor(totalDisposable / 3_500);
+    list.push({
+      label:    'COSTO DE OPORTUNIDAD',
+      sublabel: 'Gastaste en prescindibles',
+      amount:   formatCurrency(totalDisposable),
+      sub:      `= ${nafta} litros de nafta · ${cafes} cafés`,
+    });
+  }
+
+  if (estimatedIncome && estimatedIncome > 0 && totalThisMonth > 0) {
+    const dias = Math.round((totalThisMonth / estimatedIncome) * daysTotal);
+    list.push({
+      label:    'DÍAS TRABAJADOS',
+      sublabel: 'Trabajaste este mes para pagar tus gastos',
+      amount:   `${dias} ${dias === 1 ? 'día' : 'días'}`,
+      sub:      `De ${daysTotal} días totales del mes`,
+    });
+  }
+
+  return list;
+}
+
 function OpportunityHeroCard({
-  recoverable, hasExpenses, onPress, onNoData,
+  recoverable, hasExpenses, totalThisMonth, totalDisposable, estimatedIncome, onPress, onNoData,
 }: {
-  recoverable: number;
-  hasExpenses: boolean;
-  onPress: () => void;
-  onNoData: () => void;
+  recoverable:     number;
+  hasExpenses:     boolean;
+  totalThisMonth:  number;
+  totalDisposable: number;
+  estimatedIncome: number | null;
+  onPress:         () => void;
+  onNoData:        () => void;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const pressIn  = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true, speed: 60, bounciness: 0 }).start();
-  const pressOut = () => Animated.spring(scaleAnim, { toValue: 1,    useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+  const fadeAnim  = useRef(new Animated.Value(1)).current;
+  const pressIn   = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true, speed: 60, bounciness: 0 }).start();
+  const pressOut  = () => Animated.spring(scaleAnim, { toValue: 1,    useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+
+  const insights     = useMemo(
+    () => buildOppInsights(recoverable, totalThisMonth, totalDisposable, estimatedIncome),
+    [recoverable, totalThisMonth, totalDisposable, estimatedIncome],
+  );
+  const [idx, setIdx] = useState(0);
+
+  useEffect(() => {
+    setIdx(0);
+  }, [insights.length]);
+
+  useEffect(() => {
+    if (insights.length <= 1) return;
+    const timer = setInterval(() => {
+      Animated.timing(fadeAnim, { toValue: 0, duration: 280, useNativeDriver: true }).start(() => {
+        setIdx(i => (i + 1) % insights.length);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
+      });
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [insights.length]);
 
   if (!hasExpenses) {
     return (
@@ -1591,31 +1693,57 @@ function OpportunityHeroCard({
       </TouchableOpacity>
     );
   }
-  if (recoverable <= 0) return null;
+  if (insights.length === 0) return null;
+
+  const insight = insights[idx];
 
   return (
     <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-    <TouchableOpacity
-      style={oppStyles.card}
-      onPress={onPress}
-      onPressIn={pressIn}
-      onPressOut={pressOut}
-      activeOpacity={1}
-    >
-      <View style={oppStyles.content}>
-        <Text style={oppStyles.label}>Tu oportunidad este mes</Text>
-        <Text style={oppStyles.sublabel}>Podés recuperar</Text>
-        <Text style={oppStyles.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{formatCurrency(recoverable)}</Text>
-        <Text style={oppStyles.sub}>Si ajustás estos gastos</Text>
-        <View style={oppStyles.btn}>
-          <Text style={oppStyles.btnText}>Ver cómo</Text>
-          <Ionicons name="arrow-forward" size={13} color={colors.white} />
+      <TouchableOpacity
+        style={oppStyles.card}
+        onPress={onPress}
+        onPressIn={pressIn}
+        onPressOut={pressOut}
+        activeOpacity={1}
+      >
+        <View style={oppStyles.content}>
+          {/* Label + dots */}
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Animated.Text style={[oppStyles.label, { opacity: fadeAnim, flex: 1 }]}>
+              {insight.label}
+            </Animated.Text>
+            {insights.length > 1 && (
+              <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+                {insights.map((_, i) => (
+                  <View
+                    key={i}
+                    style={{
+                      width: i === idx ? 14 : 5, height: 5, borderRadius: 3,
+                      backgroundColor: i === idx ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.3)',
+                    }}
+                  />
+                ))}
+              </View>
+            )}
+          </View>
+
+          <Animated.View style={{ opacity: fadeAnim }}>
+            <Text style={oppStyles.sublabel}>{insight.sublabel}</Text>
+            <Text style={oppStyles.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              {insight.amount}
+            </Text>
+            <Text style={oppStyles.sub}>{insight.sub}</Text>
+          </Animated.View>
+
+          <View style={oppStyles.btn}>
+            <Text style={oppStyles.btnText}>Hablá con la IA</Text>
+            <Ionicons name="sparkles-outline" size={13} color={colors.white} />
+          </View>
         </View>
-      </View>
-      <View style={oppStyles.deco}>
-        <MoneyBagIcon size={96} />
-      </View>
-    </TouchableOpacity>
+        <View style={oppStyles.deco}>
+          <MoneyBagIcon size={96} />
+        </View>
+      </TouchableOpacity>
     </Animated.View>
   );
 }
@@ -1959,6 +2087,20 @@ export default function HomeScreen() {
   const [prevMonthTotal, setPrevMonthTotal] = useState(0);
   const [homeBudgets,    setHomeBudgets]    = useState<Array<{ id: string; category_id: string; monthly_limit: number }> | null>(null);
 
+  const _now         = new Date();
+  const _dayOfMonth  = _now.getDate();
+  const _daysInMonth = new Date(_now.getFullYear(), _now.getMonth() + 1, 0).getDate();
+
+  const allWidgets = useMemo(() => computeAllWidgets({
+    expenses,
+    totalDisposable,
+    totalThisMonth,
+    estimatedIncome,
+    homeBudgets: homeBudgets ?? [],
+    dayOfMonth:  _dayOfMonth,
+    daysInMonth: _daysInMonth,
+  }), [expenses, totalDisposable, totalThisMonth, estimatedIncome, homeBudgets]);
+
   useEffect(() => {
     if (user?.id) {
       fetchExpenses(user.id);
@@ -2241,11 +2383,13 @@ export default function HomeScreen() {
       ].join(' ')
     : undefined;
 
-  const firstName = profile?.full_name?.split(' ')[0] ?? 'Ahí vamos';
+  const firstName  = profile?.full_name?.split(' ')[0] ?? 'Ahí vamos';
+  const mainScroll = useRef<import('react-native').ScrollView>(null);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
+        ref={mainScroll}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -2293,24 +2437,18 @@ export default function HomeScreen() {
         {/* ── Skeleton while loading ──────────────────────────────────────────── */}
         {isLoading && expenses.length === 0 && <HomeSkeletonLoader />}
 
-        {/* ── Gmail pending ───────────────────────────────────────────────────── */}
-        {!isLoading && (
-        <GmailPendingBanner
-          count={pendingCount}
-          onPress={() => router.push('/(app)/expenses' as any)}
-        />
+        {/* ── Widget inteligente principal ─────────────────────────────────────── */}
+        {expenses.length > 0 && (
+          <SmartWidget
+            widgets={allWidgets}
+            onPress={(type) => router.push({
+              pathname: '/(app)/insight',
+              params:   { type },
+            } as any)}
+            onSwipeStart={() => mainScroll.current?.setNativeProps({ scrollEnabled: false })}
+            onSwipeEnd={()   => mainScroll.current?.setNativeProps({ scrollEnabled: true  })}
+          />
         )}
-
-        {/* ── Oportunidad principal ────────────────────────────────────────────── */}
-        <OpportunityHeroCard
-          recoverable={Math.round(totalDisposable * 0.5)}
-          hasExpenses={expenses.length > 0}
-          onPress={() => router.push({
-            pathname: '/(app)/advisor',
-            params: recoverableCtx ? { initialContext: recoverableCtx } : {},
-          } as any)}
-          onNoData={openIncomeModal}
-        />
 
         {/* ── Resumen de gasto mensual ─────────────────────────────────────────── */}
         {!isLoading && (
@@ -2320,15 +2458,6 @@ export default function HomeScreen() {
         />
         )}
 
-        {/* ── Widget de presupuestos ───────────────────────────────────────────── */}
-        {!isLoading && user?.id && (
-          <BudgetHomeWidget
-            userId={user.id}
-            expenses={expenses}
-            budgets={homeBudgets ?? []}
-            onPress={() => router.push('/(app)/expenses' as any)}
-          />
-        )}
 
         {/* ── Insight del mes ──────────────────────────────────────────────────── */}
         {!isLoading && user?.id && homeBudgets !== null && (

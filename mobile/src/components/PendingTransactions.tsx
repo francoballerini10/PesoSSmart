@@ -609,12 +609,29 @@ export function PendingTransactions({
     if (updatingId !== null) return;
     setUpdatingId(txId);
     try {
-      // Soft-delete the auto-created expense if it exists
-      await supabase
+      // Find the expense linked to this pending transaction (if any)
+      const { data: linkedExpense } = await supabase
         .from('expenses')
-        .update({ deleted_at: new Date().toISOString() })
+        .select('id')
         .eq('source_pending_id', txId)
-        .is('deleted_at', null);
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (linkedExpense) {
+        // Check if this expense is also part of a group
+        const { data: hasGroup } = await supabase
+          .rpc('expense_has_group_link', { p_expense_id: linkedExpense.id });
+
+        if (!hasGroup) {
+          // Safe to soft-delete: expense is not shared with any group
+          await supabase
+            .from('expenses')
+            .update({ deleted_at: new Date().toISOString() })
+            .eq('id', linkedExpense.id);
+        }
+        // If hasGroup === true: leave the expense intact so group history is preserved.
+        // The pending_transaction is still marked rejected below.
+      }
 
       await supabase.from('pending_transactions').update({ status: 'rejected' }).eq('id', txId);
       showToast('Gasto rechazado');
