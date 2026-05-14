@@ -141,23 +141,18 @@ CREATE TABLE IF NOT EXISTS public.expense_categories (
 INSERT INTO public.expense_categories (name, name_es, icon, color) VALUES
   ('food_dining', 'Comida y restaurantes', 'restaurant-outline', '#ff7043'),
   ('groceries', 'Supermercado', 'cart-outline', '#66bb6a'),
-  ('transport', 'Transporte', 'car-outline', '#42a5f5'),
   ('health', 'Salud y farmacia', 'medkit-outline', '#ef5350'),
   ('entertainment', 'Entretenimiento', 'musical-notes-outline', '#ab47bc'),
   ('clothing', 'Ropa y calzado', 'shirt-outline', '#ff8f00'),
   ('education', 'Educación', 'school-outline', '#5c6bc0'),
   ('home', 'Hogar y servicios', 'home-outline', '#26a69a'),
-  ('technology', 'Tecnología', 'phone-portrait-outline', '#78909c'),
   ('subscriptions', 'Suscripciones', 'repeat-outline', '#7e57c2'),
   ('travel', 'Viajes', 'airplane-outline', '#29b6f6'),
-  ('pets', 'Mascotas', 'paw-outline', '#8d6e63'),
   ('cafe', 'Café y bebidas', 'cafe-outline', '#795548'),
-  ('sports', 'Deporte y gym', 'barbell-outline', '#9ccc65'),
   ('leisure', 'Ocio y salidas', 'beer-outline', '#ffa726'),
   ('beauty_salon', 'Peluquería y estética', 'cut-outline', '#ec407a'),
   ('gifts', 'Regalos', 'gift-outline', '#ef9a9a'),
   ('insurance', 'Seguros', 'shield-outline', '#b0bec5'),
-  ('kids', 'Niños y bebés', 'happy-outline', '#80deea'),
   ('other', 'Otros', 'ellipsis-horizontal-outline', '#888888')
 ON CONFLICT DO NOTHING;
 

@@ -8,10 +8,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/components/ui';
+import { CategoryIcon } from '@/components/CategoryIcon';
 import { useAuthStore } from '@/store/authStore';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/utils/format';
 import { hapticLight, hapticMedium, hapticSuccess } from '@/lib/haptics';
+import { matchDebt } from '@/lib/debtMatcher';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -50,7 +52,7 @@ function hashIdx(str: string, len: number): number {
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 type FriendsTab = 'inicio' | 'gastos' | 'resumen' | 'ranking';
-type FamilyTab  = 'resumen' | 'gastos' | 'miembros';
+type FamilyTab  = 'resumen' | 'gastos';
 type Tab        = FriendsTab | FamilyTab;
 type MemberRole = 'Admin' | 'Miembro';
 type GroupKind  = 'familiar' | 'amigos';
@@ -563,6 +565,59 @@ async function fetchGroupDetail(groupId: string, userId: string): Promise<FetchR
     groupColor, myRole, members, totalMonth, myMonthTotal, expenses, debts,
     rawExpenses, rawSplits,
   };
+}
+
+// ─── Debt matching ────────────────────────────────────────────────────────────
+
+async function runDebtMatchingFor(
+  data: FetchResult,
+  userId: string,
+  groupId: string,
+): Promise<void> {
+  const db = supabase as any;
+
+  const { data: incomingTxs } = await db
+    .from('pending_transactions')
+    .select('id, amount, sender_name')
+    .eq('user_id', userId)
+    .eq('direction', 'incoming')
+    .eq('status', 'pending');
+
+  if (!incomingTxs?.length) return;
+
+  const myExpenseIds = data.rawExpenses.filter(e => e.paid_by === userId).map(e => e.id);
+  if (!myExpenseIds.length) return;
+
+  const { data: splits } = await db
+    .from('group_expense_splits')
+    .select('id, user_id, amount')
+    .in('group_expense_id', myExpenseIds)
+    .eq('settled', false)
+    .neq('user_id', userId);
+
+  if (!splits?.length) return;
+
+  const members    = data.members.map(m => ({ userId: m.userId, fullName: m.name }));
+  const splitsMapped = splits.map((s: any) => ({
+    id: s.id, amount: Number(s.amount), debtorUserId: s.user_id,
+  }));
+
+  for (const tx of incomingTxs) {
+    const matches    = matchDebt(Number(tx.amount), tx.sender_name ?? null, members, splitsMapped);
+    const isAmbiguous = matches.length > 1;
+    for (const match of matches) {
+      await db.from('debt_match_suggestions').upsert({
+        user_id: userId, group_id: groupId,
+        debtor_user_id: match.debtorUserId,
+        split_ids: match.splitIds,
+        debt_amount: match.debtAmount,
+        matched_amount: match.matchedAmount,
+        match_type: match.matchType,
+        pending_tx_id: tx.id,
+        is_ambiguous: isAmbiguous,
+      }, { onConflict: 'pending_tx_id,group_id,debtor_user_id', ignoreDuplicates: true });
+    }
+  }
 }
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
@@ -1181,7 +1236,7 @@ function ExpenseDetailModal({
           {/* Hero */}
           <View style={{ backgroundColor: C.white, alignItems: 'center', paddingVertical: sp.xxl, paddingHorizontal: sp.xl, gap: sp.md }}>
             <View style={s.expEmojiBox}>
-              <Text style={{ fontSize: 36 }}>{expenseEmoji(expense.description)}</Text>
+              <CategoryIcon description={expense.description} size={64} />
             </View>
             <Text style={s.detailTitle} numberOfLines={2}>{expense.description}</Text>
             <Text style={s.detailAmount}>{formatCurrency(expense.amount)}</Text>
@@ -1390,7 +1445,7 @@ function MemberProfileSheet({
                       <View key={exp.id}>
                         {i > 0 && <View style={s.divider} />}
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: sp.md, padding: sp.lg }}>
-                          <Text style={{ fontSize: 22 }}>{expenseEmoji(exp.description)}</Text>
+                          <CategoryIcon description={exp.description} size={36} />
                           <View style={{ flex: 1, gap: 2 }}>
                             <Text style={s.expName} numberOfLines={1}>{exp.description}</Text>
                             <Text style={s.expMeta}>{dateLabel(exp.date)} · Pagó {exp.paidByName}</Text>
@@ -1542,15 +1597,188 @@ function RecordarModal({
   );
 }
 
+// ─── DebtMatchBanner ─────────────────────────────────────────────────────────
+
+function DebtMatchBanner({
+  suggestion, members, onConfirm, onDismiss,
+}: {
+  suggestion: any;
+  members: MemberDetail[];
+  onConfirm: (s: any) => void;
+  onDismiss: (s: any) => void;
+}) {
+  const debtor      = members.find(m => m.userId === suggestion.debtor_user_id);
+  const debtorName  = debtor?.name ?? 'Alguien';
+  const matchedAmt  = formatCurrency(suggestion.matched_amount);
+  const debtAmt     = formatCurrency(suggestion.debt_amount);
+  const dateStr     = (suggestion.created_at ?? '').split('T')[0];
+  const dateDisplay = dateStr ? dateLabel(dateStr) : '';
+
+  let actionLabel: string;
+  let noteText: string;
+  if (suggestion.match_type === 'exact') {
+    noteText    = 'Monto exacto — coincide con la deuda';
+    actionLabel = 'Confirmar y saldar';
+  } else if (suggestion.match_type === 'partial') {
+    noteText    = `Pago parcial (${matchedAmt} de ${debtAmt})`;
+    actionLabel = 'Confirmar pago parcial';
+  } else {
+    noteText    = `Recibiste más que la deuda (deuda: ${debtAmt})`;
+    actionLabel = 'Confirmar y saldar igual';
+  }
+
+  return (
+    <View style={dmb.wrap}>
+      <View style={dmb.row}>
+        <View style={dmb.iconWrap}>
+          <Ionicons name="cash-outline" size={18} color="#15803D" />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={dmb.title}>Pago detectado</Text>
+          <Text style={dmb.sub}>
+            Recibiste {matchedAmt} de {debtorName}{dateDisplay ? ` · ${dateDisplay}` : ''}
+          </Text>
+        </View>
+      </View>
+      <Text style={dmb.note}>{noteText}</Text>
+      <Text style={dmb.question}>¿Esto cancela su deuda en el grupo?</Text>
+      <View style={dmb.actions}>
+        <TouchableOpacity
+          style={dmb.confirmBtn}
+          onPress={() => { hapticSuccess(); onConfirm(suggestion); }}
+          activeOpacity={0.85}>
+          <Ionicons name="checkmark" size={15} color="#FFF" />
+          <Text style={dmb.confirmText}>{actionLabel}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={dmb.dismissBtn}
+          onPress={() => { hapticLight(); onDismiss(suggestion); }}
+          activeOpacity={0.7}>
+          <Text style={dmb.dismissText}>No es esto</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+// ─── AmbiguousDebtMatchBanner ────────────────────────────────────────────────
+
+function AmbiguousDebtMatchBanner({
+  suggestions, members, onConfirm, onDismissAll,
+}: {
+  suggestions: any[];
+  members: MemberDetail[];
+  onConfirm: (s: any) => void;
+  onDismissAll: (pendingTxId: string) => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const first       = suggestions[0];
+  const matchedAmt  = formatCurrency(first.matched_amount);
+  const senderMember = first.sender_name
+    ? members.find(m => m.name.toLowerCase().includes((first.sender_name ?? '').toLowerCase()))
+    : null;
+  const senderLabel = senderMember?.name ?? first.sender_name ?? null;
+  const dateStr     = (first.created_at ?? '').split('T')[0];
+  const dateDisplay = dateStr ? dateLabel(dateStr) : '';
+
+  const selected = suggestions.find(s => s.id === selectedId) ?? null;
+
+  return (
+    <View style={dmb.wrap}>
+      <View style={dmb.row}>
+        <View style={dmb.iconWrap}>
+          <Ionicons name="cash-outline" size={18} color="#15803D" />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={dmb.title}>Pago detectado</Text>
+          <Text style={dmb.sub}>
+            Recibiste {matchedAmt}{senderLabel ? ` de ${senderLabel}` : ''}{dateDisplay ? ` · ${dateDisplay}` : ''}
+          </Text>
+        </View>
+      </View>
+
+      <Text style={dmb.question}>
+        Encontramos varias deudas posibles. ¿A cuál corresponde este pago?
+      </Text>
+
+      <View style={{ gap: sp.sm }}>
+        {suggestions.map(sg => {
+          const debtor   = members.find(m => m.userId === sg.debtor_user_id);
+          const name     = debtor?.name ?? 'Alguien';
+          const amt      = formatCurrency(sg.debt_amount);
+          const isSelected = sg.id === selectedId;
+          return (
+            <TouchableOpacity
+              key={sg.id}
+              style={[dmb.radioRow, isSelected && dmb.radioRowActive]}
+              onPress={() => { hapticLight(); setSelectedId(sg.id); }}
+              activeOpacity={0.7}>
+              <View style={[dmb.radioCircle, isSelected && dmb.radioCircleActive]}>
+                {isSelected && <View style={dmb.radioDot} />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[dmb.radioLabel, isSelected && { color: '#14532D' }]} numberOfLines={1}>
+                  {name}
+                </Text>
+                <Text style={dmb.radioSub}>{amt}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+
+        {/* Ninguna de estas */}
+        <TouchableOpacity
+          style={[dmb.radioRow, selectedId === 'none' && dmb.radioRowActive]}
+          onPress={() => { hapticLight(); setSelectedId('none'); }}
+          activeOpacity={0.7}>
+          <View style={[dmb.radioCircle, selectedId === 'none' && dmb.radioCircleActive]}>
+            {selectedId === 'none' && <View style={dmb.radioDot} />}
+          </View>
+          <Text style={[dmb.radioLabel, selectedId === 'none' && { color: '#14532D' }]}>
+            Ninguna de estas
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={dmb.actions}>
+        <TouchableOpacity
+          style={[dmb.confirmBtn, !selectedId && { opacity: 0.45 }]}
+          disabled={!selectedId}
+          onPress={() => {
+            if (!selectedId) return;
+            hapticSuccess();
+            if (selectedId === 'none') {
+              onDismissAll(first.pending_tx_id);
+            } else if (selected) {
+              onConfirm(selected);
+            }
+          }}
+          activeOpacity={0.85}>
+          <Ionicons name="checkmark" size={15} color="#FFF" />
+          <Text style={dmb.confirmText}>
+            {selectedId === 'none' ? 'Descartar' : 'Confirmar y saldar'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ─── Tab: Friends Inicio ──────────────────────────────────────────────────────
 
 function FriendsMainTab({
   detail, myUserId, onAddExpense, onMemberPress, onRemindAll,
+  suggestions, onConfirmSuggestion, onDismissSuggestion, onDismissAllForTx,
 }: {
   detail: FetchResult; myUserId: string;
   onAddExpense: () => void;
   onMemberPress: (m: MemberDetail) => void;
   onRemindAll: () => void;
+  suggestions: any[];
+  onConfirmSuggestion: (s: any) => void;
+  onDismissSuggestion: (s: any) => void;
+  onDismissAllForTx: (pendingTxId: string) => void;
 }) {
   const owedToMe = detail.debts.filter(d => d.toUserId === myUserId);
   const myDebts  = detail.debts.filter(d => d.fromUserId === myUserId);
@@ -1607,6 +1835,35 @@ function FriendsMainTab({
           <Text style={s.insightSub}>{insight.sub}</Text>
         </View>
       </View>
+
+      {/* Sugerencias de pago de deudas — agrupadas por pending_tx_id */}
+      {(() => {
+        const groups = new Map<string, any[]>();
+        for (const sg of suggestions) {
+          const key = sg.pending_tx_id ?? sg.id;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(sg);
+        }
+        return Array.from(groups.entries()).map(([txId, group]) =>
+          group.length > 1 ? (
+            <AmbiguousDebtMatchBanner
+              key={txId}
+              suggestions={group}
+              members={detail.members}
+              onConfirm={onConfirmSuggestion}
+              onDismissAll={onDismissAllForTx}
+            />
+          ) : (
+            <DebtMatchBanner
+              key={group[0].id}
+              suggestion={group[0]}
+              members={detail.members}
+              onConfirm={onConfirmSuggestion}
+              onDismiss={onDismissSuggestion}
+            />
+          )
+        );
+      })()}
 
       {/* Balances del grupo */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1717,7 +1974,7 @@ function FriendsGastosTab({
                   {i > 0 && <View style={s.divider} />}
                   <TouchableOpacity onPress={() => { hapticLight(); setSelectedExpense(e); }} activeOpacity={0.75}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: sp.md, padding: sp.lg }}>
-                      <Text style={{ fontSize: 26 }}>{expenseEmoji(e.description)}</Text>
+                      <CategoryIcon description={e.description} size={40} />
                       <View style={{ flex: 1, gap: 2 }}>
                         <Text style={s.expName} numberOfLines={1}>{e.description}</Text>
                         <Text style={s.expMeta}>{dateLabel(e.date)} · Pagó {e.paidByName}</Text>
@@ -1857,12 +2114,21 @@ function RankingTab({ detail }: { detail: FetchResult }) {
 
 // ─── Tab: Family Resumen ──────────────────────────────────────────────────────
 
-function FamilyResumenTab({ detail, isAdmin, onInvite, onMemberPress }: {
+function FamilyResumenTab({ detail, isAdmin, onInvite, groupId }: {
   detail: GroupDetail; isAdmin: boolean;
-  onInvite: () => void; onMemberPress: (m: MemberDetail) => void;
+  onInvite: () => void; groupId: string;
 }) {
   const membersList  = detail.members.filter(m => m.role === 'Miembro');
   const membersTotal = membersList.reduce((s, m) => s + m.monthTotal, 0);
+
+  const handleMemberPress = (m: MemberDetail) => {
+    if (!isAdmin) return;
+    router.push({
+      pathname: '/(app)/member-detail',
+      params: { userId: m.userId, groupId, memberName: m.name },
+    } as any);
+  };
+
   return (
     <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
       {isAdmin && (
@@ -1891,7 +2157,7 @@ function FamilyResumenTab({ detail, isAdmin, onInvite, onMemberPress }: {
           {membersList.map((m, i) => (
             <View key={m.userId}>
               {i > 0 && <View style={s.divider} />}
-              <TouchableOpacity style={s.balanceRow} onPress={() => onMemberPress(m)} activeOpacity={isAdmin ? 0.7 : 1} disabled={!isAdmin}>
+              <TouchableOpacity style={s.balanceRow} onPress={() => handleMemberPress(m)} activeOpacity={isAdmin ? 0.7 : 1} disabled={!isAdmin}>
                 <Avatar name={m.name} color={m.color} size={44} />
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text style={s.memberName} numberOfLines={1}>{m.isMe ? `Vos (${m.name})` : m.name}</Text>
@@ -1945,7 +2211,7 @@ function FamilyGastosTab({ detail }: { detail: GroupDetail }) {
               <View key={e.id}>
                 {i > 0 && <View style={s.divider} />}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: sp.md, padding: sp.lg }}>
-                  <Text style={{ fontSize: 26 }}>{expenseEmoji(e.description)}</Text>
+                  <CategoryIcon description={e.description} size={40} />
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={s.expName} numberOfLines={1}>{e.description}</Text>
                     <Text style={s.expMeta}>{dateLabel(e.date)} · {e.paidByName}</Text>
@@ -2034,16 +2300,31 @@ export default function GroupDetailScreen() {
   const [loading,       setLoading]      = useState(true);
   const [activeTab,     setActiveTab]    = useState<Tab>('inicio');
   const [showAddExp,    setShowAddExp]   = useState(false);
+  const [showMembers,   setShowMembers]  = useState(false);
   const [editingMember, setEditingMember]= useState<MemberDetail | null>(null);
   const [profileMember, setProfileMember]= useState<MemberDetail | null>(null);
   const [remindMember,  setRemindMember] = useState<MemberDetail | null>(null);
+  const [suggestions,   setSuggestions]  = useState<any[]>([]);
+
+  const fetchSuggestions = useCallback(async () => {
+    if (!id || !user?.id) return [];
+    const { data } = await (supabase as any)
+      .from('debt_match_suggestions').select('*')
+      .eq('group_id', id).eq('user_id', user.id).eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    return data ?? [];
+  }, [id, user?.id]);
 
   const load = useCallback(async () => {
     if (!id || !user?.id) return;
     const data = await fetchGroupDetail(id, user.id);
     setDetail(data);
     setLoading(false);
-  }, [id, user?.id]);
+    if (data?.kind === 'amigos') {
+      await runDebtMatchingFor(data, user.id, id);
+      setSuggestions(await fetchSuggestions());
+    }
+  }, [id, user?.id, fetchSuggestions]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -2061,9 +2342,8 @@ export default function GroupDetailScreen() {
     { key: 'ranking', label: 'Ranking' },
   ];
   const familyTabs: { key: Tab; label: string }[] = [
-    { key: 'resumen',  label: 'Resumen'  },
-    { key: 'gastos',   label: 'Gastos'   },
-    { key: 'miembros', label: 'Miembros' },
+    { key: 'resumen', label: 'Resumen' },
+    { key: 'gastos',  label: 'Gastos'  },
   ];
 
   const handleInvite = () => {
@@ -2092,6 +2372,67 @@ export default function GroupDetailScreen() {
     return { amount: debt.amount, description: oldestExp?.description ?? 'el grupo' };
   })();
 
+  const handleConfirmSuggestion = async (suggestion: any) => {
+    const db = supabase as any;
+
+    if (suggestion.match_type === 'partial') {
+      const { data: splitDetails } = await db
+        .from('group_expense_splits')
+        .select('id, amount, paid_amount')
+        .in('id', suggestion.split_ids);
+
+      if (splitDetails?.length) {
+        const totalDebt = splitDetails.reduce((s: number, sp: any) => s + Number(sp.amount), 0);
+        for (const sp of splitDetails) {
+          const ratio    = totalDebt > 0 ? Number(sp.amount) / totalDebt : 1;
+          const newPaid  = Number(sp.paid_amount ?? 0) + suggestion.matched_amount * ratio;
+          const isSettled = newPaid >= Number(sp.amount) - 0.01;
+          await db.from('group_expense_splits')
+            .update({ paid_amount: newPaid, settled: isSettled })
+            .eq('id', sp.id);
+        }
+      }
+    } else {
+      await db.from('group_expense_splits')
+        .update({ settled: true })
+        .in('id', suggestion.split_ids);
+    }
+
+    if (suggestion.pending_tx_id) {
+      await db.from('pending_transactions')
+        .update({ status: 'confirmed' })
+        .eq('id', suggestion.pending_tx_id);
+      // Fix 3: auto-dismiss other suggestions for the same payment (ambiguous matches)
+      await db.from('debt_match_suggestions')
+        .update({ status: 'dismissed' })
+        .eq('pending_tx_id', suggestion.pending_tx_id)
+        .neq('id', suggestion.id)
+        .eq('status', 'pending');
+    }
+
+    await db.from('debt_match_suggestions')
+      .update({ status: 'confirmed' })
+      .eq('id', suggestion.id);
+    hapticSuccess();
+    load();
+  };
+
+  const handleDismissSuggestion = async (suggestion: any) => {
+    await (supabase as any).from('debt_match_suggestions')
+      .update({ status: 'dismissed' })
+      .eq('id', suggestion.id);
+    setSuggestions(prev => prev.filter((s: any) => s.id !== suggestion.id));
+  };
+
+  const handleDismissAllForTx = async (pendingTxId: string) => {
+    await (supabase as any).from('debt_match_suggestions')
+      .update({ status: 'dismissed' })
+      .eq('pending_tx_id', pendingTxId)
+      .eq('status', 'pending');
+    setSuggestions(prev => prev.filter((s: any) => s.pending_tx_id !== pendingTxId));
+    hapticLight();
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
 
@@ -2104,7 +2445,9 @@ export default function GroupDetailScreen() {
         </TouchableOpacity>
 
         {detail ? (
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: sp.md }}>
+          <TouchableOpacity
+            style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: sp.md }}
+            onPress={() => setShowMembers(true)} activeOpacity={0.7}>
             <View style={[s.groupAvatar, { backgroundColor: detail.groupColor + '22' }]}>
               <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 20, color: detail.groupColor }}>
                 {detail.name.charAt(0).toUpperCase()}
@@ -2113,10 +2456,10 @@ export default function GroupDetailScreen() {
             <View style={{ flex: 1 }}>
               <Text style={s.headerTitle} numberOfLines={1}>{detail.name}</Text>
               <Text style={s.headerSub}>
-                {detail.members.length} miembro{detail.members.length !== 1 ? 's' : ''} · {isFriends ? 'Amigos' : 'Familiar'}
+                {detail.members.length} miembro{detail.members.length !== 1 ? 's' : ''}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
         ) : <View style={{ flex: 1 }}><Text style={s.headerTitle}>Grupo</Text></View>}
 
         <TouchableOpacity
@@ -2161,6 +2504,10 @@ export default function GroupDetailScreen() {
                       if (m) setRemindMember(m);
                     }
                   }}
+                  suggestions={suggestions}
+                  onConfirmSuggestion={handleConfirmSuggestion}
+                  onDismissSuggestion={handleDismissSuggestion}
+                  onDismissAllForTx={handleDismissAllForTx}
                 />
               )}
               {activeTab === 'gastos' && (
@@ -2172,13 +2519,10 @@ export default function GroupDetailScreen() {
             </>
           ) : (
             <>
-              {activeTab === 'resumen'  && (
-                <FamilyResumenTab detail={detail} isAdmin={isAdmin} onInvite={handleInvite} onMemberPress={handleMemberPress} />
+              {activeTab === 'resumen' && (
+                <FamilyResumenTab detail={detail} isAdmin={isAdmin} onInvite={handleInvite} groupId={id!} />
               )}
-              {activeTab === 'gastos'   && <FamilyGastosTab detail={detail} />}
-              {activeTab === 'miembros' && (
-                <MiembrosTab detail={detail} isAdmin={isAdmin} isFriends={false} onEdit={setEditingMember} onInvite={handleInvite} />
-              )}
+              {activeTab === 'gastos' && <FamilyGastosTab detail={detail} />}
             </>
           )}
 
@@ -2186,6 +2530,51 @@ export default function GroupDetailScreen() {
             <AddExpenseModal visible={showAddExp} onClose={() => setShowAddExp(false)}
               members={detail.members} groupId={id!} userId={user!.id} onSaved={load} />
           )}
+          {/* Modal miembros */}
+          <Modal visible={showMembers} animationType="slide" presentationStyle="formSheet" onRequestClose={() => setShowMembers(false)}>
+            <SafeAreaView style={s.modal} edges={['top']}>
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>Miembros</Text>
+                <TouchableOpacity onPress={() => setShowMembers(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close" size={24} color={C.text} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView contentContainerStyle={s.modalBody}>
+                <View style={s.card}>
+                  {detail.members.map((m, i) => {
+                    const canEdit = isAdmin && !m.isMe && !isFriends;
+                    return (
+                      <View key={m.userId}>
+                        {i > 0 && <View style={s.divider} />}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: sp.md, padding: sp.lg }}>
+                          <Avatar name={m.name} color={m.color} size={44} />
+                          <View style={{ flex: 1, gap: 3 }}>
+                            <Text style={s.memberName} numberOfLines={1}>{m.isMe ? `Vos (${m.name})` : m.name}</Text>
+                            {m.email ? <Text style={s.memberMeta} numberOfLines={1}>{m.email}</Text> : null}
+                          </View>
+                          {!isFriends && (
+                            <View style={[s.badge, { backgroundColor: m.role === 'Admin' ? '#DCFCE7' : C.purpleLt }]}>
+                              <Text style={[s.badgeText, { color: m.role === 'Admin' ? C.green : C.purple }]}>{m.role}</Text>
+                            </View>
+                          )}
+                          {canEdit && (
+                            <TouchableOpacity onPress={() => { setShowMembers(false); setEditingMember(m); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} activeOpacity={0.7}>
+                              <Ionicons name="ellipsis-horizontal" size={20} color={C.muted} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+                <TouchableOpacity style={s.remindAllBtn} onPress={() => { setShowMembers(false); handleInvite(); }} activeOpacity={0.85}>
+                  <Ionicons name="enter-outline" size={18} color={C.purple} />
+                  <Text style={s.remindAllText}>Invitar con código</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </SafeAreaView>
+          </Modal>
+
           <MemberEditModal visible={editingMember !== null} member={editingMember}
             groupId={id!} allMembers={detail.members}
             onClose={() => setEditingMember(null)}
@@ -2248,9 +2637,9 @@ const s = StyleSheet.create({
   },
   scMonthLabel: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: C.muted, marginBottom: sp.xs },
   scTotalLabel: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted, marginTop: sp.xs },
-  scTotal:      { fontFamily: 'Montserrat_700Bold', fontSize: 30, color: C.text, letterSpacing: -1 },
+  scTotal:      { fontFamily: 'Montserrat_700Bold', fontSize: 30, color: C.text, letterSpacing: -1, lineHeight: 38 },
   scDivider:    { height: 1, backgroundColor: C.border, marginVertical: sp.lg },
-  scBalAmt:     { fontFamily: 'Montserrat_700Bold', fontSize: 22, letterSpacing: -0.5 },
+  scBalAmt:     { fontFamily: 'Montserrat_700Bold', fontSize: 22, letterSpacing: -0.5, lineHeight: 30 },
 
   summaryLabel: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
   summaryAmt:   { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: C.text },
@@ -2282,8 +2671,8 @@ const s = StyleSheet.create({
   expIconSm: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 
   expEmojiBox: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#F5F0FF', alignItems: 'center', justifyContent: 'center' },
-  detailTitle:  { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: C.text, textAlign: 'center' },
-  detailAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: C.purple, letterSpacing: -1 },
+  detailTitle:  { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: C.text, textAlign: 'center', lineHeight: 26 },
+  detailAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: C.purple, letterSpacing: -1, lineHeight: 40 },
   detailDate:   { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: C.muted },
 
   rankRow:    { flexDirection: 'row', alignItems: 'center', gap: sp.md, paddingHorizontal: sp.lg, paddingVertical: sp.md },
@@ -2425,4 +2814,52 @@ const s = StyleSheet.create({
   },
   waBubbleText: { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#111', lineHeight: 20 },
   waBubbleTime: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#667085', textAlign: 'right', marginTop: 4 },
+});
+
+const dmb = StyleSheet.create({
+  wrap: {
+    backgroundColor: '#F0FDF4', borderRadius: 18,
+    borderWidth: 1.5, borderColor: '#BBF7D0',
+    padding: sp.lg, gap: sp.sm,
+    shadowColor: '#15803D', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 6, elevation: 2,
+  },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: sp.md },
+  iconWrap: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: '#DCFCE7', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  title:    { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#14532D' },
+  sub:      { fontFamily: 'Montserrat_500Medium', fontSize: 12, color: '#166534', lineHeight: 17 },
+  note:     { fontFamily: 'Montserrat_500Medium', fontSize: 12, color: '#15803D', marginTop: 2 },
+  question: { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: '#344054' },
+  actions:  { flexDirection: 'row', gap: sp.sm, marginTop: sp.xs },
+  confirmBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    backgroundColor: '#15803D', borderRadius: 12, paddingVertical: 11,
+  },
+  confirmText: { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: '#FFF' },
+  dismissBtn: {
+    paddingHorizontal: sp.lg, paddingVertical: 11,
+    borderRadius: 12, borderWidth: 1.5, borderColor: '#BBF7D0',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  dismissText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#15803D' },
+
+  radioRow: {
+    flexDirection: 'row', alignItems: 'center', gap: sp.md,
+    borderRadius: 12, borderWidth: 1.5, borderColor: '#BBF7D0',
+    backgroundColor: '#F0FDF4', padding: sp.md,
+  },
+  radioRowActive: {
+    borderColor: '#15803D', backgroundColor: '#DCFCE7',
+  },
+  radioCircle: {
+    width: 20, height: 20, borderRadius: 10,
+    borderWidth: 2, borderColor: '#86EFAC',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  radioCircleActive: { borderColor: '#15803D' },
+  radioDot:    { width: 8, height: 8, borderRadius: 4, backgroundColor: '#15803D' },
+  radioLabel:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#14532D' },
+  radioSub:    { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#166534', marginTop: 1 },
 });

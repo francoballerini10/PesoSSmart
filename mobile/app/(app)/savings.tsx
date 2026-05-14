@@ -12,259 +12,236 @@ import {
   Platform,
   RefreshControl,
 } from 'react-native';
-import Svg, { Circle, Path, Rect, Ellipse } from 'react-native-svg';
+import Svg, { Polyline, Circle } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, layout } from '@/theme';
+import { spacing, layout } from '@/theme';
 import { Text } from '@/components/ui/Text';
 import { useAuthStore } from '@/store/authStore';
-import {
-  useSavingsStore,
-  type Saving,
-  type SavingCurrency,
-} from '@/store/savingsStore';
+import { useSavingsStore, type Saving, type SavingCurrency } from '@/store/savingsStore';
 import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
 import { fetchDolarRateNow } from '@/hooks/useDolarRates';
 import { formatCurrency } from '@/utils/format';
+import { fetchBudgetPlan, type BudgetPlan } from '@/lib/budgetPlan';
 
-// ─── Empty State ──────────────────────────────────────────────────────────────
+// ─── Design tokens ────────────────────────────────────────────────────────────
 
-function SavingsEmptyIllustration() {
+const C = {
+  bg:      '#F7F9FC',
+  card:    '#FFFFFF',
+  blue:    '#2563EB',
+  green:   '#16A34A',
+  violet:  '#8B5CF6',
+  red:     '#EF4444',
+  text:    '#111827',
+  sub:     '#6B7280',
+  muted:   '#9CA3AF',
+  border:  '#E5E7EB',
+  light:   '#F3F4F6',
+} as const;
+
+const shadow = {
+  shadowColor: '#1F2937',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.06,
+  shadowRadius: 10,
+  elevation: 3,
+} as const;
+
+const GOAL_EMOJIS = ['🎯','🏖️','🚗','🏠','✈️','📱','👶','💍','🎓','💪','🐕','🌱','💻','🎸','🏋️','🍕'];
+
+// ─── Mini Line Chart ──────────────────────────────────────────────────────────
+
+function MiniLineChart() {
   return (
-    <Svg width={160} height={140} viewBox="0 0 160 140">
-      <Circle cx="80" cy="75" r="60" fill={colors.primary + '12'} />
-      <Ellipse cx="80" cy="82" rx="38" ry="32" fill={colors.primary + '30'} />
-      <Ellipse cx="80" cy="82" rx="38" ry="32" fill="none" stroke={colors.primary} strokeWidth="2" />
-      <Ellipse cx="112" cy="86" rx="10" ry="8" fill={colors.primary + '40'} stroke={colors.primary} strokeWidth="1.5" />
-      <Circle cx="97" cy="74" r="3" fill={colors.primary} />
-      <Ellipse cx="62" cy="56" rx="8" ry="10" fill={colors.primary + '40'} stroke={colors.primary} strokeWidth="1.5" />
-      <Rect x="70" y="52" width="20" height="4" rx="2" fill={colors.primary} />
-      <Rect x="60" y="110" width="10" height="14" rx="5" fill={colors.primary + '50'} />
-      <Rect x="76" y="112" width="10" height="12" rx="5" fill={colors.primary + '50'} />
-      <Rect x="92" y="110" width="10" height="14" rx="5" fill={colors.primary + '50'} />
-      <Circle cx="36" cy="44" r="10" fill={colors.yellow + '60'} />
-      <Circle cx="36" cy="44" r="10" fill="none" stroke={colors.yellow} strokeWidth="1.5" />
-      <Path d="M33 44 Q36 40 39 44 Q36 48 33 44Z" fill={colors.yellow} />
-      <Circle cx="128" cy="38" r="8" fill={colors.yellow + '60'} />
-      <Circle cx="128" cy="38" r="8" fill="none" stroke={colors.yellow} strokeWidth="1.5" />
-      <Path d="M125.5 38 Q128 34.5 130.5 38 Q128 41.5 125.5 38Z" fill={colors.yellow} />
-      <Circle cx="50" cy="24" r="6" fill={colors.yellow + '40'} />
+    <Svg width={90} height={34}>
+      <Polyline
+        points="0,28 14,22 30,18 46,20 62,10 76,6 90,2"
+        fill="none"
+        stroke={C.green}
+        strokeWidth={2.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Circle cx={90} cy={2} r={3.5} fill={C.green} />
     </Svg>
   );
 }
 
-function SavingsEmptyState({ onAddCash, onAddGoal }: { onAddCash: () => void; onAddGoal: () => void }) {
+// ─── Smart Plan Card ──────────────────────────────────────────────────────────
+
+function SmartPlanCard({ amount, onPress }: { amount: number; onPress: () => void }) {
   return (
-    <View style={emptyStyles.container}>
-      <SavingsEmptyIllustration />
-      <View style={emptyStyles.textBlock}>
-        <Text variant="subtitle" color={colors.text.primary} align="center">Tu capital quieto pierde contra la inflación</Text>
-        <Text variant="body" color={colors.text.secondary} align="center" style={{ lineHeight: 22 }}>
-          Registrá tus ahorros y metas para ver cómo está tu capital y protegerlo.
-        </Text>
+    <TouchableOpacity style={spc.card} onPress={onPress} activeOpacity={0.88}>
+      <View style={spc.badge}>
+        <Text style={spc.badgeText}>NUEVO</Text>
       </View>
-      <View style={emptyStyles.buttons}>
-        <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.neon }]} onPress={onAddGoal} activeOpacity={0.85}>
-          <Ionicons name="flag-outline" size={18} color={colors.bg.primary} />
-          <Text style={[emptyStyles.btnText, { color: colors.bg.primary }]}>Crear meta de ahorro</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[emptyStyles.btn, { backgroundColor: colors.primary }]} onPress={onAddCash} activeOpacity={0.85}>
-          <Ionicons name="cash-outline" size={18} color={colors.white} />
-          <Text style={emptyStyles.btnText}>Agregar efectivo</Text>
-        </TouchableOpacity>
+      <View style={spc.inner}>
+        <View style={{ flex: 1, gap: spacing[2] }}>
+          <View style={spc.titleRow}>
+            <Text style={spc.sparkle}>✨</Text>
+            <Text style={spc.title}>Plan Inteligente</Text>
+          </View>
+          <Text style={spc.desc}>
+            Descubrí cuánto podés ahorrar en base a tus hábitos
+          </Text>
+          <Text style={spc.amount}>{formatCurrency(amount > 0 ? amount : 0)}</Text>
+          <Text style={spc.amountLabel}>Podrías ahorrar este mes</Text>
+        </View>
+        <View style={spc.rightCol}>
+          <View style={spc.aiCircle}>
+            <Ionicons name="sparkles" size={18} color={C.violet} />
+          </View>
+          <MiniLineChart />
+        </View>
       </View>
-    </View>
+      <View style={spc.footer}>
+        <View style={spc.ctaBtn}>
+          <Text style={spc.footerText}>Ver mi plan completo</Text>
+          <Ionicons name="arrow-forward" size={13} color={C.violet} />
+        </View>
+        <View style={spc.arrowBtn}>
+          <Ionicons name="arrow-forward" size={14} color={C.card} />
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 }
 
-const emptyStyles = StyleSheet.create({
-  container: { alignItems: 'center', gap: spacing[5], paddingVertical: spacing[6] },
-  textBlock:  { gap: spacing[2], paddingHorizontal: spacing[4] },
-  buttons:    { gap: spacing[3], width: '100%' },
-  btn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], borderRadius: 12, paddingVertical: spacing[4] },
-  btnText:    { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.white },
+const spc = StyleSheet.create({
+  card:        { backgroundColor: C.card, borderRadius: 20, borderWidth: 1.5, borderColor: C.violet + '35', overflow: 'hidden', ...shadow },
+  badge:       { position: 'absolute', top: 14, right: 14, backgroundColor: C.violet, borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: 3, zIndex: 1 },
+  badgeText:   { fontFamily: 'Montserrat_700Bold', fontSize: 9, color: '#FFF', letterSpacing: 0.6 },
+  inner:       { flexDirection: 'row', padding: spacing[5], paddingBottom: spacing[3], gap: spacing[3] },
+  titleRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  sparkle:     { fontSize: 16 },
+  title:       { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: C.text },
+  desc:        { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.sub, lineHeight: 18 },
+  amount:      { fontFamily: 'Montserrat_800ExtraBold', fontSize: 28, color: C.green, lineHeight: 34 },
+  amountLabel: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.sub },
+  rightCol:    { alignItems: 'flex-end', justifyContent: 'space-between', paddingTop: spacing[2], paddingBottom: spacing[1] },
+  aiCircle:    { width: 38, height: 38, borderRadius: 19, backgroundColor: C.violet + '14', alignItems: 'center', justifyContent: 'center' },
+  footer:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingBottom: spacing[5], paddingTop: spacing[1] },
+  ctaBtn:      { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2], borderWidth: 1.5, borderColor: C.violet + '50', borderRadius: 12, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
+  footerText:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.violet },
+  arrowBtn:    { width: 30, height: 30, borderRadius: 15, backgroundColor: C.violet, alignItems: 'center', justifyContent: 'center' },
 });
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-const GOAL_EMOJIS = ['🎯', '🏖️', '🚗', '🏠', '✈️', '📱', '👶', '💍', '🎓', '💪', '🐕', '🌱', '💻', '🎸', '🏋️', '🍕'];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function buildInsights(totalARS: number, totalUSDInARS: number): string[] {
-  const total = totalARS + totalUSDInARS;
-  if (total === 0) return ['Cargá tus ahorros para ver cómo está tu capital.'];
-  const insights: string[] = [];
-  const usdPct = total > 0 ? (totalUSDInARS / total) * 100 : 0;
-  if (usdPct < 15 && total > 100000) insights.push('Poca dolarización: tu cartera es vulnerable a la inflación en pesos.');
-  insights.push('Usá el simulador para ver cómo hacer rendir tu capital en Argentina hoy.');
-  return insights.slice(0, 2);
-}
-
-// ─── TotalCapitalCard ─────────────────────────────────────────────────────────
-
-function TotalCapitalCard({ totalARS, totalUSDInARS }: {
-  totalARS: number; totalUSDInARS: number;
-}) {
-  const total = totalARS + totalUSDInARS;
-
-  return (
-    <View style={cardStyles.card}>
-      <Text style={cardStyles.label}>Tu capital hoy</Text>
-      <Text style={cardStyles.total} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-        {formatCurrency(total)}
-      </Text>
-      <Text style={cardStyles.sublabel}>En pesos argentinos</Text>
-    </View>
-  );
-}
-
-const cardStyles = StyleSheet.create({
-  card:      { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 16, padding: spacing[5], gap: spacing[2] },
-  label:     { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#757575' },
-  total:     { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: '#212121', lineHeight: 42 },
-  sublabel:  { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E', marginTop: -4 },
-});
-
-// ─── GoalCard ─────────────────────────────────────────────────────────────────
+// ─── Goal Card ────────────────────────────────────────────────────────────────
 
 function GoalCard({ goal, onEdit, onDelete, onAportar }: {
-  goal: SavingsGoal; onEdit: (g: SavingsGoal) => void; onDelete: (id: string) => void; onAportar: (g: SavingsGoal) => void;
+  goal: SavingsGoal; onEdit: (g: SavingsGoal) => void;
+  onDelete: (id: string) => void; onAportar: (g: SavingsGoal) => void;
 }) {
-  const pct  = goal.target_amount > 0 ? Math.min(goal.current_amount / goal.target_amount, 1) : 0;
-  const done = pct >= 1;
+  const pct      = goal.target_amount > 0 ? Math.min(goal.current_amount / goal.target_amount, 1) : 0;
+  const pctRound = Math.round(pct * 100);
+  const accent   = pct >= 1 ? C.green : pct >= 0.6 ? C.blue : C.violet;
   const daysLeft = goal.deadline
     ? Math.ceil((new Date(goal.deadline).getTime() - Date.now()) / 86400000)
     : null;
-  const accentColor = done ? colors.neon
-    : pct >= 0.7 ? colors.primary
-    : pct >= 0.4 ? colors.yellow
-    : '#FF6D00';
 
   return (
-    <TouchableOpacity style={goalStyles.card} onPress={() => onEdit(goal)} activeOpacity={0.85}>
-      {/* Barra de acento izquierda */}
-      <View style={[goalStyles.leftBar, { backgroundColor: accentColor }]} />
-
-      <View style={goalStyles.inner}>
-        {/* Fila superior: emoji + título + % + trash */}
-        <View style={goalStyles.topRow}>
-          <Text style={goalStyles.emoji}>{goal.emoji}</Text>
-          <View style={{ flex: 1 }}>
-            <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }} numberOfLines={1}>
-              {goal.title}
+    <TouchableOpacity style={gc.card} onPress={() => onEdit(goal)} activeOpacity={0.85}>
+      <View style={gc.topRow}>
+        <Text style={gc.emoji}>{goal.emoji}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={gc.title} numberOfLines={1}>{goal.title}</Text>
+          {daysLeft !== null && (
+            <Text style={gc.deadline}>
+              {daysLeft > 0 ? `${daysLeft} días restantes` : daysLeft === 0 ? 'Vence hoy' : 'Vencida'}
             </Text>
-            {daysLeft !== null && (
-              <Text variant="caption" color={colors.text.tertiary}>
-                {daysLeft > 0 ? `${daysLeft} días restantes` : daysLeft === 0 ? 'Vence hoy' : 'Vencida'}
-              </Text>
-            )}
-          </View>
-          <Text style={[goalStyles.pctText, { color: accentColor }]}>
-            {Math.round(pct * 100)}%
-          </Text>
-          <TouchableOpacity onPress={() => onDelete(goal.id)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Ionicons name="trash-outline" size={15} color={colors.text.tertiary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Barra de progreso gruesa */}
-        <View style={goalStyles.progressTrack}>
-          <View style={[goalStyles.progressFill, { width: `${Math.round(pct * 100)}%` as any, backgroundColor: accentColor }]} />
-        </View>
-
-        {/* Footer: montos + botón aportar */}
-        <View style={goalStyles.footer}>
-          <View style={{ gap: 1 }}>
-            <Text variant="labelMd" color={colors.text.primary}>{formatCurrency(goal.current_amount)}</Text>
-            <Text variant="caption" color={colors.text.tertiary}>de {formatCurrency(goal.target_amount)}</Text>
-          </View>
-          {done ? (
-            <View style={goalStyles.doneBadge}>
-              <Ionicons name="checkmark-circle" size={14} color={colors.neon} />
-              <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 11, color: colors.neon }}>CUMPLIDA</Text>
-            </View>
-          ) : (
-            <TouchableOpacity style={[goalStyles.aportarBtn, { backgroundColor: accentColor }]} onPress={() => onAportar(goal)} activeOpacity={0.8}>
-              <Ionicons name="add" size={14} color={colors.bg.primary} />
-              <Text style={goalStyles.aportarText}>Aportar</Text>
-            </TouchableOpacity>
           )}
         </View>
+        <View style={{ alignItems: 'flex-end', gap: 2 }}>
+          <Text style={[gc.pct, { color: accent }]}>{pctRound}%</Text>
+          <TouchableOpacity onPress={() => onDelete(goal.id)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Ionicons name="trash-outline" size={14} color={C.muted} />
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={gc.track}>
+        <View style={[gc.fill, { width: `${pctRound}%` as any, backgroundColor: accent }]} />
+      </View>
+      <View style={gc.bottomRow}>
+        <Text style={gc.current}>{formatCurrency(goal.current_amount)}</Text>
+        <Text style={gc.target}>de {formatCurrency(goal.target_amount)}</Text>
+        {pct < 1 ? (
+          <TouchableOpacity style={[gc.aportarBtn, { backgroundColor: accent }]} onPress={() => onAportar(goal)}>
+            <Ionicons name="add" size={13} color="#FFF" />
+            <Text style={gc.aportarText}>Aportar</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={gc.doneBadge}>
+            <Ionicons name="checkmark-circle" size={13} color={C.green} />
+            <Text style={[gc.aportarText, { color: C.green }]}>Cumplida</Text>
+          </View>
+        )}
       </View>
     </TouchableOpacity>
   );
 }
 
-const goalStyles = StyleSheet.create({
-  card:         { backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.subtle, borderRadius: 16, overflow: 'hidden', flexDirection: 'row' },
-  leftBar:      { width: 4, alignSelf: 'stretch' },
-  inner:        { flex: 1, padding: spacing[4], gap: spacing[3] },
-  topRow:       { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
-  emoji:        { fontSize: 26, lineHeight: 32 },
-  pctText:      { fontFamily: 'Montserrat_800ExtraBold', fontSize: 22, lineHeight: 28 },
-  doneBadge:    { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.neon + '15', borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
-  progressTrack: { height: 10, backgroundColor: colors.border.subtle, borderRadius: 5, overflow: 'hidden' },
-  progressFill:  { height: '100%', borderRadius: 5 },
-  footer:       { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
-  aportarBtn:   { flexDirection: 'row', alignItems: 'center', gap: spacing[1], borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
-  aportarText:  { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: colors.bg.primary },
+const gc = StyleSheet.create({
+  card:       { backgroundColor: C.card, borderRadius: 18, padding: spacing[4], gap: spacing[3], ...shadow },
+  topRow:     { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
+  emoji:      { fontSize: 26, lineHeight: 32 },
+  title:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: C.text, marginBottom: 1 },
+  deadline:   { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted },
+  pct:        { fontFamily: 'Montserrat_800ExtraBold', fontSize: 20, lineHeight: 26 },
+  track:      { height: 8, backgroundColor: C.light, borderRadius: 4, overflow: 'hidden' },
+  fill:       { height: '100%', borderRadius: 4 },
+  bottomRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  current:    { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: C.text },
+  target:     { flex: 1, fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
+  aportarBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: spacing[1] },
+  aportarText:{ fontFamily: 'Montserrat_700Bold', fontSize: 11, color: '#FFF' },
+  doneBadge:  { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.green + '12', borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: spacing[1] },
 });
 
-// ─── SavingCard ───────────────────────────────────────────────────────────────
+// ─── Saving Item (Bolsillos) ──────────────────────────────────────────────────
 
-function SavingCard({ saving, usdRate, onEdit, onDelete }: {
-  saving: Saving; usdRate: number | null; onEdit: (s: Saving) => void; onDelete: (id: string) => void;
+function SavingItem({ saving, usdRate, onEdit, onDelete }: {
+  saving: Saving; usdRate: number | null;
+  onEdit: (s: Saving) => void; onDelete: (id: string) => void;
 }) {
   const arsValue = saving.currency === 'USD' && usdRate ? saving.amount * usdRate : saving.amount;
-  const color    = saving.currency === 'USD' ? colors.primary : colors.neon;
+  const color    = saving.currency === 'USD' ? C.blue : C.green;
 
   return (
-    <TouchableOpacity style={savingCardStyles.card} onPress={() => onEdit(saving)} activeOpacity={0.75}>
-      <View style={[savingCardStyles.leftBar, { backgroundColor: color }]} />
-      <View style={[savingCardStyles.iconBox, { backgroundColor: color + '18' }]}>
+    <TouchableOpacity style={si.row} onPress={() => onEdit(saving)} activeOpacity={0.78}>
+      <View style={[si.iconBox, { backgroundColor: color + '14' }]}>
         <Ionicons name={saving.currency === 'USD' ? 'card-outline' : 'cash-outline'} size={18} color={color} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>{saving.label}</Text>
-        <Text variant="caption" color={colors.text.tertiary}>
-          {saving.currency === 'USD'
-            ? `${saving.amount.toLocaleString('es-AR', { maximumFractionDigits: 0 })} USD`
-            : 'Pesos ARS'}
-        </Text>
+        <Text style={si.label} numberOfLines={1}>{saving.label}</Text>
+        <Text style={si.currency}>{saving.currency === 'USD' ? `${saving.amount.toLocaleString('es-AR', { maximumFractionDigits: 0 })} USD` : 'Pesos ARS'}</Text>
       </View>
-      <View style={{ alignItems: 'flex-end', gap: 2 }}>
-        <Text style={savingCardStyles.amount}>{formatCurrency(arsValue)}</Text>
-        {saving.currency === 'USD' && !usdRate && (
-          <Text variant="caption" color={colors.text.tertiary}>sin cotiz.</Text>
-        )}
-      </View>
-      <TouchableOpacity onPress={() => onDelete(saving.id)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-        <Ionicons name="trash-outline" size={15} color={colors.text.tertiary} />
-      </TouchableOpacity>
+      <Text style={si.amount}>{formatCurrency(arsValue)}</Text>
+      <Ionicons name="chevron-forward" size={14} color={C.muted} />
     </TouchableOpacity>
   );
 }
 
-const savingCardStyles = StyleSheet.create({
-  card:    { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.subtle, borderRadius: 14, overflow: 'hidden' },
-  leftBar: { width: 4, alignSelf: 'stretch' },
-  iconBox: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginLeft: spacing[3], marginVertical: spacing[4] },
-  amount:  { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.text.primary },
+const si = StyleSheet.create({
+  row:     { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.card, borderRadius: 16, padding: spacing[4], ...shadow },
+  iconBox: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  label:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: C.text, marginBottom: 1 },
+  currency:{ fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted },
+  amount:  { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: C.text },
 });
 
-// ─── AddGoalModal ─────────────────────────────────────────────────────────────
+// ─── Add Goal Modal ───────────────────────────────────────────────────────────
 
 function AddGoalModal({ visible, initial, onClose, onSave }: {
   visible: boolean; initial: Partial<SavingsGoal> | null;
   onClose: () => void; onSave: (data: Omit<SavingsGoal, 'id' | 'user_id' | 'created_at'>) => Promise<void>;
 }) {
-  const [title,        setTitle]        = useState('');
-  const [emoji,        setEmoji]        = useState('🎯');
+  const [title, setTitle]               = useState('');
+  const [emoji, setEmoji]               = useState('🎯');
   const [targetAmount, setTargetAmount] = useState('');
-  const [deadline,     setDeadline]     = useState('');
-  const [saving,       setSaving]       = useState(false);
+  const [deadline, setDeadline]         = useState('');
+  const [saving, setSaving]             = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -283,73 +260,38 @@ function AddGoalModal({ visible, initial, onClose, onSave }: {
     try {
       await onSave({ title: title.trim(), emoji, target_amount: amt, current_amount: initial?.current_amount ?? 0, deadline: deadline || null });
       onClose();
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar. Intentá de nuevo.');
-    } finally {
-      setSaving(false);
-    }
+    } catch { Alert.alert('Error', 'No se pudo guardar. Intentá de nuevo.'); }
+    finally { setSaving(false); }
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <SafeAreaView style={modalStyles.sheet}>
-          <View style={modalStyles.handle} />
-          <View style={modalStyles.header}>
-            <Text variant="subtitle">{initial?.id ? 'Editar meta' : 'Nueva meta'}</Text>
+        <SafeAreaView style={m.sheet}>
+          <View style={m.handle} />
+          <View style={m.header}>
+            <Text style={m.headerTitle}>{initial?.id ? 'Editar meta' : 'Nueva meta'}</Text>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color={colors.text.secondary} />
+              <Ionicons name="close" size={22} color={C.sub} />
             </TouchableOpacity>
           </View>
-          <ScrollView contentContainerStyle={modalStyles.body} keyboardShouldPersistTaps="handled">
-            <Text variant="label" color={colors.text.secondary}>EMOJI</Text>
+          <ScrollView contentContainerStyle={m.body} keyboardShouldPersistTaps="handled">
+            <Text style={m.label}>EMOJI</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] }}>
               {GOAL_EMOJIS.map(e => (
-                <TouchableOpacity
-                  key={e}
-                  style={[goalModalStyles.emojiBtn, emoji === e && goalModalStyles.emojiBtnActive]}
-                  onPress={() => setEmoji(e)}
-                >
-                  <Text style={{ fontSize: 24 }}>{e}</Text>
+                <TouchableOpacity key={e} style={[m.emojiBtn, emoji === e && m.emojiBtnActive]} onPress={() => setEmoji(e)}>
+                  <Text style={{ fontSize: 22 }}>{e}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
-            <Text variant="label" color={colors.text.secondary}>NOMBRE DE LA META</Text>
-            <TextInput
-              style={modalStyles.input}
-              value={title}
-              onChangeText={setTitle}
-              placeholder="Ej: Vacaciones, Auto, Emergencias..."
-              placeholderTextColor={colors.text.tertiary}
-              autoCapitalize="sentences"
-              maxLength={60}
-            />
-
-            <Text variant="label" color={colors.text.secondary}>MONTO OBJETIVO (ARS)</Text>
-            <TextInput
-              style={modalStyles.input}
-              value={targetAmount}
-              onChangeText={setTargetAmount}
-              placeholder="1000000"
-              placeholderTextColor={colors.text.tertiary}
-              keyboardType="decimal-pad"
-            />
-
-            <Text variant="label" color={colors.text.secondary}>
-              FECHA LÍMITE{'  '}
-              <Text variant="caption" color={colors.text.tertiary}>(YYYY-MM-DD, opcional)</Text>
-            </Text>
-            <TextInput
-              style={modalStyles.input}
-              value={deadline}
-              onChangeText={setDeadline}
-              placeholder="2025-12-31"
-              placeholderTextColor={colors.text.tertiary}
-            />
-
-            <TouchableOpacity style={[modalStyles.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
-              {saving ? <ActivityIndicator size="small" color={colors.bg.primary} /> : <Text style={modalStyles.saveBtnText}>Guardar meta</Text>}
+            <Text style={m.label}>NOMBRE</Text>
+            <TextInput style={m.input} value={title} onChangeText={setTitle} placeholder="Vacaciones, Auto, Emergencias..." placeholderTextColor={C.muted} autoCapitalize="sentences" maxLength={60} />
+            <Text style={m.label}>MONTO OBJETIVO (ARS)</Text>
+            <TextInput style={m.input} value={targetAmount} onChangeText={setTargetAmount} placeholder="1000000" placeholderTextColor={C.muted} keyboardType="decimal-pad" />
+            <Text style={m.label}>FECHA LÍMITE (YYYY-MM-DD, opcional)</Text>
+            <TextInput style={m.input} value={deadline} onChangeText={setDeadline} placeholder="2025-12-31" placeholderTextColor={C.muted} />
+            <TouchableOpacity style={[m.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={m.saveBtnText}>Guardar meta</Text>}
             </TouchableOpacity>
           </ScrollView>
         </SafeAreaView>
@@ -358,12 +300,7 @@ function AddGoalModal({ visible, initial, onClose, onSave }: {
   );
 }
 
-const goalModalStyles = StyleSheet.create({
-  emojiBtn:       { width: 48, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border.default, backgroundColor: colors.bg.card },
-  emojiBtnActive: { borderColor: colors.primary, backgroundColor: colors.primary + '18' },
-});
-
-// ─── AportarModal ─────────────────────────────────────────────────────────────
+// ─── Aportar Modal ────────────────────────────────────────────────────────────
 
 function AportarModal({ goal, onClose, onSave }: {
   goal: SavingsGoal | null; onClose: () => void; onSave: (amount: number) => Promise<void>;
@@ -377,14 +314,9 @@ function AportarModal({ goal, onClose, onSave }: {
     const amt = parseFloat(amount.replace(',', '.'));
     if (isNaN(amt) || amt <= 0) { Alert.alert('', 'Ingresá un monto válido.'); return; }
     setSaving(true);
-    try {
-      await onSave(amt);
-      onClose();
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar.');
-    } finally {
-      setSaving(false);
-    }
+    try { await onSave(amt); onClose(); }
+    catch { Alert.alert('Error', 'No se pudo guardar.'); }
+    finally { setSaving(false); }
   };
 
   if (!goal) return null;
@@ -393,34 +325,24 @@ function AportarModal({ goal, onClose, onSave }: {
   return (
     <Modal visible={!!goal} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <SafeAreaView style={modalStyles.sheet}>
-          <View style={modalStyles.handle} />
-          <View style={modalStyles.header}>
+        <SafeAreaView style={m.sheet}>
+          <View style={m.handle} />
+          <View style={m.header}>
             <View style={{ gap: 2 }}>
-              <Text variant="subtitle">Aportar a meta</Text>
-              <Text variant="caption" color={colors.text.tertiary}>
+              <Text style={m.headerTitle}>Aportar a meta</Text>
+              <Text style={[m.label, { marginBottom: 0, fontSize: 12, textTransform: 'none', letterSpacing: 0 }]}>
                 {goal.emoji} {goal.title} · faltan {formatCurrency(remaining)}
               </Text>
             </View>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color={colors.text.secondary} />
-            </TouchableOpacity>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color={C.sub} /></TouchableOpacity>
           </View>
           <View style={{ padding: spacing[5], gap: spacing[4] }}>
-            <View style={aportarStyles.amountBox}>
-              <Text style={aportarStyles.prefix}>$</Text>
-              <TextInput
-                style={aportarStyles.input}
-                value={amount}
-                onChangeText={setAmount}
-                placeholder="0"
-                placeholderTextColor={colors.text.tertiary}
-                keyboardType="decimal-pad"
-                autoFocus
-              />
+            <View style={m.amountBox}>
+              <Text style={m.prefix}>$</Text>
+              <TextInput style={m.amountInput} value={amount} onChangeText={setAmount} placeholder="0" placeholderTextColor={C.muted} keyboardType="decimal-pad" autoFocus />
             </View>
-            <TouchableOpacity style={[modalStyles.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
-              {saving ? <ActivityIndicator size="small" color={colors.bg.primary} /> : <Text style={modalStyles.saveBtnText}>Aportar</Text>}
+            <TouchableOpacity style={[m.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={m.saveBtnText}>Aportar</Text>}
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -429,13 +351,7 @@ function AportarModal({ goal, onClose, onSave }: {
   );
 }
 
-const aportarStyles = StyleSheet.create({
-  amountBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.bg.elevated, borderWidth: 1, borderColor: colors.border.default, borderRadius: 16, padding: spacing[5] },
-  prefix:    { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: colors.text.tertiary },
-  input:     { fontFamily: 'Montserrat_700Bold', fontSize: 40, color: colors.text.primary, minWidth: 80, textAlign: 'center' },
-});
-
-// ─── AddSavingModal ───────────────────────────────────────────────────────────
+// ─── Add Saving Modal ─────────────────────────────────────────────────────────
 
 function AddSavingModal({ visible, initial, onClose, onSave }: {
   visible: boolean; initial: Partial<Saving> | null; onClose: () => void;
@@ -459,58 +375,37 @@ function AddSavingModal({ visible, initial, onClose, onSave }: {
     if (!label.trim()) { Alert.alert('', 'Ingresá una descripción.'); return; }
     if (isNaN(amt) || amt <= 0) { Alert.alert('', 'Ingresá un monto válido.'); return; }
     setSaving(true);
-    try {
-      await onSave({ label: label.trim(), amount: amt, currency, type: 'cash' });
-      onClose();
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar. Intentá de nuevo.');
-    } finally {
-      setSaving(false);
-    }
+    try { await onSave({ label: label.trim(), amount: amt, currency, type: 'cash' }); onClose(); }
+    catch { Alert.alert('Error', 'No se pudo guardar. Intentá de nuevo.'); }
+    finally { setSaving(false); }
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <SafeAreaView style={modalStyles.sheet}>
-          <View style={modalStyles.handle} />
-          <View style={modalStyles.header}>
-            <Text variant="subtitle">{initial?.id ? 'Editar ahorro' : 'Agregar ahorro'}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={22} color={colors.text.secondary} />
-            </TouchableOpacity>
+        <SafeAreaView style={m.sheet}>
+          <View style={m.handle} />
+          <View style={m.header}>
+            <Text style={m.headerTitle}>{initial?.id ? 'Editar ahorro' : 'Agregar bolsillo'}</Text>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color={C.sub} /></TouchableOpacity>
           </View>
-          <ScrollView contentContainerStyle={modalStyles.body} keyboardShouldPersistTaps="handled">
-            <Text variant="label" color={colors.text.secondary}>MONEDA</Text>
-            <View style={modalStyles.segRow}>
+          <ScrollView contentContainerStyle={m.body} keyboardShouldPersistTaps="handled">
+            <Text style={m.label}>MONEDA</Text>
+            <View style={m.segRow}>
               {(['ARS', 'USD'] as SavingCurrency[]).map(c => (
-                <TouchableOpacity key={c} style={[modalStyles.seg, currency === c && modalStyles.segActive]} onPress={() => setCurrency(c)}>
-                  <Text variant="label" style={{ color: currency === c ? colors.white : colors.text.secondary }}>
+                <TouchableOpacity key={c} style={[m.seg, currency === c && m.segActive]} onPress={() => setCurrency(c)}>
+                  <Text style={[m.segText, currency === c && m.segTextActive]}>
                     {c === 'ARS' ? '🇦🇷 Pesos' : '💵 Dólares'}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
-            <Text variant="label" color={colors.text.secondary}>DESCRIPCIÓN</Text>
-            <TextInput
-              style={modalStyles.input}
-              value={label}
-              onChangeText={setLabel}
-              placeholder={currency === 'USD' ? 'Ej: Dólares billete...' : 'Ej: Cuenta bancaria, Efectivo...'}
-              placeholderTextColor={colors.text.tertiary}
-              maxLength={60}
-            />
-            <Text variant="label" color={colors.text.secondary}>MONTO ({currency})</Text>
-            <TextInput
-              style={modalStyles.input}
-              value={amount}
-              onChangeText={setAmount}
-              placeholder={currency === 'USD' ? '500' : '200000'}
-              placeholderTextColor={colors.text.tertiary}
-              keyboardType="decimal-pad"
-            />
-            <TouchableOpacity style={[modalStyles.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
-              {saving ? <ActivityIndicator size="small" color={colors.bg.primary} /> : <Text style={modalStyles.saveBtnText}>Guardar</Text>}
+            <Text style={m.label}>DESCRIPCIÓN</Text>
+            <TextInput style={m.input} value={label} onChangeText={setLabel} placeholder={currency === 'USD' ? 'Dólares billete...' : 'Cuenta bancaria, Efectivo...'} placeholderTextColor={C.muted} maxLength={60} />
+            <Text style={m.label}>MONTO ({currency})</Text>
+            <TextInput style={m.input} value={amount} onChangeText={setAmount} placeholder={currency === 'USD' ? '500' : '200000'} placeholderTextColor={C.muted} keyboardType="decimal-pad" />
+            <TouchableOpacity style={[m.saveBtn, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={m.saveBtnText}>Guardar</Text>}
             </TouchableOpacity>
           </ScrollView>
         </SafeAreaView>
@@ -519,17 +414,26 @@ function AddSavingModal({ visible, initial, onClose, onSave }: {
   );
 }
 
-const modalStyles = StyleSheet.create({
-  sheet:       { flex: 1, backgroundColor: colors.bg.primary },
-  handle:      { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border.default, alignSelf: 'center', marginTop: spacing[3] },
-  header:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing[5], paddingTop: spacing[3] },
-  body:        { padding: spacing[5], gap: spacing[3], paddingBottom: spacing[10] },
-  segRow:      { flexDirection: 'row', gap: spacing[2] },
-  seg:         { flex: 1, paddingVertical: spacing[3], borderRadius: 10, borderWidth: 1, borderColor: colors.border.default, backgroundColor: colors.bg.card, alignItems: 'center' },
-  segActive:   { backgroundColor: colors.primary, borderColor: colors.primary },
-  input:       { backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, borderRadius: 10, paddingHorizontal: spacing[4], paddingVertical: spacing[4], color: colors.text.primary, fontFamily: 'Montserrat_400Regular', fontSize: 14 },
-  saveBtn:     { marginTop: spacing[4], backgroundColor: colors.neon, borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center' },
-  saveBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.bg.primary },
+const m = StyleSheet.create({
+  sheet:         { flex: 1, backgroundColor: C.card },
+  handle:        { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginTop: spacing[3] },
+  header:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing[5], paddingTop: spacing[3] },
+  headerTitle:   { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: C.text },
+  body:          { padding: spacing[5], gap: spacing[3], paddingBottom: spacing[10] },
+  label:         { fontFamily: 'Montserrat_600SemiBold', fontSize: 11, color: C.muted, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: -spacing[1] },
+  input:         { backgroundColor: C.light, borderRadius: 12, paddingHorizontal: spacing[4], paddingVertical: spacing[4], color: C.text, fontFamily: 'Montserrat_400Regular', fontSize: 15, borderWidth: 1, borderColor: C.border },
+  segRow:        { flexDirection: 'row', gap: spacing[2] },
+  seg:           { flex: 1, paddingVertical: spacing[3], borderRadius: 12, borderWidth: 1.5, borderColor: C.border, alignItems: 'center', backgroundColor: C.light },
+  segActive:     { backgroundColor: C.blue, borderColor: C.blue },
+  segText:       { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.sub },
+  segTextActive: { color: '#FFF' },
+  saveBtn:       { marginTop: spacing[2], backgroundColor: C.blue, borderRadius: 14, height: 54, alignItems: 'center', justifyContent: 'center' },
+  saveBtnText:   { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#FFF' },
+  amountBox:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: C.light, borderRadius: 16, padding: spacing[5], borderWidth: 1.5, borderColor: C.border },
+  prefix:        { fontFamily: 'Montserrat_700Bold', fontSize: 32, color: C.muted },
+  amountInput:   { fontFamily: 'Montserrat_700Bold', fontSize: 40, color: C.text, minWidth: 80, textAlign: 'center' },
+  emojiBtn:      { width: 48, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: C.border, backgroundColor: C.light },
+  emojiBtnActive:{ borderColor: C.blue, backgroundColor: C.blue + '12' },
 });
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -539,22 +443,25 @@ export default function SavingsScreen() {
   const { savings, isLoading: isSavingsLoading, fetchAll, addSaving, updateSaving, deleteSaving } = useSavingsStore();
   const { goals, fetchGoals, addGoal, updateGoal, deleteGoal, addToGoal } = useGoalsStore();
 
-  const [usdRate,          setUsdRate]          = useState<number | null>(null);
-  const [showGoalModal,    setShowGoalModal]     = useState(false);
-  const [showSavingModal,  setShowSavingModal]   = useState(false);
-  const [editingGoal,      setEditingGoal]       = useState<Partial<SavingsGoal> | null>(null);
-  const [editingSaving,    setEditingSaving]      = useState<Partial<Saving> | null>(null);
-  const [aportarGoal,      setAportarGoal]       = useState<SavingsGoal | null>(null);
-  const [isRefreshing,     setIsRefreshing]      = useState(false);
+  const [usdRate,         setUsdRate]        = useState<number | null>(null);
+  const [budgetPlan,      setBudgetPlan]      = useState<BudgetPlan | null>(null);
+  const [showGoalModal,   setShowGoalModal]   = useState(false);
+  const [showSavingModal, setShowSavingModal] = useState(false);
+  const [editingGoal,     setEditingGoal]     = useState<Partial<SavingsGoal> | null>(null);
+  const [editingSaving,   setEditingSaving]   = useState<Partial<Saving> | null>(null);
+  const [aportarGoal,     setAportarGoal]     = useState<SavingsGoal | null>(null);
+  const [isRefreshing,    setIsRefreshing]    = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
     fetchAll(user.id);
     fetchGoals(user.id);
-    try {
-      const rate = await fetchDolarRateNow('blue');
-      setUsdRate(rate);
-    } catch { /* sin cotización */ }
+    const [rate, plan] = await Promise.allSettled([
+      fetchDolarRateNow('blue'),
+      fetchBudgetPlan(user.id),
+    ]);
+    if (rate.status === 'fulfilled') setUsdRate(rate.value);
+    if (plan.status === 'fulfilled') setBudgetPlan(plan.value);
   }, [user?.id]);
 
   useEffect(() => { load(); }, [load]);
@@ -565,25 +472,9 @@ export default function SavingsScreen() {
     setIsRefreshing(false);
   };
 
-  // ── Totals ────────────────────────────────────────────────────────────────
-  const totalARS      = savings.filter(s => s.currency === 'ARS').reduce((s, v) => s + v.amount, 0);
-  const totalUSDInARS = savings.filter(s => s.currency === 'USD').reduce((s, v) => s + (usdRate ? v.amount * usdRate : 0), 0);
-  const hasData       = totalARS + totalUSDInARS > 0 || goals.length > 0;
-
-  const insights   = buildInsights(totalARS, totalUSDInARS);
-  const advisorCtx = [
-    `Tengo un capital total de ${formatCurrency(totalARS + totalUSDInARS)}.`,
-    `Distribución: ${formatCurrency(totalARS)} en pesos, ${formatCurrency(totalUSDInARS)} en dólares (en pesos).`,
-    goals.length > 0
-      ? `Mis metas de ahorro: ${goals.map(g => `"${g.title}" — ${formatCurrency(g.current_amount)} de ${formatCurrency(g.target_amount)}`).join(', ')}.`
-      : '',
-    '¿Cómo podría mejorar mi distribución de capital y rendimiento en Argentina hoy?',
-  ].filter(Boolean).join(' ');
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-  const openAddGoal    = () => { setEditingGoal(null);    setShowGoalModal(true); };
+  const openAddGoal    = () => { setEditingGoal(null);   setShowGoalModal(true); };
   const openEditGoal   = (g: SavingsGoal) => { setEditingGoal(g); setShowGoalModal(true); };
-  const openAddSaving  = () => { setEditingSaving(null);  setShowSavingModal(true); };
+  const openAddSaving  = () => { setEditingSaving(null); setShowSavingModal(true); };
   const openEditSaving = (s: Saving) => { setEditingSaving(s); setShowSavingModal(true); };
 
   const handleSaveGoal = async (data: Omit<SavingsGoal, 'id' | 'user_id' | 'created_at'>) => {
@@ -601,154 +492,108 @@ export default function SavingsScreen() {
   const confirmDeleteGoal   = (id: string) => Alert.alert('Eliminar meta', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteGoal(id) }]);
   const confirmDeleteSaving = (id: string) => Alert.alert('Eliminar ahorro', '¿Seguro?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteSaving(id) }]);
 
+  const totalARS      = savings.filter(s => s.currency === 'ARS').reduce((s, v) => s + v.amount, 0);
+  const totalUSDInARS = savings.filter(s => s.currency === 'USD').reduce((s, v) => s + (usdRate ? v.amount * usdRate : 0), 0);
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={C.blue} />}
       >
-        {/* ── Header ──────────────────────────────────────────────────────── */}
-        <View style={styles.header}>
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <View style={s.header}>
           <View>
-            <Text variant="h4">Ahorros</Text>
-            <Text variant="caption" color={colors.text.tertiary}>Capital y metas de ahorro</Text>
+            <Text style={s.screenTitle}>Ahorros</Text>
+            {(totalARS + totalUSDInARS) > 0 && (
+              <Text style={s.screenSub}>Capital: {formatCurrency(totalARS + totalUSDInARS)}</Text>
+            )}
           </View>
-          <TouchableOpacity onPress={openAddSaving} style={styles.addHeaderBtn}>
-            <Ionicons name="add" size={22} color={colors.primary} />
+          <TouchableOpacity style={s.iconBtn} onPress={openAddSaving} activeOpacity={0.7}>
+            <Ionicons name="add" size={22} color={C.blue} />
           </TouchableOpacity>
         </View>
 
-        {/* ── Empty State ──────────────────────────────────────────────────── */}
-        {!hasData && !isSavingsLoading ? (
-          <SavingsEmptyState onAddCash={openAddSaving} onAddGoal={openAddGoal} />
-        ) : (<>
+        {/* ── Tus metas ──────────────────────────────────────────────────── */}
+        <View style={s.sectionRow}>
+          <Text style={s.sectionTitle}>Tus metas</Text>
+          <TouchableOpacity onPress={openAddGoal}>
+            <Text style={s.seeAll}>Ver todas</Text>
+          </TouchableOpacity>
+        </View>
 
-          {/* ── Capital total ────────────────────────────────────────────── */}
-          {(totalARS + totalUSDInARS) > 0 && (
-            <TotalCapitalCard
-              totalARS={totalARS}
-              totalUSDInARS={totalUSDInARS}
+        {goals.length === 0 ? (
+          <TouchableOpacity style={s.emptyCard} onPress={openAddGoal} activeOpacity={0.8}>
+            <View style={[s.emptyIcon, { backgroundColor: C.violet + '14' }]}>
+              <Text style={{ fontSize: 22 }}>🎯</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.emptyTitle}>Creá tu primera meta</Text>
+              <Text style={s.emptySub}>Vacaciones, auto, fondo de emergencia...</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={C.muted} />
+          </TouchableOpacity>
+        ) : (
+          goals.slice(0, 3).map(g => (
+            <GoalCard
+              key={g.id} goal={g}
+              onEdit={openEditGoal}
+              onDelete={confirmDeleteGoal}
+              onAportar={(goal) => setAportarGoal(goal)}
             />
-          )}
+          ))
+        )}
 
-          {/* ── Alerta inflación ─────────────────────────────────────────── */}
-          {(totalARS + totalUSDInARS) > 0 && (() => {
-            const capitalSinInvertir = totalARS + totalUSDInARS;
-            const perdidaProyectada = Math.round(capitalSinInvertir * 0.36);
-            return (
-              <View style={styles.inflationAlert}>
-                <View style={styles.inflationAlertTop}>
-                  <Ionicons name="warning-outline" size={18} color={colors.red} />
-                  <Text variant="bodySmall" color={colors.red} style={{ fontFamily: 'Montserrat_700Bold', flex: 1 }}>
-                    Tu capital está perdiendo contra la inflación
-                  </Text>
-                </View>
-                <Text variant="caption" color={colors.text.secondary} style={{ lineHeight: 18 }}>
-                  Si no invertís, podés perder hasta{' '}
-                  <Text variant="caption" color={colors.red} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                    {formatCurrency(perdidaProyectada)}
-                  </Text>
-                  {' '}en 12 meses.
-                </Text>
-                <TouchableOpacity
-                  style={styles.inflationAlertCta}
-                  onPress={() => router.push('/(app)/simulator' as any)}
-                  activeOpacity={0.8}
-                >
-                  <Text variant="caption" color={colors.primary} style={{ fontFamily: 'Montserrat_700Bold' }}>
-                    Simular rendimiento →
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            );
-          })()}
+        {/* ── Plan Inteligente ───────────────────────────────────────────── */}
+        {budgetPlan && (
+          <SmartPlanCard
+            amount={budgetPlan.potentialSavings}
+            onPress={() => router.push('/(app)/savings-plan' as any)}
+          />
+        )}
 
-          {/* ── Metas de ahorro ──────────────────────────────────────────── */}
-          <View style={styles.sectionHeader}>
-            <Text variant="label" color={colors.text.tertiary}>METAS DE AHORRO</Text>
-            <View style={{ flexDirection: 'row', gap: spacing[3], alignItems: 'center' }}>
-              {goals.length > 0 && (
-                <Text variant="caption" color={colors.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                  Ver todas →
-                </Text>
-              )}
-              <TouchableOpacity onPress={openAddGoal} style={styles.addBtn}>
-                <Ionicons name="add" size={15} color={colors.neon} />
-                <Text variant="label" color={colors.neon}>Nueva</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {goals.length === 0 ? (
-            <TouchableOpacity style={styles.emptySection} onPress={openAddGoal} activeOpacity={0.8}>
-              <View style={styles.emptySectionIcon}>
-                <Text style={{ fontSize: 22 }}>🎯</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>Creá tu primera meta</Text>
-                <Text variant="caption" color={colors.text.tertiary}>Vacaciones, auto, fondo de emergencia...</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-            </TouchableOpacity>
-          ) : (
-            goals.map(g => (
-              <GoalCard key={g.id} goal={g} onEdit={openEditGoal} onDelete={confirmDeleteGoal} onAportar={(goal) => setAportarGoal(goal)} />
-            ))
-          )}
-
-          {/* ── Efectivo y reservas ──────────────────────────────────────── */}
-          <View style={styles.sectionHeader}>
-            <Text variant="label" color={colors.text.tertiary}>EFECTIVO Y RESERVAS</Text>
-            <TouchableOpacity onPress={openAddSaving} style={styles.addBtn}>
-              <Ionicons name="add" size={15} color={colors.neon} />
-              <Text variant="label" color={colors.neon}>Agregar</Text>
-            </TouchableOpacity>
-          </View>
-
-          {savings.length === 0 ? (
-            <TouchableOpacity style={styles.emptySection} onPress={openAddSaving} activeOpacity={0.8}>
-              <View style={[styles.emptySectionIcon, { backgroundColor: colors.neon + '15' }]}>
-                <Ionicons name="cash-outline" size={20} color={colors.neon} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text variant="bodySmall" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>Agregar efectivo</Text>
-                <Text variant="caption" color={colors.text.tertiary}>Pesos, dólares, cuenta bancaria...</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
-            </TouchableOpacity>
-          ) : (
-            savings.map(s => (
-              <SavingCard key={s.id} saving={s} usdRate={usdRate} onEdit={openEditSaving} onDelete={confirmDeleteSaving} />
-            ))
-          )}
-
-          {/* ── Insights ─────────────────────────────────────────────────── */}
-          {insights.map((insight, idx) => (
-            <View key={idx} style={styles.insightCard}>
-              <Ionicons name="bulb-outline" size={16} color={colors.yellow} />
-              <Text variant="caption" color={colors.text.secondary} style={{ flex: 1, lineHeight: 18 }}>{insight}</Text>
-            </View>
-          ))}
-
-          {/* ── CTAs ─────────────────────────────────────────────────────── */}
-          <TouchableOpacity
-            style={styles.advisorBtn}
-            onPress={() => router.push({ pathname: '/(app)/advisor', params: { initialContext: advisorCtx } } as any)}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.bg.primary} />
-            <Text style={styles.advisorBtnText}>Hablar con el asesor sobre mi capital</Text>
-            <Ionicons name="arrow-forward" size={14} color={colors.bg.primary} />
+        {/* ── Bolsillos ──────────────────────────────────────────────────── */}
+        <View style={s.sectionRow}>
+          <Text style={s.sectionTitle}>Bolsillos</Text>
+          <TouchableOpacity onPress={openAddSaving}>
+            <Text style={s.seeAll}>Ver todos</Text>
           </TouchableOpacity>
+        </View>
 
-          <TouchableOpacity style={styles.simBtn} onPress={() => router.push('/(app)/simulator' as any)} activeOpacity={0.85}>
-            <Ionicons name="trending-up-outline" size={16} color={colors.primary} />
-            <Text variant="label" color={colors.primary}>Simular rendimientos</Text>
-            <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+        {savings.length === 0 ? (
+          <TouchableOpacity style={s.emptyCard} onPress={openAddSaving} activeOpacity={0.8}>
+            <View style={[s.emptyIcon, { backgroundColor: C.green + '14' }]}>
+              <Ionicons name="cash-outline" size={20} color={C.green} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.emptyTitle}>Agregar efectivo</Text>
+              <Text style={s.emptySub}>Pesos, dólares, cuenta bancaria...</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={C.muted} />
           </TouchableOpacity>
+        ) : (
+          savings.map(sv => (
+            <SavingItem
+              key={sv.id} saving={sv} usdRate={usdRate}
+              onEdit={openEditSaving}
+              onDelete={confirmDeleteSaving}
+            />
+          ))
+        )}
 
-        </>)}
+        {/* ── Advisor CTA ────────────────────────────────────────────────── */}
+        <TouchableOpacity
+          style={s.advisorBtn}
+          onPress={() => router.push({ pathname: '/(app)/advisor', params: { initialContext: 'Quiero mejorar mis ahorros y capital.' } } as any)}
+          activeOpacity={0.85}
+        >
+          <View style={s.advisorIcon}>
+            <Ionicons name="chatbubble-ellipses-outline" size={18} color={C.blue} />
+          </View>
+          <Text style={s.advisorText}>Hablar con el asesor sobre mi capital</Text>
+          <Ionicons name="arrow-forward" size={14} color={C.blue} />
+        </TouchableOpacity>
       </ScrollView>
 
       <AddGoalModal
@@ -772,23 +617,21 @@ export default function SavingsScreen() {
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: colors.bg.primary },
-  scroll: { flexGrow: 1, paddingHorizontal: layout.screenPadding, paddingTop: spacing[4], paddingBottom: layout.tabBarHeight + spacing[6], gap: spacing[4] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  backBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border.default, alignItems: 'center', justifyContent: 'center' },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing[2] },
-  addBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: 8, borderWidth: 1, borderColor: colors.neon + '40', backgroundColor: colors.neon + '0A' },
-  emptySection: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, borderRadius: 14, padding: spacing[4] },
-  emptySectionIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.bg.elevated, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  insightCard: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3], backgroundColor: colors.yellow + '0A', borderWidth: 1, borderColor: colors.yellow + '25', borderRadius: 12, padding: spacing[4] },
-  advisorBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.neon, borderRadius: 14, paddingHorizontal: spacing[5], paddingVertical: spacing[4] },
-  advisorBtnText: { flex: 1, fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.bg.primary },
-  simBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], borderWidth: 1, borderColor: colors.primary + '40', borderRadius: 12, paddingVertical: spacing[4] },
-  addHeaderBtn: { width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, borderColor: colors.primary + '50', backgroundColor: colors.primary + '10', alignItems: 'center', justifyContent: 'center' },
-  inflationAlert: { backgroundColor: '#FEEBEE', borderWidth: 1, borderColor: '#FFCDD2', borderRadius: 14, padding: spacing[4], gap: spacing[2] },
-  inflationAlertTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  inflationAlertCta: { alignSelf: 'flex-start', paddingVertical: spacing[1] },
+const s = StyleSheet.create({
+  safe:        { flex: 1, backgroundColor: C.bg },
+  scroll:      { paddingHorizontal: layout.screenPadding, paddingTop: spacing[4], paddingBottom: layout.tabBarHeight + spacing[6], gap: spacing[4] },
+  header:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  screenTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 26, color: C.text },
+  screenSub:   { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: C.sub, marginTop: 2 },
+  iconBtn:     { width: 40, height: 40, borderRadius: 20, backgroundColor: C.blue + '12', alignItems: 'center', justifyContent: 'center' },
+  sectionRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionTitle:{ fontFamily: 'Montserrat_700Bold', fontSize: 17, color: C.text },
+  seeAll:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.blue },
+  emptyCard:   { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.card, borderRadius: 16, padding: spacing[4], ...shadow },
+  emptyIcon:   { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  emptyTitle:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: C.text, marginBottom: 2 },
+  emptySub:    { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
+  advisorBtn:  { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.blue + '0D', borderWidth: 1, borderColor: C.blue + '30', borderRadius: 16, padding: spacing[4] },
+  advisorIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: C.blue + '14', alignItems: 'center', justifyContent: 'center' },
+  advisorText: { flex: 1, fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.blue },
 });

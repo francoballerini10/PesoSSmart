@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import {
   View,
   ScrollView,
+  FlatList,
   SectionList,
   TextInput,
   StyleSheet,
@@ -34,6 +35,7 @@ import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/utils/format';
 import type { PaymentMethod, Expense, ExpenseClassification } from '@/types';
 import { PendingTransactions } from '@/components/PendingTransactions';
+import { CategoryIcon } from '@/components/CategoryIcon';
 import { BudgetRingIndicator } from '@/components/BudgetCard';
 import { useFirstVisit } from '@/hooks/useFirstVisit';
 import { FirstVisitSheet } from '@/components/FirstVisitSheet';
@@ -50,18 +52,21 @@ import {
 const DONUT_R = 34;
 const DONUT_CIRCUMF = 2 * Math.PI * DONUT_R;
 
+const DONUT_SIZE = 96;
+const DONUT_CX   = DONUT_SIZE / 2;
+
 function DonutChart({ necessary, disposable, investable, total }: {
   necessary: number; disposable: number; investable: number; total: number;
 }) {
   const segs = [
-    { value: necessary,  color: colors.accent },
-    { value: disposable, color: colors.red    },
-    { value: investable, color: colors.neon   },
+    { value: necessary,  color: '#2563EB' },
+    { value: disposable, color: '#EF4444' },
+    { value: investable, color: '#2E7D32' },
   ].filter(s => s.value > 0);
   let offset = 0;
   return (
-    <Svg width={84} height={84} viewBox="0 0 84 84">
-      <SvgCircle cx="42" cy="42" r={DONUT_R} fill="none" stroke={colors.border.subtle} strokeWidth={9} />
+    <Svg width={DONUT_SIZE} height={DONUT_SIZE} viewBox={`0 0 ${DONUT_SIZE} ${DONUT_SIZE}`}>
+      <SvgCircle cx={DONUT_CX} cy={DONUT_CX} r={DONUT_R} fill="none" stroke="#F0F0F0" strokeWidth={10} />
       {segs.map((seg, i) => {
         const len = (seg.value / total) * DONUT_CIRCUMF;
         const dashArray = `${len} ${DONUT_CIRCUMF - len}`;
@@ -69,11 +74,11 @@ function DonutChart({ necessary, disposable, investable, total }: {
         offset += len;
         return (
           <SvgCircle
-            key={i} cx="42" cy="42" r={DONUT_R}
-            fill="none" stroke={seg.color} strokeWidth={9}
+            key={i} cx={DONUT_CX} cy={DONUT_CX} r={DONUT_R}
+            fill="none" stroke={seg.color} strokeWidth={10}
             strokeDasharray={dashArray}
             strokeDashoffset={dashOffset}
-            rotation="-90" origin="42,42"
+            rotation="-90" origin={`${DONUT_CX},${DONUT_CX}`}
           />
         );
       })}
@@ -85,6 +90,68 @@ const PM_LABELS: Record<string, string> = {
   cash: 'Efectivo', debit: 'Débito', credit: 'Crédito',
   transfer: 'Transferencia', digital_wallet: 'Billetera', other: 'Otro',
 };
+
+function getCategoryEmoji(name: string, description?: string): string {
+  const n = (name + ' ' + (description ?? '')).toLowerCase();
+  if (n.includes('comida') || n.includes('restaur') || n.includes('almuerzo') || n.includes('cena') || n.includes('pizza') || n.includes('sushi') || n.includes('burger') || n.includes('hambur') || n.includes('delivery')) return '🍔';
+  if (n.includes('supermercado') || n.includes('mercado') || n.includes('verduleria') || n.includes('compra')) return '🛒';
+  if (n.includes('transporte') || n.includes('uber') || n.includes('taxi') || n.includes('remis') || n.includes('nafta') || n.includes('subte') || n.includes('colect') || n.includes('tren') || n.includes('auto')) return '🚕';
+  if (n.includes('salud') || n.includes('farmacia') || n.includes('medico') || n.includes('médico') || n.includes('doctor') || n.includes('clinica') || n.includes('hospital')) return '🩺';
+  if (n.includes('entretenimiento') || n.includes('cine') || n.includes('teatro') || n.includes('juego') || n.includes('netflix') || n.includes('spotify') || n.includes('streaming')) return '🎮';
+  if (n.includes('ropa') || n.includes('calzado') || n.includes('zapato') || n.includes('zapatilla') || n.includes('indumentaria')) return '👗';
+  if (n.includes('viaje') || n.includes('hotel') || n.includes('vuelo') || n.includes('airbnb') || n.includes('turismo')) return '✈️';
+  if (n.includes('educacion') || n.includes('educación') || n.includes('curso') || n.includes('libro') || n.includes('universidad') || n.includes('colegio')) return '📚';
+  if (n.includes('mascota') || n.includes('veterinar') || n.includes('perro') || n.includes('gato')) return '🐾';
+  if (n.includes('gym') || n.includes('deporte') || n.includes('fitness') || n.includes('cancha')) return '🏋️';
+  if (n.includes('bar') || n.includes('cerveza') || n.includes('trago') || n.includes('boliche') || n.includes('disco')) return '🍻';
+  if (n.includes('café') || n.includes('cafe') || n.includes('starbucks') || n.includes('cafeteria')) return '☕';
+  if (n.includes('luz') || n.includes('gas') || n.includes('agua') || n.includes('internet') || n.includes('servicio') || n.includes('telefono') || n.includes('teléfono')) return '💡';
+  if (n.includes('alquiler') || n.includes('expensa') || n.includes('inmobiliaria')) return '🏠';
+  if (n.includes('tecnolog') || n.includes('celular') || n.includes('computador') || n.includes('electronica')) return '📱';
+  if (n.includes('regalo') || n.includes('cumple') || n.includes('fiesta')) return '🎁';
+  if (n.includes('banco') || n.includes('tarjeta') || n.includes('prestamo') || n.includes('cuota')) return '💳';
+  if (n.includes('seguro')) return '🛡️';
+  return '🧾';
+}
+
+// ─── Keyword-based category match scoring ─────────────────────────────────────
+
+function computeCategoryMatches(description: string, categories: any[]): Array<{ category: any; score: number }> {
+  const desc = description.toLowerCase();
+  const kws: Record<string, string[]> = {
+    'comida y restaurantes': ['restaurante', 'comida', 'almuerzo', 'cena', 'pizza', 'sushi', 'burger', 'hambur', 'delivery', 'pedidosya', 'rappi', 'mcdonalds', 'kfc'],
+    'supermercado': ['supermercado', 'mercado', 'verduleria', 'carrefour', 'jumbo', 'coto', 'changomas', 'disco '],
+    'café y bebidas': ['cafe', 'café', 'starbucks', 'cafeteria', 'coffee', 'tostado'],
+    'transporte': ['uber', 'taxi', 'remis', 'subte', 'colect', 'tren', 'nafta', 'combustible', 'peaje', 'cabify', 'didi'],
+    'salud': ['farmacia', 'medico', 'médico', 'doctor', 'clinica', 'hospital', 'turno', 'consulta', 'dentista', 'odontologo'],
+    'entretenimiento': ['cine', 'teatro', 'netflix', 'spotify', 'disney', 'streaming', 'juego', 'steam', 'playstation', 'prime'],
+    'ropa y moda': ['ropa', 'calzado', 'zapato', 'zapatilla', 'indumentaria', 'zara', 'moda', 'prenda'],
+    'hogar y servicios': ['alquiler', 'expensa', 'inmobiliaria', 'luz ', 'gas ', 'agua ', 'internet', 'telefono', 'plomero', 'electricista', 'servicio'],
+    'educación': ['curso', 'libro', 'universidad', 'colegio', 'escuela', 'ingles', 'idioma', 'udemy', 'capacitacion'],
+    'deporte y gym': ['gym', 'deporte', 'fitness', 'cancha', 'natacion', 'pileta', 'yoga', 'running', 'atletismo'],
+    'viajes y alojamiento': ['hotel', 'vuelo', 'airbnb', 'turismo', 'viaje', 'agencia', 'aerolinea', 'alojamiento'],
+    'seguros': ['seguro', 'poliza', 'cobertura'],
+    'suscripciones': ['suscripcion', 'suscripción', 'membresia', 'membresía', 'renovacion'],
+    'bancos y finanzas': ['banco', 'tarjeta', 'prestamo', 'cuota', 'credito', 'debito', 'comision'],
+    'impuestos': ['impuesto', 'afip', 'arba', 'iva', 'monotributo', 'tributo'],
+    'regalos': ['regalo', 'cumple', 'fiesta', 'sorpresa'],
+    'cuidado personal': ['peluqueria', 'barberia', 'estetica', 'cosmetica', 'spa', 'masaje', 'peluquer'],
+    'ocio y salidas': ['bar', 'boliche', 'disco', 'salida', 'cerveza', 'trago', 'pub'],
+  };
+  const scored = categories.map((cat: any) => {
+    const catName = (cat.name_es ?? '').toLowerCase();
+    let score = 0;
+    const catKws = kws[catName] ?? catName.split(/[\s&\/]+/).filter((w: string) => w.length > 3);
+    for (const kw of catKws) { if (desc.includes(kw)) { score = 85; break; } }
+    if (score === 0) {
+      for (const w of catName.split(/[\s&\/]+/)) {
+        if (w.length > 3 && desc.includes(w)) { score = 60; break; }
+      }
+    }
+    return { category: cat, score };
+  }).filter((r: any) => r.score > 0).sort((a: any, b: any) => b.score - a.score);
+  return scored.map((r: any, i: number) => ({ ...r, score: Math.max(30, r.score - i * 5) }));
+}
 
 const expenseSchema = z.object({
   description: z.string().min(1, 'Describí el gasto.').max(100),
@@ -674,6 +741,73 @@ const shareStyles = StyleSheet.create({
   btnText:      { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#fff' },
 });
 
+// ─── SinClasifInbox ───────────────────────────────────────────────────────────
+
+function SinClasifInbox({ expenses, pendingTxs, categories, userId, onClassify, onConfirmedPending }: {
+  expenses: Expense[];
+  pendingTxs: any[];
+  categories: any[];
+  userId: string;
+  onClassify: (e: Expense) => void;
+  onConfirmedPending: () => void;
+}) {
+  const unclassified = expenses.filter(e => e.category_id === null);
+
+  if (unclassified.length === 0 && pendingTxs.length === 0) {
+    return (
+      <View style={scModalS.empty}>
+        <Ionicons name="checkmark-circle-outline" size={48} color={colors.neon} />
+        <Text variant="body" color={colors.text.secondary}>¡Todo clasificado!</Text>
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      style={{ flex: 1 }}
+      data={unclassified}
+      keyExtractor={(item) => item.id}
+      showsVerticalScrollIndicator={false}
+      ListHeaderComponent={pendingTxs.length > 0 && userId ? (
+        <View style={{ paddingHorizontal: layout.screenPadding, paddingBottom: spacing[3] }}>
+          <PendingTransactions
+            transactions={pendingTxs}
+            userId={userId}
+            isPolling={false}
+            categories={categories}
+            confirmedExpenses={expenses.filter(e => e.category_id !== null).map(e => ({ amount: e.amount, date: e.date, description: e.description }))}
+            onConfirmed={onConfirmedPending}
+          />
+        </View>
+      ) : null}
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          style={scModalS.item}
+          onPress={() => onClassify(item)}
+          activeOpacity={0.75}
+        >
+          <CategoryIcon description={item.description} size={34} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={scModalS.name} numberOfLines={1}>{item.description}</Text>
+            <Text style={scModalS.meta}>
+              {item.payment_method ? PM_LABELS[item.payment_method] ?? item.payment_method : 'Sin categoría'}
+            </Text>
+          </View>
+          <View style={{ alignItems: 'flex-end', gap: 3 }}>
+            <Text style={scModalS.amount}>-{formatCurrency(item.amount)}</Text>
+            <View style={sinClasifS.badge}>
+              <Text style={sinClasifS.label}>CLASIFICAR</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
+        </TouchableOpacity>
+      )}
+      ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: colors.border.subtle, marginLeft: layout.screenPadding + 34 + spacing[3] }} />}
+      contentContainerStyle={{ paddingBottom: spacing[8] }}
+    />
+  );
+}
+
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ExpensesScreen() {
@@ -904,6 +1038,8 @@ export default function ExpensesScreen() {
   const [isPolling,         setIsPolling]         = useState(false);
   const [gmailTokenExpired, setGmailTokenExpired] = useState(false);
   const [inCoupleMode,  setInCoupleMode]  = useState(false);
+  const [showSinClasifModal, setShowSinClasifModal] = useState(false);
+  const [categorySearch, setCategorySearch] = useState('');
 
   const loadPendingTxs = async () => {
     if (!user?.id) return;
@@ -1217,42 +1353,65 @@ export default function ExpensesScreen() {
         ))}
       </View>
 
-      {/* Resumen del mes */}
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryBody}>
-          {/* Columna izquierda — total */}
-          <View style={{ flex: 1, gap: spacing[1] }}>
-            <Text variant="caption" color={colors.text.tertiary}>TOTAL ESTE MES</Text>
-            <Text style={styles.summaryTotal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>{formatCurrency(totalThisMonth)}</Text>
-          </View>
-          {/* Columna derecha — donut + leyenda */}
-          {totalThisMonth > 0 && (
-            <View style={{ alignItems: 'flex-end', gap: spacing[2] }}>
-              <DonutChart
-                necessary={totalNecessary}
-                disposable={totalDisposable}
-                investable={totalInvestable}
-                total={totalThisMonth}
-              />
-              <View style={{ gap: spacing[1] }}>
-                {[
-                  { label: 'Necesario',    amount: totalNecessary,  color: colors.accent },
-                  { label: 'Prescindible', amount: totalDisposable, color: colors.red    },
-                  { label: 'Invertible',   amount: totalInvestable, color: colors.neon   },
-                ].map((m) => (
-                  <View key={m.label} style={styles.legendItem}>
-                    <View style={[styles.legendDot, { backgroundColor: m.color }]} />
-                    <Text variant="caption" color={colors.text.secondary}>{m.label} </Text>
-                    <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                      {formatCurrency(m.amount)}
+      {/* Resumen del mes — diseño premium */}
+      {(() => {
+        const selectedMonth = filter.month ?? new Date().getMonth() + 1;
+        const selectedYear  = filter.year  ?? new Date().getFullYear();
+        const monthName     = MONTH_NAMES[selectedMonth - 1].toLowerCase();
+        const vsPrev        = comparacion?.vsPrev;
+        const varPct        = vsPrev?.changePct ?? null;
+        const metricRows    = [
+          { label: 'Necesario',    amount: totalNecessary,  color: '#2563EB', pct: totalThisMonth > 0 ? Math.round((totalNecessary  / totalThisMonth) * 100) : 0 },
+          { label: 'Prescindible', amount: totalDisposable, color: '#EF4444', pct: totalThisMonth > 0 ? Math.round((totalDisposable / totalThisMonth) * 100) : 0 },
+          { label: 'Invertible',   amount: totalInvestable, color: '#2E7D32', pct: totalThisMonth > 0 ? Math.round((totalInvestable / totalThisMonth) * 100) : 0 },
+        ];
+        return (
+          <View style={smS.card}>
+            <View style={smS.body}>
+              {/* Izquierda — 60% */}
+              <View style={smS.left}>
+                <Text style={smS.title}>Resumen de {monthName}</Text>
+                <Text style={smS.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                  {formatCurrency(totalThisMonth)}
+                </Text>
+                {varPct !== null && (
+                  <View style={smS.varRow}>
+                    <Text style={[smS.varIcon, { color: varPct >= 0 ? '#EF4444' : '#2E7D32' }]}>
+                      {varPct >= 0 ? '▲' : '▼'}
+                    </Text>
+                    <Text style={[smS.varText, { color: varPct >= 0 ? '#EF4444' : '#2E7D32' }]}>
+                      {Math.abs(varPct)}% vs {MONTH_NAMES[selectedMonth - 2 < 0 ? 11 : selectedMonth - 2].toLowerCase()}
                     </Text>
                   </View>
-                ))}
+                )}
+                <View style={smS.metricList}>
+                  {metricRows.map((m) => (
+                    <View key={m.label} style={smS.metricRow}>
+                      <View style={[smS.dot, { backgroundColor: m.color }]} />
+                      <Text style={smS.metricLabel} numberOfLines={1}>{m.label}</Text>
+                      <Text style={smS.metricAmount}>{formatCurrency(m.amount)}</Text>
+                      <Text style={smS.metricPct}>{m.pct}%</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+              {/* Derecha — donut */}
+              <View style={smS.right}>
+                {totalThisMonth > 0 ? (
+                  <DonutChart
+                    necessary={totalNecessary}
+                    disposable={totalDisposable}
+                    investable={totalInvestable}
+                    total={totalThisMonth}
+                  />
+                ) : (
+                  <View style={smS.donutEmpty} />
+                )}
               </View>
             </View>
-          )}
-        </View>
-      </View>
+          </View>
+        );
+      })()}
 
 
       {/* Aviso: token de Gmail vencido */}
@@ -1272,67 +1431,56 @@ export default function ExpensesScreen() {
         </View>
       )}
 
-      {/* Transacciones detectadas en Gmail */}
+      {/* Spinner de polling Gmail */}
       {isPolling && (
         <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[2] }}>
           <SmartLoadingState text="Buscando gastos en Gmail..." />
         </View>
       )}
-      {(pendingTxs.length > 0 || isPolling) && user?.id && (
-        <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[4] }}>
-          <PendingTransactions
-            transactions={pendingTxs}
-            userId={user.id}
-            isPolling={isPolling}
-            categories={categories}
-            confirmedExpenses={expenses.filter(e => e.category_id !== null).map(e => ({ amount: e.amount, date: e.date, description: e.description }))}
-            onConfirmed={() => {
-              loadPendingTxs();
-              if (user?.id) fetchExpenses(user.id);
-            }}
-          />
-        </View>
-      )}
 
-      {/* Banner: gastos sin clasificar en la lista del mes */}
+      {/* Card compacto: gastos por clasificar (unclassified + pending Gmail) */}
       {(() => {
-        const sinClasif = expenses.filter(e => e.category_id === null).length;
-        if (sinClasif === 0) return null;
+        const sinClasifExpenses = expenses.filter(e => e.category_id === null);
+        const totalPending = sinClasifExpenses.length + pendingTxs.length;
+        if (totalPending === 0) return null;
+        const totalSinClasif = sinClasifExpenses.reduce((s, e) => s + e.amount, 0)
+          + pendingTxs.reduce((s: number, t: any) => s + (t.amount ?? 0), 0);
+        const previewExpenses = sinClasifExpenses.slice(0, 3);
         return (
           <View style={{ paddingHorizontal: layout.screenPadding, marginBottom: spacing[3] }}>
-            <View style={sinClasifBannerS.card}>
-              <Ionicons name="help-circle-outline" size={16} color="#F59E0B" />
-              <View style={{ flex: 1 }}>
-                <Text style={sinClasifBannerS.title}>
-                  {sinClasif} gasto{sinClasif > 1 ? 's' : ''} sin clasificar
-                </Text>
-                <Text style={sinClasifBannerS.sub}>
-                  Ya están cargados. Solo falta elegir la categoría.
-                </Text>
+            <TouchableOpacity
+              style={sinClasifBannerS.card}
+              onPress={() => setShowSinClasifModal(true)}
+              activeOpacity={0.85}
+            >
+              <View style={{ flex: 1, gap: 3 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={sinClasifBannerS.title}>Por clasificar</Text>
+                  <View style={sinClasifBannerS.countBadge}>
+                    <Text style={sinClasifBannerS.countText}>{totalPending}</Text>
+                  </View>
+                </View>
+                <Text style={sinClasifBannerS.sub}>Tenés gastos sin categoría</Text>
+                <View style={{ flexDirection: 'row', gap: 3, alignItems: 'center', marginTop: 1 }}>
+                  {previewExpenses.map((e) => (
+                    <CategoryIcon key={e.id} description={e.description} size={24} />
+                  ))}
+                  {totalPending > 3 && (
+                    <View style={sinClasifBannerS.moreDot}>
+                      <Text style={sinClasifBannerS.moreText}>···</Text>
+                    </View>
+                  )}
+                </View>
               </View>
-            </View>
+              <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                <Text style={sinClasifBannerS.total}>{formatCurrency(totalSinClasif)}</Text>
+                <Ionicons name="chevron-forward" size={16} color="#F59E0B" />
+              </View>
+            </TouchableOpacity>
           </View>
         );
       })()}
 
-      {/* Búsqueda por texto */}
-      <View style={styles.searchRow}>
-        <Ionicons name="search-outline" size={16} color={colors.text.tertiary} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Buscar gastos..."
-          placeholderTextColor={colors.text.tertiary}
-          value={filter.search}
-          onChangeText={(v) => setFilter({ search: v })}
-          returnKeyType="search"
-          autoCorrect={false}
-        />
-        {!!filter.search && (
-          <TouchableOpacity onPress={() => setFilter({ search: '' })}>
-            <Ionicons name="close-circle" size={16} color={colors.text.tertiary} />
-          </TouchableOpacity>
-        )}
-      </View>
 
     </>
   );
@@ -1346,19 +1494,9 @@ export default function ExpensesScreen() {
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
             <TouchableOpacity
               style={styles.screenshotBtn}
-              onPress={pickAndProcessScreenshot}
-              disabled={isProcessing}
+              onPress={() => { if (user?.id) { fetchExpenses(user.id); loadPendingTxs(); } }}
             >
-              {isProcessing
-                ? <ActivityIndicator size="small" color={colors.primary} />
-                : <Ionicons name="image-outline" size={20} color={colors.text.secondary} />
-              }
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.screenshotBtn}
-              onPress={() => setFilter({ classification: undefined })}
-            >
-              <Ionicons name="options-outline" size={20} color={colors.text.secondary} />
+              <Ionicons name="sync-outline" size={20} color={colors.text.secondary} />
             </TouchableOpacity>
             {user?.id && (
               <BudgetRingIndicator
@@ -1400,7 +1538,7 @@ export default function ExpensesScreen() {
         style={styles.flatList}
         sections={expenseSections}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ExpenseItem expense={item} onPress={() => openEditExpense(item)} />}
+        renderItem={({ item, index }) => <ExpenseItem expense={item} onPress={() => openEditExpense(item)} showDivider={index > 0} />}
         renderSectionHeader={({ section }) => <DayHeader date={section.title} total={section.total} />}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
@@ -1775,146 +1913,197 @@ export default function ExpensesScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Modal editar gasto confirmado */}
+      {/* Modal clasificar gasto — diseño premium */}
       <Modal
         visible={!!editingExpense}
         animationType="slide"
         presentationStyle="formSheet"
-        onRequestClose={() => { setEditingExpense(null); setEditExpenseValues(null); }}
+        onRequestClose={() => { setEditingExpense(null); setEditExpenseValues(null); setCategorySearch(''); }}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <SafeAreaView style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text variant="h4">Editar gasto</Text>
-              <TouchableOpacity onPress={() => { setEditingExpense(null); setEditExpenseValues(null); }}>
-                <Ionicons name="close" size={24} color={colors.text.primary} />
-              </TouchableOpacity>
-            </View>
+        <SafeAreaView style={clsModal.safe}>
+          {/* Header */}
+          <View style={clsModal.header}>
+            <Text style={clsModal.headerTitle}>Clasificar gasto</Text>
+            <TouchableOpacity
+              onPress={() => { setEditingExpense(null); setEditExpenseValues(null); setCategorySearch(''); }}
+              style={clsModal.closeBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="close" size={20} color="#1A1A1A" />
+            </TouchableOpacity>
+          </View>
 
-            {editExpenseValues && (
-              <ScrollView
-                contentContainerStyle={styles.modalScroll}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                <Input
-                  label="DESCRIPCIÓN"
-                  value={editExpenseValues.description}
-                  onChangeText={(v) => setEditExpenseValues((p) => p ? { ...p, description: v } : p)}
-                  autoCapitalize="sentences"
-                />
+          {editExpenseValues && (() => {
+            const bestMatches = computeCategoryMatches(editingExpense?.description ?? '', categories);
+            const searchLow = categorySearch.toLowerCase();
+            const filteredCats = categorySearch.trim()
+              ? categories.filter((c: any) => c.name_es?.toLowerCase().includes(searchLow))
+              : categories;
+            return (
+              <>
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+                  <ScrollView
+                    contentContainerStyle={clsModal.scroll}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {/* AI Banner */}
+                    <View style={clsModal.aiBanner}>
+                      <View style={clsModal.aiBadge}>
+                        <Text style={clsModal.aiBadgeText}>🤖  Asistente inteligente</Text>
+                      </View>
+                      <Text style={clsModal.aiSubtitle}>
+                        {bestMatches.length > 0
+                          ? `Encontramos ${Math.min(bestMatches.length, 3)} categorías que podrían aplicar a este gasto.`
+                          : 'Seleccioná la categoría y tipo de gasto.'}
+                      </Text>
+                    </View>
 
-                <Input
-                  label="MONTO (ARS)"
-                  value={editExpenseValues.amount}
-                  onChangeText={(v) => setEditExpenseValues((p) => p ? { ...p, amount: v } : p)}
-                  keyboardType="decimal-pad"
-                  leftIcon={<Text variant="body" color={colors.text.secondary}>$</Text>}
-                />
+                    {/* Expense Card */}
+                    <View style={clsModal.expenseCard}>
+                      <View style={clsModal.expenseIconWrap}>
+                        <CategoryIcon
+                          categoryName={(editingExpense?.category as any)?.name_es ?? ''}
+                          description={editingExpense?.description ?? ''}
+                          size={44}
+                        />
+                      </View>
+                      <View style={{ flex: 1, gap: 3 }}>
+                        <Text style={clsModal.expenseName} numberOfLines={1}>{editingExpense?.description}</Text>
+                        <Text style={clsModal.expenseMeta}>
+                          {editingExpense?.date ? formatDate(editingExpense.date) : ''}
+                          {editingExpense?.payment_method ? ' · ' + (PM_LABELS[editingExpense.payment_method] ?? editingExpense.payment_method) : ''}
+                        </Text>
+                      </View>
+                      <Text style={clsModal.expenseAmount}>{formatCurrency(editingExpense?.amount ?? 0)}</Text>
+                    </View>
 
-                <Input
-                  label="FECHA (YYYY-MM-DD)"
-                  value={editExpenseValues.date}
-                  onChangeText={(v) => setEditExpenseValues((p) => p ? { ...p, date: v } : p)}
-                  keyboardType="numbers-and-punctuation"
-                />
+                    {/* Tipo de gasto */}
+                    <View style={{ gap: 12 }}>
+                      <Text style={clsModal.sectionTitle}>Tipo de gasto</Text>
+                      <View style={clsModal.typeRow}>
+                        {([
+                          { key: 'necessary',  label: 'Necesario',   icon: 'shield-checkmark-outline', color: '#16A34A', bg: '#F0FDF4', border: '#22C55E' },
+                          { key: 'disposable', label: 'Prescindible', icon: 'cart-outline',             color: '#DC2626', bg: '#FEF2F2', border: '#EF4444' },
+                          { key: 'investable', label: 'Invertible',  icon: 'trending-up-outline',      color: '#2563EB', bg: '#EFF6FF', border: '#3B82F6' },
+                        ] as const).map(opt => {
+                          const active = editExpenseValues.classification === opt.key;
+                          return (
+                            <TouchableOpacity
+                              key={opt.key}
+                              style={[clsModal.typeBtn, active ? { backgroundColor: opt.bg, borderColor: opt.border } : clsModal.typeBtnInactive]}
+                              onPress={() => setEditExpenseValues(p => p ? { ...p, classification: opt.key as ExpenseClassification } : p)}
+                              activeOpacity={0.8}
+                            >
+                              <Ionicons name={opt.icon} size={20} color={active ? opt.color : '#C4C9D4'} />
+                              <Text style={[clsModal.typeBtnLabel, { color: active ? opt.color : '#9CA3AF' }]}>{opt.label}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
 
-                {/* Clasificación */}
-                <View>
-                  <Text variant="label" color={colors.text.secondary} style={styles.inputLabel}>
-                    CLASIFICACIÓN
-                  </Text>
-                  <View style={styles.classRow}>
-                    {(['necessary', 'disposable', 'investable'] as ExpenseClassification[]).map((cls) => {
-                      const active = editExpenseValues.classification === cls;
-                      const label = cls === 'necessary' ? 'Necesario' : cls === 'disposable' ? 'Prescindible' : 'Invertible';
-                      return (
-                        <TouchableOpacity
-                          key={cls}
-                          style={[styles.classChip, active && styles.classChipActive]}
-                          onPress={() => setEditExpenseValues((p) => p ? { ...p, classification: cls } : p)}
-                        >
-                          <Text variant="caption" color={active ? colors.neon : colors.text.secondary}>{label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                    {/* Mejores coincidencias */}
+                    {bestMatches.length > 0 && (
+                      <View style={{ gap: 12 }}>
+                        <Text style={clsModal.sectionTitle}>Mejores coincidencias ✨</Text>
+                        <View style={clsModal.matchCard}>
+                          {bestMatches.slice(0, 3).map((m, i) => {
+                            const isActive = editExpenseValues.category_id === m.category.id;
+                            return (
+                              <TouchableOpacity
+                                key={m.category.id}
+                                style={[clsModal.matchRow, i < 2 && clsModal.matchRowBorder, isActive && clsModal.matchRowActive]}
+                                onPress={() => setEditExpenseValues(p => p ? { ...p, category_id: p.category_id === m.category.id ? null : m.category.id } : p)}
+                                activeOpacity={0.75}
+                              >
+                                <Text style={clsModal.matchRank}>{i + 1}</Text>
+                                <CategoryIcon categoryName={m.category.name_es} size={30} />
+                                <Text style={clsModal.matchName} numberOfLines={1}>{m.category.name_es}</Text>
+                                <Text style={clsModal.matchPct}>{m.score}% match</Text>
+                                {isActive
+                                  ? <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
+                                  : <View style={{ width: 18 }} />
+                                }
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    )}
+
+                    {/* Todas las categorías */}
+                    <View style={{ gap: 12 }}>
+                      <Text style={clsModal.sectionTitle}>Todas las categorías</Text>
+                      <View style={clsModal.searchRow}>
+                        <Ionicons name="search-outline" size={16} color="#9CA3AF" />
+                        <TextInput
+                          style={clsModal.searchInput}
+                          placeholder="Buscar categoría"
+                          placeholderTextColor="#9CA3AF"
+                          value={categorySearch}
+                          onChangeText={setCategorySearch}
+                        />
+                      </View>
+                      <View style={clsModal.catList}>
+                        {filteredCats.map((cat: any, i: number) => {
+                          const isActive = editExpenseValues.category_id === cat.id;
+                          return (
+                            <TouchableOpacity
+                              key={cat.id}
+                              style={[clsModal.catRow, i < filteredCats.length - 1 && clsModal.catRowBorder, isActive && clsModal.catRowActive]}
+                              onPress={() => setEditExpenseValues(p => p ? { ...p, category_id: p.category_id === cat.id ? null : cat.id } : p)}
+                              activeOpacity={0.75}
+                            >
+                              <View style={[clsModal.catIconWrap, { backgroundColor: (cat.color ?? '#6366F1') + '20' }]}>
+                                <CategoryIcon categoryName={cat.name_es} size={26} />
+                              </View>
+                              <Text
+                                style={[clsModal.catName, isActive && { color: '#111827', fontFamily: 'Montserrat_600SemiBold' }]}
+                                numberOfLines={1}
+                              >
+                                {cat.name_es}
+                              </Text>
+                              {isActive
+                                ? <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+                                : <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+                              }
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+
+                    <View style={{ height: 20 }} />
+                  </ScrollView>
+                </KeyboardAvoidingView>
+
+                {/* Bottom fixed */}
+                <View style={clsModal.bottomBar}>
+                  <TouchableOpacity style={clsModal.ctaBtn} onPress={handleSaveEdit} activeOpacity={0.87}>
+                    {isSavingEdit
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : (
+                        <>
+                          <Ionicons name="checkmark" size={18} color="#fff" />
+                          <Text style={clsModal.ctaBtnText}>Clasificar gasto</Text>
+                        </>
+                      )
+                    }
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={clsModal.deleteBtnRow}
+                    onPress={() => handleDeleteExpense(editingExpense!.id)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="trash-outline" size={15} color="#EF4444" />
+                    <Text style={clsModal.deleteBtnText}>Eliminar este gasto</Text>
+                  </TouchableOpacity>
                 </View>
-
-                {/* Categoría */}
-                <View>
-                  <Text variant="label" color={colors.text.secondary} style={styles.inputLabel}>
-                    CATEGORÍA
-                  </Text>
-                  <View style={styles.categoryGrid}>
-                    {categories.map((cat) => {
-                      const isActive = editExpenseValues.category_id === cat.id;
-                      return (
-                        <TouchableOpacity
-                          key={cat.id}
-                          style={[styles.categoryGridItem, isActive && { borderColor: cat.color, backgroundColor: cat.color + '1A' }]}
-                          onPress={() => setEditExpenseValues((p) => p ? {
-                            ...p,
-                            category_id: p.category_id === cat.id ? null : cat.id,
-                          } : p)}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons
-                            name={cat.icon as any}
-                            size={20}
-                            color={isActive ? cat.color : colors.text.tertiary}
-                          />
-                          <Text
-                            variant="caption"
-                            color={isActive ? colors.text.primary : colors.text.tertiary}
-                            style={{ fontSize: 9, textAlign: 'center', lineHeight: 12 }}
-                            numberOfLines={2}
-                          >
-                            {cat.name_es}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                <Button
-                  label="GUARDAR CAMBIOS"
-                  variant="neon"
-                  size="lg"
-                  fullWidth
-                  isLoading={isSavingEdit}
-                  onPress={handleSaveEdit}
-                  style={{ marginTop: spacing[4] }}
-                />
-
-                <TouchableOpacity
-                  style={styles.shareBtn}
-                  onPress={() => {
-                    setShareExpense(editingExpense);
-                    setEditingExpense(null);
-                    setEditExpenseValues(null);
-                    setShowShareModal(true);
-                  }}
-                >
-                  <Ionicons name="people-outline" size={16} color="#8B5CF6" />
-                  <Text style={styles.shareBtnText}>COMPARTIR EN GRUPO</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.deleteBtn}
-                  onPress={() => handleDeleteExpense(editingExpense!.id)}
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.red} />
-                  <Text variant="label" color={colors.red}>ELIMINAR GASTO</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            )}
-          </SafeAreaView>
-        </KeyboardAvoidingView>
+              </>
+            );
+          })()}
+        </SafeAreaView>
       </Modal>
 
       <ShareInGroupModal
@@ -1923,6 +2112,38 @@ export default function ExpensesScreen() {
         userId={user?.id ?? ''}
         onClose={() => { setShowShareModal(false); setShareExpense(null); }}
       />
+
+      {/* Modal: inbox de gastos sin clasificar */}
+      <Modal
+        visible={showSinClasifModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowSinClasifModal(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg.primary }} edges={['top']}>
+          <View style={scModalS.header}>
+            <Text variant="h4">Por clasificar</Text>
+            <TouchableOpacity onPress={() => setShowSinClasifModal(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close" size={24} color={colors.text.primary} />
+            </TouchableOpacity>
+          </View>
+
+          <SinClasifInbox
+            expenses={expenses}
+            pendingTxs={pendingTxs}
+            categories={categories}
+            userId={user?.id ?? ''}
+            onClassify={(expense) => {
+              setShowSinClasifModal(false);
+              setTimeout(() => openEditExpense(expense), 350);
+            }}
+            onConfirmedPending={() => {
+              loadPendingTxs();
+              if (user?.id) fetchExpenses(user.id);
+            }}
+          />
+        </SafeAreaView>
+      </Modal>
 
       <FirstVisitSheet
         visible={isFirstVisit}
@@ -1958,82 +2179,78 @@ function DayHeader({ date, total }: { date: string; total: number }) {
     : d.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
   return (
     <View style={styles.dayHeader}>
-      <Text variant="label" color={colors.text.tertiary} style={{ textTransform: 'capitalize' }}>{label}</Text>
-      <Text variant="label" color={colors.text.tertiary}>{formatCurrency(total)}</Text>
+      <Text style={styles.dayLabel}>{label}</Text>
+      <Text style={styles.dayTotal}>{formatCurrency(total)}</Text>
     </View>
   );
 }
 
-function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => void }) {
+function ExpenseItem({ expense, onPress, showDivider }: { expense: Expense; onPress: () => void; showDivider?: boolean }) {
   const isUnclassified = expense.category_id === null;
-  const catColor = isUnclassified
-    ? '#9E9E9E'
-    : ((expense.category as any)?.color ??
-       (expense.classification ? CLASSIFICATION_COLOR[expense.classification] : colors.border.default));
-  const catIcon = isUnclassified ? 'help-circle-outline' : ((expense.category as any)?.icon ?? 'receipt-outline');
 
   return (
-    <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.expenseIconCircle, { backgroundColor: catColor + '22' }]}>
-        <Ionicons name={catIcon as any} size={18} color={catColor} />
-      </View>
-      <View style={styles.expenseLeft}>
-        <Text variant="bodySmall" color={colors.text.primary} numberOfLines={1}>
-          {expense.description}
-        </Text>
-        <View style={styles.expenseMeta}>
+    <View>
+      <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.75}>
+        <CategoryIcon
+          categoryName={(expense.category as any)?.name_es ?? ''}
+          description={isUnclassified ? '' : expense.description}
+          size={40}
+        />
+        <View style={styles.expenseLeft}>
+          <Text style={styles.expenseName} numberOfLines={1}>
+            {isUnclassified ? 'Sin clasificar' : (expense.category?.name_es ?? expense.description)}
+          </Text>
+          <Text style={styles.expenseMetaText} numberOfLines={1}>
+            {expense.description}
+          </Text>
+        </View>
+        <View style={styles.expenseRight}>
+          <Text style={styles.expenseAmount}>
+            -{formatCurrency(expense.amount)}
+          </Text>
           {isUnclassified ? (
             <View style={sinClasifS.badge}>
-              <View style={sinClasifS.dot} />
-              <Text style={sinClasifS.label}>Sin clasificar</Text>
+              <Text style={sinClasifS.label}>SIN CLASIFICAR</Text>
             </View>
-          ) : (
-            <>
-              {expense.category && (
-                <Text variant="caption" color={colors.text.tertiary}>{expense.category.name_es}</Text>
-              )}
-              {expense.payment_method && (
-                <Text variant="caption" color={colors.text.tertiary}>
-                  {expense.category ? ' · ' : ''}{PM_LABELS[expense.payment_method] ?? expense.payment_method}
-                </Text>
-              )}
-            </>
-          )}
+          ) : expense.classification ? (
+            <Badge classification={expense.classification} label={expense.classification} small animated />
+          ) : null}
         </View>
-      </View>
-      <View style={styles.expenseRight}>
-        <Text variant="labelMd" color={colors.text.primary}>
-          -{formatCurrency(expense.amount)}
-        </Text>
-        {!isUnclassified && expense.classification && (
-          <Badge classification={expense.classification} label={expense.classification} small animated />
-        )}
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const sinClasifS = StyleSheet.create({
   badge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#F5F5F5', borderRadius: 999,
+    backgroundColor: '#FFF3E0', borderRadius: 999,
     paddingHorizontal: 6, paddingVertical: 2,
-    borderWidth: 1, borderColor: '#E0E0E0',
     alignSelf: 'flex-start',
   },
-  dot:   { width: 5, height: 5, borderRadius: 3, backgroundColor: '#9E9E9E' },
-  label: { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: '#757575' },
+  label: { fontFamily: 'Montserrat_700Bold', fontSize: 9, color: '#F59E0B', letterSpacing: 0.3 },
 });
 
 const sinClasifBannerS = StyleSheet.create({
   card: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: '#FFFDE7', borderWidth: 1, borderColor: '#FFE082',
-    borderLeftWidth: 3, borderLeftColor: '#F59E0B',
-    borderRadius: 12, padding: spacing[3],
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFFBF0', borderWidth: 1, borderColor: '#FFE5A0',
+    borderRadius: 16, paddingVertical: 10, paddingHorizontal: 14,
+    shadowColor: '#F59E0B', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07, shadowRadius: 8, elevation: 2,
   },
-  title: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#212121' },
-  sub:   { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#8D6E63', marginTop: 1 },
+  title:      { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#1A1A1A' },
+  sub:        { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#9E8A6A' },
+  countBadge: {
+    backgroundColor: '#F59E0B', borderRadius: 10,
+    paddingHorizontal: 6, paddingVertical: 2, minWidth: 20, alignItems: 'center',
+  },
+  countText:  { fontFamily: 'Montserrat_700Bold', fontSize: 11, color: '#fff' },
+  moreDot:    {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#F5F1E8', alignItems: 'center', justifyContent: 'center',
+  },
+  moreText:   { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#9E8A6A' },
+  total:      { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#1A1A1A' },
 });
 
 const styles = StyleSheet.create({
@@ -2068,8 +2285,8 @@ const styles = StyleSheet.create({
   // ── FAB ──
   fab: {
     position:        'absolute',
-    bottom:          80,
-    right:           16,
+    bottom:          90,
+    right:           20,
     width:           56,
     height:          56,
     borderRadius:    28,
@@ -2077,34 +2294,35 @@ const styles = StyleSheet.create({
     alignItems:      'center',
     justifyContent:  'center',
     shadowColor:     '#2E7D32',
-    shadowOffset:    { width: 0, height: 4 },
-    shadowOpacity:   0.4,
-    shadowRadius:    8,
-    elevation:       6,
+    shadowOffset:    { width: 0, height: 6 },
+    shadowOpacity:   0.3,
+    shadowRadius:    12,
+    elevation:       8,
   },
 
   // ── Summary card ──
   summaryTotal: {
     fontFamily: 'Montserrat_700Bold',
-    fontSize:   28,
-    lineHeight: 34,
+    fontSize:   24,
+    lineHeight: 30,
     color:      colors.text.primary,
   },
   summaryCard: {
     marginHorizontal: layout.screenPadding,
-    marginTop:        spacing[3],
+    marginTop:        spacing[2],
     marginBottom:     spacing[2],
-    padding:          spacing[4],
+    paddingVertical:  spacing[3],
+    paddingHorizontal: spacing[4],
     backgroundColor:  colors.bg.card,
     borderWidth:      1,
     borderColor:      colors.border.default,
     borderRadius:     16,
-    gap:              spacing[3],
+    gap:              spacing[2],
     shadowColor:      '#000',
-    shadowOffset:     { width: 0, height: 2 },
-    shadowOpacity:    0.06,
-    shadowRadius:     8,
-    elevation:        3,
+    shadowOffset:     { width: 0, height: 1 },
+    shadowOpacity:    0.04,
+    shadowRadius:     6,
+    elevation:        2,
   },
   gmailExpiredBanner: {
     flexDirection:   'row',
@@ -2196,45 +2414,69 @@ const styles = StyleSheet.create({
   },
   list: {
     paddingHorizontal: layout.screenPadding,
-    paddingBottom: layout.tabBarHeight + spacing[4],
-    gap: spacing[1],
+    paddingBottom: layout.tabBarHeight + spacing[6],
+    gap: 0,
   },
   empty: {
     paddingVertical: spacing[16],
     alignItems: 'center',
     gap: spacing[4],
   },
-  // Day header
+  // Day header — actúa como separador entre grupos de días
   dayHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: spacing[1],
-    paddingTop: spacing[4],
+    paddingTop: spacing[5],
     paddingBottom: spacing[2],
   },
-  // Expense item
+  dayLabel: {
+    fontFamily: 'Montserrat_500Medium',
+    fontSize: 12,
+    color: colors.text.tertiary,
+    textTransform: 'capitalize',
+  },
+  dayTotal: {
+    fontFamily: 'Montserrat_600SemiBold',
+    fontSize: 12,
+    color: colors.text.tertiary,
+  },
+  // Expense item — lista plana estilo Revolut/Copilot
   expenseItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
     backgroundColor: colors.bg.card,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    padding: spacing[4],
+    paddingVertical: 13,
+    paddingHorizontal: spacing[4],
   },
-  expenseIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
+  itemDivider: {
+    height: 1,
+    backgroundColor: colors.border.subtle,
+    marginLeft: spacing[4] + 40 + spacing[3],
   },
-  expenseLeft: { flex: 1, gap: spacing[1] },
-  expenseMeta: { flexDirection: 'row', alignItems: 'center' },
-  expenseRight: { alignItems: 'flex-end', gap: 4 },
+  expenseLeft:      { flex: 1, gap: 3 },
+  expenseMeta:      { flexDirection: 'row', alignItems: 'center' },
+  expenseRight:     { alignItems: 'flex-end', gap: 4 },
+  expenseName: {
+    fontFamily: 'Montserrat_600SemiBold',
+    fontSize: 14,
+    color: colors.text.primary,
+    lineHeight: 18,
+  },
+  expenseMetaText: {
+    fontFamily: 'Montserrat_400Regular',
+    fontSize: 12,
+    color: colors.text.tertiary,
+    lineHeight: 16,
+  },
+  expenseAmount: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 14,
+    color: colors.text.primary,
+    lineHeight: 18,
+  },
   // Amount block (add modal)
   amountBlock: {
     backgroundColor: colors.bg.elevated,
@@ -2568,4 +2810,254 @@ const reportS = StyleSheet.create({
     borderTopColor: colors.border.subtle,
   },
   investDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+});
+
+const scModalS = StyleSheet.create({
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: layout.screenPadding, paddingVertical: spacing[4],
+    borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+  },
+  item: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    paddingVertical: 10, paddingHorizontal: layout.screenPadding,
+    backgroundColor: colors.bg.card,
+  },
+  name:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.text.primary, lineHeight: 17 },
+  meta:   { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: colors.text.tertiary, lineHeight: 15 },
+  amount: { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.text.primary, lineHeight: 17 },
+  empty:  { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
+});
+
+// ─── Summary card styles ────────────────────────────────────────────────────────
+const smS = StyleSheet.create({
+  card: {
+    marginHorizontal: layout.screenPadding,
+    marginTop:        spacing[2],
+    marginBottom:     spacing[2],
+    paddingVertical:  14,
+    paddingHorizontal: 16,
+    backgroundColor:  '#FFFFFF',
+    borderRadius:     20,
+    shadowColor:      '#000',
+    shadowOffset:     { width: 0, height: 2 },
+    shadowOpacity:    0.05,
+    shadowRadius:     12,
+    elevation:        2,
+  },
+  body: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           10,
+  },
+  left: {
+    flex: 65,
+    gap:  3,
+  },
+  right: {
+    flex:           35,
+    alignItems:     'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontFamily: 'Montserrat_600SemiBold',
+    fontSize:   12,
+    color:      '#777777',
+    lineHeight: 16,
+  },
+  amount: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize:   28,
+    lineHeight: 34,
+    color:      '#111111',
+  },
+  varRow: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           3,
+  },
+  varIcon: {
+    fontFamily: 'Montserrat_700Bold',
+    fontSize:   10,
+    lineHeight: 14,
+  },
+  varText: {
+    fontFamily: 'Montserrat_500Medium',
+    fontSize:   11,
+    lineHeight: 14,
+  },
+  metricList: {
+    gap:       3,
+    marginTop: 3,
+  },
+  metricRow: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           5,
+  },
+  dot: {
+    width:        6,
+    height:       6,
+    borderRadius: 3,
+    flexShrink:   0,
+  },
+  metricLabel: {
+    flex:       1,
+    fontFamily: 'Montserrat_400Regular',
+    fontSize:   12,
+    color:      '#444444',
+    lineHeight: 16,
+  },
+  metricAmount: {
+    fontFamily: 'Montserrat_600SemiBold',
+    fontSize:   12,
+    color:      '#111111',
+    lineHeight: 16,
+    minWidth:   60,
+    textAlign:  'right',
+  },
+  metricPct: {
+    fontFamily: 'Montserrat_400Regular',
+    fontSize:   11,
+    color:      '#999999',
+    lineHeight: 16,
+    minWidth:   26,
+    textAlign:  'right',
+  },
+  donutEmpty: {
+    width:        DONUT_SIZE,
+    height:       DONUT_SIZE,
+    borderRadius: DONUT_SIZE / 2,
+    backgroundColor: '#F0F0F0',
+  },
+});
+
+// ─── Clasificar gasto modal styles (light theme) ─────────────────────────────
+
+const clsModal = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#FFFFFF' },
+
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 22, paddingBottom: 16,
+  },
+  headerTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: '#111827' },
+  closeBtn: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  scroll: { paddingHorizontal: 20, paddingBottom: 24, gap: 22 },
+
+  // AI banner
+  aiBanner: { gap: 8 },
+  aiBadge: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#EEF2FF', borderRadius: 999,
+    paddingHorizontal: 14, paddingVertical: 7, alignSelf: 'flex-start',
+  },
+  aiBadgeText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#4F46E5' },
+  aiSubtitle: {
+    fontFamily: 'Montserrat_400Regular', fontSize: 13,
+    color: '#6B7280', lineHeight: 19,
+  },
+
+  // Expense card
+  expenseCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: '#FFFFFF', borderRadius: 22,
+    paddingVertical: 18, paddingHorizontal: 18,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07, shadowRadius: 14, elevation: 4,
+    borderWidth: 1, borderColor: '#F3F4F6',
+  },
+  expenseIconWrap: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#F9FAFB',
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    flexShrink: 0,
+  },
+  expenseName: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: '#6366F1' },
+  expenseMeta: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9CA3AF', lineHeight: 17 },
+  expenseAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: '#111827', flexShrink: 0 },
+
+  sectionTitle: { fontFamily: 'Montserrat_600SemiBold', fontSize: 15, color: '#111827' },
+
+  // Type buttons
+  typeRow: { flexDirection: 'row', gap: 8 },
+  typeBtn: {
+    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 7,
+    paddingVertical: 14, borderRadius: 14, borderWidth: 1.5,
+  },
+  typeBtnInactive: { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB' },
+  typeBtnLabel: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12 },
+
+  // Best match card
+  matchCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
+    borderWidth: 1, borderColor: '#F3F4F6',
+  },
+  matchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 14, paddingHorizontal: 16,
+  },
+  matchRowBorder: { borderBottomWidth: 1, borderBottomColor: '#F9FAFB' },
+  matchRowActive: { backgroundColor: '#F0FDF4' },
+  matchRank: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#C4C9D4', width: 16 },
+  matchName: { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#374151' },
+  matchPct: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#22C55E' },
+
+  // Search
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#F3F4F6', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  searchInput: {
+    flex: 1, fontFamily: 'Montserrat_400Regular',
+    fontSize: 14, color: '#111827', paddingVertical: 0,
+  },
+
+  // Category list
+  catList: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
+    borderWidth: 1, borderColor: '#F3F4F6',
+  },
+  catRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 13, paddingHorizontal: 16,
+  },
+  catRowBorder: { borderBottomWidth: 1, borderBottomColor: '#F9FAFB' },
+  catRowActive: { backgroundColor: '#F0FDF4' },
+  catIconWrap: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0,
+  },
+  catName: { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#374151' },
+
+  // Bottom bar
+  bottomBar: {
+    paddingHorizontal: 20, paddingBottom: 12, paddingTop: 12,
+    gap: 8, backgroundColor: '#FFFFFF',
+    borderTopWidth: 1, borderTopColor: '#F3F4F6',
+    shadowColor: '#000', shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.04, shadowRadius: 8, elevation: 4,
+  },
+  ctaBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#15803D', borderRadius: 16, paddingVertical: 17,
+    shadowColor: '#15803D', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.28, shadowRadius: 12, elevation: 5,
+  },
+  ctaBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: '#FFFFFF', letterSpacing: 0.2 },
+  deleteBtnRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    paddingVertical: 8,
+  },
+  deleteBtnText: { fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#EF4444' },
 });
