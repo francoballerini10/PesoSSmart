@@ -174,8 +174,14 @@ Formato exacto:
   "categoria": "otros",
   "clasificacion": "disposable",
   "fecha": "2026-04-08",
-  "descripcion": "Transferencia enviada desde Banco Patagonia"
+  "descripcion": "Nombre del comercio o descripción muy corta (máx 30 caracteres, sin frases largas)"
 }
+
+REGLAS PARA descripcion:
+- Máximo 30 caracteres
+- Solo el nombre del comercio o una acción muy corta: "McDonald's", "Uber", "Netflix", "Transferencia a Juan", "YPF Combustible"
+- Sin frases largas como "Compraste en..." o "Pago realizado en..."
+- Sin palabras como "Producto de", "Compra en", "Pago a"
 
 Categorías válidas: comida, cafe, transporte, servicios, entretenimiento, salud, ropa, hogar, educacion, deporte, peluqueria, seguros, otros
 Usar "cafe" para cafeterías/Starbucks/café/té. Usar "peluqueria" para cortes/tintura/estética/spa. Usar "deporte" para gym/pilates/natación. Usar "seguros" para pólizas y coberturas.
@@ -426,6 +432,30 @@ serve(async (req) => {
         '| confianza:', detection.confidence,
         '| monto pre-parseado:', preParsed.amount,
         '| warnings:', preParsed.warnings);
+
+      // ── Incoming transfer: store without Groq, skip expense flow ─────────
+      if (preParsed.operationType === 'transferencia_recibida' && preParsed.amount && preParsed.amount > 0) {
+        const senderName = preParsed.senderName ?? null;
+        const { error: incomingErr } = await supabase.from('pending_transactions').upsert({
+          user_id,
+          source: 'gmail',
+          direction: 'incoming',
+          amount: preParsed.amount,
+          currency: 'ARS',
+          merchant: senderName ?? 'Transferencia recibida',
+          sender_name: senderName,
+          transaction_date: preParsed.occurredAt ?? new Date().toISOString().split('T')[0],
+          raw_subject: msg.id,
+          status: 'pending',
+        }, { onConflict: 'user_id,raw_subject', ignoreDuplicates: true });
+        if (incomingErr) {
+          console.error('[gmail-poll] Error al insertar incoming transfer:', incomingErr);
+        } else {
+          console.log('[gmail-poll] Incoming transfer stored:', senderName, preParsed.amount);
+          newPending++;
+        }
+        continue;
+      }
 
       // ── Groq classification (enriched with pre-parsed context) ────────────
       const result = await classifyWithGroq(subject, body, preParsedContext);

@@ -64,6 +64,9 @@
         }
       ]
     ],
+    "assetBundlePatterns": [
+      "assets/**"
+    ],
     "scheme": "pesossmart",
     "experiments": {
       "typedRoutes": true

@@ -2413,21 +2413,9 @@ export default function HomeScreen() {
             </View>
           </View>
           <View style={styles.headerRight}>
-            {mpConnected && (
-              <TouchableOpacity
-                style={styles.syncBtn}
-                activeOpacity={0.7}
-                onPress={syncMpQuick}
-                disabled={mpSyncing}
-              >
-                {mpSyncing
-                  ? <ActivityIndicator size="small" color={colors.neon} />
-                  : mpSyncMsg
-                    ? <Text style={styles.syncMsg}>{mpSyncMsg}</Text>
-                    : <Ionicons name="sync-outline" size={20} color={colors.neon} />
-                }
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity style={styles.syncBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/expenses' as any)}>
+              <Ionicons name="image-outline" size={20} color="#212121" />
+            </TouchableOpacity>
             <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/advisor' as any)}>
               <Ionicons name="chatbubble-ellipses-outline" size={22} color="#212121" />
             </TouchableOpacity>

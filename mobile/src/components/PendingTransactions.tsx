@@ -7,12 +7,14 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  TextInput,
   Modal,
   Animated,
   LayoutAnimation,
   Platform,
   UIManager,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -21,8 +23,10 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@/theme';
 import { Text, Card } from '@/components/ui';
+import { CategoryIcon } from '@/components/CategoryIcon';
 import { supabase as _supabase } from '@/lib/supabase';
 const supabase = _supabase as any;
+import { matchDebt } from '@/lib/debtMatcher';
 import type { ExpenseCategory, ExpenseClassification } from '@/types';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
@@ -165,12 +169,6 @@ const sourceBadgeS = StyleSheet.create({
 
 // ─── CategorizarSheet ─────────────────────────────────────────────────────────
 
-const CLASS_OPTIONS = [
-  { key: 'necessary',  label: 'Necesario',   color: '#43a047', icon: 'shield-checkmark-outline' },
-  { key: 'disposable', label: 'Prescindible', color: '#e53935', icon: 'wallet-outline'           },
-  { key: 'investable', label: 'Invertible',   color: '#00897b', icon: 'trending-up-outline'      },
-] as const;
-
 function CategorizarSheet({
   tx,
   categories,
@@ -189,8 +187,14 @@ function CategorizarSheet({
   const suggestedCat   = categories.find(c => c.name === tx.suggested_category);
   const [selectedCat,   setSelectedCat]   = useState<string | null>(suggestedCat?.id ?? null);
   const [selectedClass, setSelectedClass] = useState<string | null>(tx.suggested_classification ?? null);
+  const [catSearch,     setCatSearch]     = useState('');
 
   const canConfirm = !!selectedCat && !!selectedClass && !isSaving;
+
+  const searchLow    = catSearch.toLowerCase();
+  const filteredCats = catSearch.trim()
+    ? categories.filter(c => c.name_es?.toLowerCase().includes(searchLow))
+    : categories;
 
   const handleConfirm = () => {
     const cat = categories.find(c => c.id === selectedCat);
@@ -198,173 +202,222 @@ function CategorizarSheet({
   };
 
   return (
-    <View style={sheetStyles.backdrop}>
+    <View style={ptSheet.outerWrap}>
       <TouchableOpacity style={{ flex: 1 }} onPress={onClose} activeOpacity={1} />
-      <View style={sheetStyles.sheet}>
-        <View style={sheetStyles.dragBar} />
+      <SafeAreaView style={ptSheet.sheet} edges={['bottom']}>
+        <View style={ptSheet.dragBar} />
 
-        <View style={sheetStyles.sheetTitleRow}>
-          <View style={{ flex: 1, gap: 3 }}>
-            <Text style={sheetStyles.sheetTitle}>Clasificar gasto</Text>
-            <Text style={sheetStyles.sheetSubtitle}>
-              El gasto ya está cargado. Elegí la categoría para clasificarlo.
-            </Text>
-          </View>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="close" size={20} color={colors.text.tertiary} />
+        {/* Header */}
+        <View style={ptSheet.header}>
+          <Text style={ptSheet.headerTitle}>Clasificar gasto</Text>
+          <TouchableOpacity onPress={onClose} style={ptSheet.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="close" size={20} color="#1A1A1A" />
           </TouchableOpacity>
         </View>
 
-        <View style={sheetStyles.header}>
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="subtitle" color={colors.text.primary} numberOfLines={1}>
-              {tx.merchant ?? 'Gasto detectado'}
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={ptSheet.scroll}>
+
+          {/* AI banner */}
+          <View style={ptSheet.aiBanner}>
+            <View style={ptSheet.aiBadge}>
+              <Text style={ptSheet.aiBadgeText}>🤖  Asistente inteligente</Text>
+            </View>
+            <Text style={ptSheet.aiSubtitle}>
+              {suggestedCat
+                ? `Sugerimos "${suggestedCat.name_es}" para este gasto.`
+                : 'Seleccioná la categoría y tipo de gasto.'}
             </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-              <Text variant="caption" color={colors.text.secondary}>
-                {formatDateLabel(tx.transaction_date) ?? 'Sin fecha'}
-              </Text>
-              <SourceBadge source={tx.source} />
+          </View>
+
+          {/* Expense card */}
+          <View style={ptSheet.expenseCard}>
+            <View style={ptSheet.expenseIconWrap}>
+              <CategoryIcon description={tx.merchant ?? tx.description ?? ''} size={44} />
+            </View>
+            <View style={{ flex: 1, gap: 4 }}>
+              <Text style={ptSheet.expenseName} numberOfLines={1}>{tx.merchant ?? 'Gasto detectado'}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {tx.transaction_date && <Text style={ptSheet.expenseMeta}>{formatDateLabel(tx.transaction_date)}</Text>}
+                <SourceBadge source={tx.source} />
+              </View>
+            </View>
+            <Text style={ptSheet.expenseAmount}>${tx.amount.toLocaleString('es-AR')}</Text>
+          </View>
+
+          {/* Tipo de gasto */}
+          <View style={{ gap: 12 }}>
+            <Text style={ptSheet.sectionTitle}>Tipo de gasto</Text>
+            <View style={ptSheet.typeRow}>
+              {([
+                { key: 'necessary',  label: 'Necesario',    icon: 'shield-checkmark-outline', color: '#16A34A', bg: '#F0FDF4', border: '#22C55E' },
+                { key: 'disposable', label: 'Prescindible', icon: 'cart-outline',              color: '#DC2626', bg: '#FEF2F2', border: '#EF4444' },
+                { key: 'investable', label: 'Invertible',   icon: 'trending-up-outline',       color: '#2563EB', bg: '#EFF6FF', border: '#3B82F6' },
+              ] as const).map(opt => {
+                const active = selectedClass === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[ptSheet.typeBtn, active ? { backgroundColor: opt.bg, borderColor: opt.border } : ptSheet.typeBtnInactive]}
+                    onPress={() => { setSelectedClass(opt.key); hapticLight(); }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name={opt.icon} size={20} color={active ? opt.color : '#C4C9D4'} />
+                    <Text style={[ptSheet.typeBtnLabel, { color: active ? opt.color : '#9CA3AF' }]}>{opt.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
-          <Text style={sheetStyles.amount}>
-            ${tx.amount.toLocaleString('es-AR')}
-          </Text>
-        </View>
 
-        <View style={{ gap: spacing[2] }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text variant="label" color={colors.text.secondary}>TIPO DE GASTO</Text>
-            {!selectedClass && (
-              <View style={sheetStyles.requiredBadge}>
-                <Text style={sheetStyles.requiredText}>OBLIGATORIO</Text>
+          {/* Sugerencia IA */}
+          {suggestedCat && (
+            <View style={{ gap: 12 }}>
+              <Text style={ptSheet.sectionTitle}>Sugerencia ✨</Text>
+              <View style={ptSheet.matchCard}>
+                <TouchableOpacity
+                  style={[ptSheet.matchRow, selectedCat === suggestedCat.id && ptSheet.matchRowActive]}
+                  onPress={() => { setSelectedCat(prev => prev === suggestedCat.id ? null : suggestedCat.id); hapticLight(); }}
+                  activeOpacity={0.75}
+                >
+                  <Text style={ptSheet.matchRank}>1</Text>
+                  <CategoryIcon categoryName={suggestedCat.name_es} size={30} />
+                  <Text style={ptSheet.matchName} numberOfLines={1}>{suggestedCat.name_es}</Text>
+                  <Text style={ptSheet.matchPct}>IA match</Text>
+                  {selectedCat === suggestedCat.id
+                    ? <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
+                    : <View style={{ width: 18 }} />
+                  }
+                </TouchableOpacity>
               </View>
-            )}
-          </View>
-          <View style={sheetStyles.classRow}>
-            {CLASS_OPTIONS.map(opt => {
-              const active = selectedClass === opt.key;
-              return (
-                <TouchableOpacity
-                  key={opt.key}
-                  style={[sheetStyles.classChip, active && { borderColor: opt.color, backgroundColor: opt.color + '18' }]}
-                  onPress={() => { setSelectedClass(opt.key); hapticLight(); }}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name={opt.icon as any} size={14} color={active ? opt.color : colors.text.tertiary} />
-                  <Text variant="caption" color={active ? opt.color : colors.text.secondary}
-                    style={active ? { fontFamily: 'Montserrat_700Bold' } : undefined}>
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+            </View>
+          )}
 
-        <View style={{ gap: spacing[2] }}>
-          <Text variant="label" color={colors.text.secondary}>CATEGORÍA</Text>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={sheetStyles.grid}
-            style={{ maxHeight: 220 }}
-          >
-            {categories.map(cat => {
-              const isActive = selectedCat === cat.id;
-              return (
-                <TouchableOpacity
-                  key={cat.id}
-                  style={[
-                    sheetStyles.catItem,
-                    isActive && { borderColor: cat.color ?? colors.primary, backgroundColor: (cat.color ?? colors.primary) + '15' },
-                  ]}
-                  onPress={() => { setSelectedCat(cat.id); hapticLight(); }}
-                  activeOpacity={0.7}
-                >
-                  <View style={[sheetStyles.catIconBox, { backgroundColor: (cat.color ?? colors.primary) + '20' }]}>
-                    <Ionicons name={cat.icon as any} size={20} color={cat.color ?? colors.primary} />
-                  </View>
-                  <Text
-                    variant="caption"
-                    color={isActive ? (cat.color ?? colors.primary) : colors.text.secondary}
-                    style={isActive ? { fontFamily: 'Montserrat_600SemiBold' } : undefined}
-                    numberOfLines={2}
+          {/* Todas las categorías */}
+          <View style={{ gap: 12 }}>
+            <Text style={ptSheet.sectionTitle}>Todas las categorías</Text>
+            <View style={ptSheet.searchRow}>
+              <Ionicons name="search-outline" size={16} color="#9CA3AF" />
+              <TextInput
+                style={ptSheet.searchInput}
+                placeholder="Buscar categoría"
+                placeholderTextColor="#9CA3AF"
+                value={catSearch}
+                onChangeText={setCatSearch}
+              />
+            </View>
+            <View style={ptSheet.catList}>
+              {filteredCats.map((cat, i) => {
+                const isActive = selectedCat === cat.id;
+                return (
+                  <TouchableOpacity
+                    key={cat.id}
+                    style={[ptSheet.catRow, i < filteredCats.length - 1 && ptSheet.catRowBorder, isActive && ptSheet.catRowActive]}
+                    onPress={() => { setSelectedCat(prev => prev === cat.id ? null : cat.id); hapticLight(); }}
+                    activeOpacity={0.75}
                   >
-                    {cat.name_es}
-                  </Text>
-                  {isActive && (
-                    <View style={[sheetStyles.checkBadge, { backgroundColor: cat.color ?? colors.primary }]}>
-                      <Ionicons name="checkmark" size={10} color={colors.white} />
+                    <View style={[ptSheet.catIconWrap, { backgroundColor: (cat.color ?? '#6366F1') + '20' }]}>
+                      <CategoryIcon categoryName={cat.name_es} size={26} />
                     </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+                    <Text
+                      style={[ptSheet.catName, isActive && { color: '#111827', fontFamily: 'Montserrat_600SemiBold' }]}
+                      numberOfLines={1}
+                    >
+                      {cat.name_es}
+                    </Text>
+                    {isActive
+                      ? <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+                      : <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+                    }
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={{ height: 16 }} />
+        </ScrollView>
+
+        {/* Bottom CTA */}
+        <View style={ptSheet.bottomBar}>
+          <TouchableOpacity
+            style={[ptSheet.ctaBtn, !canConfirm && { opacity: 0.45 }]}
+            onPress={handleConfirm}
+            disabled={!canConfirm}
+            activeOpacity={0.87}
+          >
+            {isSaving
+              ? <ActivityIndicator color="#fff" size="small" />
+              : (
+                <>
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                  <Text style={ptSheet.ctaBtnText}>
+                    {!selectedClass ? 'Elegí el tipo de gasto' : !selectedCat ? 'Elegí una categoría' : 'Clasificar gasto'}
+                  </Text>
+                </>
+              )
+            }
+          </TouchableOpacity>
+          <TouchableOpacity style={ptSheet.deleteBtnRow} onPress={onReject} disabled={isSaving} activeOpacity={0.75}>
+            <Ionicons name="trash-outline" size={15} color="#EF4444" />
+            <Text style={ptSheet.deleteBtnText}>Rechazar gasto</Text>
+          </TouchableOpacity>
         </View>
-
-        <TouchableOpacity
-          style={[sheetStyles.confirmBtn, !canConfirm && { opacity: 0.4 }]}
-          onPress={handleConfirm}
-          disabled={!canConfirm}
-          activeOpacity={0.85}
-        >
-          {isSaving
-            ? <ActivityIndicator size="small" color={colors.white} />
-            : <>
-                <Ionicons name="checkmark-circle-outline" size={18} color={colors.white} />
-                <Text style={sheetStyles.confirmBtnText}>
-                  {!selectedClass ? 'Elegí el tipo de gasto' : !selectedCat ? 'Elegí una categoría' : 'Clasificar gasto'}
-                </Text>
-              </>
-          }
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={sheetStyles.rejectBtn}
-          onPress={onReject}
-          disabled={isSaving}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="trash-outline" size={15} color={colors.red} />
-          <Text style={sheetStyles.rejectBtnText}>Eliminar este gasto</Text>
-        </TouchableOpacity>
-      </View>
+      </SafeAreaView>
     </View>
   );
 }
 
-const sheetStyles = StyleSheet.create({
-  backdrop:       { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  sheet:          { backgroundColor: '#FAFAFA', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: spacing[5], gap: spacing[4], paddingBottom: spacing[8] },
-  dragBar:        { width: 36, height: 4, borderRadius: 2, backgroundColor: '#DDDDDD', alignSelf: 'center', marginBottom: spacing[2] },
-  sheetTitleRow:  { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
-  sheetTitle:     { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: '#212121', letterSpacing: -0.3 },
-  sheetSubtitle:  { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: '#757575', lineHeight: 18 },
-  header:         { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: '#F0F0F0', borderRadius: 14, padding: spacing[4] },
-  amount:         { fontFamily: 'Montserrat_700Bold', fontSize: 26, color: colors.text.primary, lineHeight: 32, letterSpacing: -0.5 },
-  aiRow:          { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary + '12', borderRadius: 8, paddingHorizontal: spacing[2], paddingVertical: 3 },
-  classRow:       { flexDirection: 'row', gap: spacing[2] },
-  classChip:      { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], paddingVertical: spacing[3], borderRadius: 12, borderWidth: 1.5, borderColor: colors.border.default, backgroundColor: colors.bg.card },
-  requiredBadge:  { backgroundColor: colors.red + '20', borderRadius: 6, paddingHorizontal: spacing[2], paddingVertical: 2 },
-  requiredText:   { fontSize: 9, fontFamily: 'Montserrat_700Bold', color: colors.red, letterSpacing: 0.3 },
-  grid:           { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  catItem:        { width: '30%', alignItems: 'center', gap: spacing[1], padding: spacing[2], borderRadius: 14, borderWidth: 1, borderColor: colors.border.subtle, backgroundColor: colors.bg.card, position: 'relative' },
-  catIconBox:     { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
-  checkBadge:     { position: 'absolute', top: 4, right: 4, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  confirmBtn:     {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2],
-    backgroundColor: colors.primary, borderRadius: 14, paddingVertical: spacing[4],
-    shadowColor: colors.primary, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 10, elevation: 5,
-  },
-  confirmBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: colors.white, letterSpacing: 0.2 },
-  rejectBtn:      {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2],
-    paddingVertical: spacing[3], borderRadius: 12,
-    borderWidth: 1, borderColor: colors.red + '40', backgroundColor: colors.red + '08',
-  },
-  rejectBtnText:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: colors.red },
+const ptSheet = StyleSheet.create({
+  outerWrap:    { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet:        { backgroundColor: '#FFFFFF', borderTopLeftRadius: 32, borderTopRightRadius: 32, maxHeight: '92%' },
+  dragBar:      { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', alignSelf: 'center', marginTop: 12, marginBottom: 4 },
+
+  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 16, paddingBottom: 12 },
+  headerTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: '#111827' },
+  closeBtn:    { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+
+  scroll: { paddingHorizontal: 20, paddingBottom: 12, gap: 20 },
+
+  aiBanner:    { gap: 8 },
+  aiBadge:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EEF2FF', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7, alignSelf: 'flex-start' },
+  aiBadgeText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#4F46E5' },
+  aiSubtitle:  { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: '#6B7280', lineHeight: 19 },
+
+  expenseCard:     { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#FFFFFF', borderRadius: 22, paddingVertical: 16, paddingHorizontal: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 14, elevation: 4, borderWidth: 1, borderColor: '#F3F4F6' },
+  expenseIconWrap: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#F9FAFB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 },
+  expenseName:     { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#6366F1' },
+  expenseMeta:     { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9CA3AF' },
+  expenseAmount:   { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: '#111827', flexShrink: 0 },
+
+  sectionTitle: { fontFamily: 'Montserrat_600SemiBold', fontSize: 15, color: '#111827' },
+
+  typeRow:        { flexDirection: 'row', gap: 8 },
+  typeBtn:        { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 14, borderRadius: 14, borderWidth: 1.5 },
+  typeBtnInactive:{ backgroundColor: '#FFFFFF', borderColor: '#E5E7EB' },
+  typeBtnLabel:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 12 },
+
+  matchCard:      { backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, borderWidth: 1, borderColor: '#F3F4F6' },
+  matchRow:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16 },
+  matchRowActive: { backgroundColor: '#F0FDF4' },
+  matchRank:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#C4C9D4', width: 16 },
+  matchName:      { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#374151' },
+  matchPct:       { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#6366F1' },
+
+  searchRow:   { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  searchInput: { flex: 1, fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#111827', paddingVertical: 0 },
+
+  catList:      { backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, borderWidth: 1, borderColor: '#F3F4F6' },
+  catRow:       { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 13, paddingHorizontal: 16 },
+  catRowBorder: { borderBottomWidth: 1, borderBottomColor: '#F9FAFB' },
+  catRowActive: { backgroundColor: '#F0FDF4' },
+  catIconWrap:  { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 },
+  catName:      { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#374151' },
+
+  bottomBar:    { paddingHorizontal: 20, paddingBottom: 16, paddingTop: 12, gap: 8, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#F3F4F6' },
+  ctaBtn:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#15803D', borderRadius: 16, paddingVertical: 17, shadowColor: '#15803D', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 12, elevation: 5 },
+  ctaBtnText:   { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: '#FFFFFF', letterSpacing: 0.2 },
+  deleteBtnRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 8 },
+  deleteBtnText:{ fontFamily: 'Montserrat_500Medium', fontSize: 14, color: '#EF4444' },
 });
 
 // ─── SwipeAction ──────────────────────────────────────────────────────────────
@@ -592,15 +645,101 @@ export function PendingTransactions({
         cardRef.animateOut('right', () => {
           setDismissedIds(prev => new Set([...prev, tx.id]));
           onConfirmed();
+          checkOutgoingDebtMatch(tx.amount);
         });
       } else {
         setDismissedIds(prev => new Set([...prev, tx.id]));
         onConfirmed();
+        checkOutgoingDebtMatch(tx.amount);
       }
     } catch {
       Alert.alert('Error', 'No se pudo clasificar el gasto. Intentá de nuevo.');
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  // ── Chequear si el gasto saliente era un pago de deuda ────────────────────
+  const checkOutgoingDebtMatch = async (amount: number) => {
+    const { data: groupMemberships } = await supabase
+      .from('family_members')
+      .select('group_id, family_groups(group_type)')
+      .eq('user_id', userId);
+
+    const friendsGroups = (groupMemberships ?? []).filter(
+      (m: any) => m.family_groups?.group_type === 'friends',
+    );
+    if (!friendsGroups.length) return;
+
+    for (const membership of friendsGroups) {
+      const groupId = membership.group_id;
+
+      const { data: groupMembers } = await supabase
+        .from('family_members')
+        .select('user_id, profiles(full_name)')
+        .eq('group_id', groupId)
+        .neq('user_id', userId);
+
+      const { data: groupExpenses } = await supabase
+        .from('group_expenses')
+        .select('id, paid_by')
+        .eq('group_id', groupId);
+
+      if (!groupExpenses?.length) continue;
+
+      const othersExpenseIds = (groupExpenses as any[])
+        .filter((e: any) => e.paid_by !== userId)
+        .map((e: any) => e.id);
+
+      if (!othersExpenseIds.length) continue;
+
+      const { data: splits } = await supabase
+        .from('group_expense_splits')
+        .select('id, user_id, amount')
+        .in('group_expense_id', othersExpenseIds)
+        .eq('user_id', userId)
+        .eq('settled', false);
+
+      if (!splits?.length) continue;
+
+      const members = (groupMembers ?? []).map((m: any) => ({
+        userId: m.user_id,
+        fullName: m.profiles?.full_name ?? m.user_id,
+      }));
+      const splitsMapped = (splits as any[]).map((s: any) => ({
+        id: s.id, amount: Number(s.amount), debtorUserId: s.user_id,
+      }));
+
+      const matches = matchDebt(amount, null, members, splitsMapped);
+      const match = matches[0];
+      if (!match) continue;
+
+      const { data: groupData } = await supabase
+        .from('family_groups')
+        .select('name')
+        .eq('id', groupId)
+        .single();
+      const groupName = groupData?.name ?? 'el grupo';
+
+      const debtAmt = match.debtAmount.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0 });
+
+      Alert.alert(
+        '¿Pagaste una deuda?',
+        `Este monto coincide con tu deuda de ${debtAmt} en ${groupName}.`,
+        [
+          {
+            text: 'Sí, saldar',
+            onPress: async () => {
+              await supabase
+                .from('group_expense_splits')
+                .update({ settled: true })
+                .in('id', match.splitIds);
+            },
+          },
+          { text: 'No', style: 'cancel' },
+        ],
+      );
+      break;
     }
   };
 
