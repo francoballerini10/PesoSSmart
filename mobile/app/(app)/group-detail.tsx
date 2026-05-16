@@ -140,7 +140,7 @@ interface GroupDetail {
 
 interface FetchResult extends GroupDetail {
   rawExpenses: { id: string; paid_by: string }[];
-  rawSplits:   { group_expense_id: string; user_id: string; amount: number; settled: boolean }[];
+  rawSplits:   { group_expense_id: string; user_id: string; amount: number; settled: boolean; settle_requested_at: string | null }[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -518,7 +518,7 @@ async function fetchGroupDetail(groupId: string, userId: string): Promise<FetchR
     const groupExpIds = rawExpenses.map(e => e.id);
     if (groupExpIds.length > 0) {
       const { data: splitsRaw } = await db
-        .from('group_expense_splits').select('group_expense_id, user_id, amount, settled')
+        .from('group_expense_splits').select('group_expense_id, user_id, amount, settled, settle_requested_at')
         .in('group_expense_id', groupExpIds);
       rawSplits = splitsRaw ?? [];
     }
@@ -1208,17 +1208,58 @@ function ExpenseDetailModal({
   const expSplits = splits.filter(sp => sp.group_expense_id === expense.id);
   const perPerson = expense.participantCount > 0 ? expense.amount / expense.participantCount : expense.amount;
 
+  // Creditor manually confirms a specific split as settled (also used to confirm a debtor request)
   const handleSettle = async (splitUserId: string) => {
     setSettling(splitUserId);
     try {
       const { error } = await (supabase as any)
-        .from('group_expense_splits').update({ settled: true })
-        .eq('group_expense_id', expense.id).eq('user_id', splitUserId);
+        .from('group_expense_splits')
+        .update({ settled: true, settled_at: new Date().toISOString(), settle_requested_at: null })
+        .eq('group_expense_id', expense.id)
+        .eq('user_id', splitUserId);
       if (error) throw error;
       hapticSuccess();
       onRefresh(); onClose();
     } catch (err: any) {
       Alert.alert('Error', err?.message ?? 'No se pudo saldar.');
+    } finally { setSettling(null); }
+  };
+
+  // Debtor signals they paid — sets settle_requested_at, waits for creditor confirmation
+  const handleRequestSettle = async (splitUserId: string) => {
+    setSettling(splitUserId);
+    try {
+      const { error } = await (supabase as any)
+        .from('group_expense_splits')
+        .update({ settle_requested_at: new Date().toISOString() })
+        .eq('group_expense_id', expense.id)
+        .eq('user_id', splitUserId);
+      if (error) throw error;
+      hapticMedium();
+      Alert.alert(
+        '¡Aviso enviado!',
+        'Cuando la otra persona entre al grupo, podrá confirmar que recibió el pago.',
+        [{ text: 'Entendido', onPress: () => { onRefresh(); onClose(); } }],
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'No se pudo enviar el aviso.');
+    } finally { setSettling(null); }
+  };
+
+  // Creditor rejects the debtor's request — clears settle_requested_at
+  const handleRejectSettle = async (splitUserId: string) => {
+    setSettling(splitUserId);
+    try {
+      const { error } = await (supabase as any)
+        .from('group_expense_splits')
+        .update({ settle_requested_at: null })
+        .eq('group_expense_id', expense.id)
+        .eq('user_id', splitUserId);
+      if (error) throw error;
+      hapticMedium();
+      onRefresh(); onClose();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'No se pudo rechazar.');
     } finally { setSettling(null); }
   };
 
@@ -1264,19 +1305,34 @@ function ExpenseDetailModal({
               <Text style={s.sectionLabel}>PARTICIPANTES</Text>
               <View style={s.card}>
                 {expSplits.map((split, i) => {
-                  const member   = members.find(m => m.userId === split.user_id);
-                  const isPayer  = split.user_id === expense.paidById;
-                  const isMe     = split.user_id === myUserId;
-                  const iAmPayer = expense.paidById === myUserId;
-                  const canSettle = iAmPayer && !split.settled && !isPayer;
-                  const days = daysAgo(expense.date);
+                  const member       = members.find(m => m.userId === split.user_id);
+                  const isPayer      = split.user_id === expense.paidById;
+                  const isMe         = split.user_id === myUserId;
+                  const iAmPayer     = expense.paidById === myUserId;
+                  const hasPending   = !!split.settle_requested_at;
+                  const days         = daysAgo(expense.date);
+
+                  // What button to show:
+                  // - Creditor + debtor sent request  → Confirmar + Rechazar
+                  // - Creditor + no request           → Saldar (manual)
+                  // - Debtor + no request             → Avisé que pagué
+                  // - Debtor + request sent           → "Esperando confirmación" (disabled)
+                  const canConfirm        = iAmPayer && !split.settled && !isPayer && hasPending;
+                  const canManualSettle   = iAmPayer && !split.settled && !isPayer && !hasPending;
+                  const canRequestSettle  = isMe && !isPayer && !split.settled && !hasPending;
+                  const waitingConfirm    = isMe && !isPayer && !split.settled && hasPending;
 
                   let variant: BadgeVariant;
                   if (isPayer || split.settled) variant = 'paid';
+                  else if (hasPending) variant = 'pending';
                   else if (days >= 7) variant = 'overdue';
                   else variant = 'pending';
 
-                  const label = isPayer ? 'Pagado' : split.settled ? 'Pagado' : days >= 7 ? 'Atrasado' : 'Pendiente';
+                  const label = isPayer ? 'Pagado'
+                    : split.settled  ? 'Pagado'
+                    : hasPending     ? 'En revisión'
+                    : days >= 7      ? 'Atrasado'
+                    : 'Pendiente';
 
                   return (
                     <View key={split.user_id}>
@@ -1288,18 +1344,63 @@ function ExpenseDetailModal({
                           <Text style={s.expMeta}>{formatCurrency(split.amount)}</Text>
                         </View>
                         <StatusBadge variant={variant} label={label} />
-                        {canSettle && (
-                          <TouchableOpacity
-                            style={{ backgroundColor: C.green, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}
-                            onPress={() => handleSettle(split.user_id)}
-                            disabled={settling === split.user_id}>
-                            {settling === split.user_id
-                              ? <ActivityIndicator size="small" color={C.white} />
-                              : <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 11, color: C.white }}>Saldar</Text>
-                            }
-                          </TouchableOpacity>
-                        )}
                       </View>
+
+                      {/* Action buttons — below the row */}
+                      {(canConfirm || canManualSettle || canRequestSettle || waitingConfirm) && (
+                        <View style={{ flexDirection: 'row', gap: sp.sm, paddingHorizontal: sp.lg, paddingBottom: sp.md }}>
+                          {canConfirm && (
+                            <>
+                              <TouchableOpacity
+                                style={{ flex: 1, backgroundColor: C.green, borderRadius: 8, paddingVertical: 7, alignItems: 'center' }}
+                                onPress={() => handleSettle(split.user_id)}
+                                disabled={settling === split.user_id}
+                              >
+                                {settling === split.user_id
+                                  ? <ActivityIndicator size="small" color={C.white} />
+                                  : <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 12, color: C.white }}>✓ Confirmar</Text>
+                                }
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={{ flex: 1, backgroundColor: C.redLt, borderRadius: 8, paddingVertical: 7, alignItems: 'center', borderWidth: 1, borderColor: C.red + '40' }}
+                                onPress={() => handleRejectSettle(split.user_id)}
+                                disabled={settling === split.user_id}
+                              >
+                                <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: C.red }}>✕ No recibí</Text>
+                              </TouchableOpacity>
+                            </>
+                          )}
+                          {canManualSettle && (
+                            <TouchableOpacity
+                              style={{ backgroundColor: C.green, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 }}
+                              onPress={() => handleSettle(split.user_id)}
+                              disabled={settling === split.user_id}
+                            >
+                              {settling === split.user_id
+                                ? <ActivityIndicator size="small" color={C.white} />
+                                : <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: C.white }}>Saldar</Text>
+                              }
+                            </TouchableOpacity>
+                          )}
+                          {canRequestSettle && (
+                            <TouchableOpacity
+                              style={{ flex: 1, backgroundColor: C.orange + '18', borderRadius: 8, paddingVertical: 7, alignItems: 'center', borderWidth: 1, borderColor: C.orange + '50' }}
+                              onPress={() => handleRequestSettle(split.user_id)}
+                              disabled={settling === split.user_id}
+                            >
+                              {settling === split.user_id
+                                ? <ActivityIndicator size="small" color={C.orange} />
+                                : <Text style={{ fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: C.orange }}>Ya pagué 💸</Text>
+                              }
+                            </TouchableOpacity>
+                          )}
+                          {waitingConfirm && (
+                            <View style={{ flex: 1, backgroundColor: C.border, borderRadius: 8, paddingVertical: 7, alignItems: 'center' }}>
+                              <Text style={{ fontFamily: 'Montserrat_500Medium', fontSize: 12, color: C.muted }}>Esperando confirmación…</Text>
+                            </View>
+                          )}
+                        </View>
+                      )}
                     </View>
                   );
                 })}
@@ -1767,9 +1868,61 @@ function AmbiguousDebtMatchBanner({
 
 // ─── Tab: Friends Inicio ──────────────────────────────────────────────────────
 
+// ─── SettleConfirmBanner — shown to creditor when debtor marked as paid ──────
+
+function SettleConfirmBanner({
+  debtorName, amount, expenseDesc, onConfirm, onReject, loading,
+}: {
+  debtorName: string; amount: number; expenseDesc: string;
+  onConfirm: () => void; onReject: () => void; loading: boolean;
+}) {
+  return (
+    <View style={scb.wrap}>
+      <View style={scb.header}>
+        <View style={scb.iconWrap}>
+          <Text style={{ fontSize: 20 }}>💸</Text>
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={scb.title}>{debtorName} avisó que pagó</Text>
+          <Text style={scb.sub}>{expenseDesc} · {formatCurrency(amount)}</Text>
+        </View>
+      </View>
+      <Text style={scb.question}>¿Confirmás que recibiste el pago?</Text>
+      <View style={{ flexDirection: 'row', gap: sp.sm }}>
+        <TouchableOpacity style={[scb.btn, scb.confirmBtn]} onPress={onConfirm} disabled={loading} activeOpacity={0.85}>
+          {loading
+            ? <ActivityIndicator size="small" color="#FFF" />
+            : <Text style={scb.confirmText}>✓ Sí, lo recibí</Text>
+          }
+        </TouchableOpacity>
+        <TouchableOpacity style={[scb.btn, scb.rejectBtn]} onPress={onReject} disabled={loading} activeOpacity={0.85}>
+          <Text style={scb.rejectText}>✕ No llegó</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const scb = StyleSheet.create({
+  wrap:       { backgroundColor: C.orangeLt, borderWidth: 1, borderColor: C.orange + '40', borderLeftWidth: 3, borderLeftColor: C.orange, borderRadius: 16, padding: sp.lg, gap: sp.md },
+  header:     { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  iconWrap:   { width: 40, height: 40, borderRadius: 20, backgroundColor: C.orange + '18', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  title:      { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: C.text },
+  sub:        { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
+  question:   { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: C.text2 },
+  btn:        { flex: 1, borderRadius: 10, paddingVertical: 9, alignItems: 'center' },
+  confirmBtn: { backgroundColor: C.green },
+  rejectBtn:  { backgroundColor: C.redLt, borderWidth: 1, borderColor: C.red + '40' },
+  confirmText:{ fontFamily: 'Montserrat_700Bold', fontSize: 13, color: '#FFF' },
+  rejectText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.red },
+});
+
+// ─── Tab: Friends Inicio ──────────────────────────────────────────────────────
+
 function FriendsMainTab({
   detail, myUserId, onAddExpense, onMemberPress, onRemindAll,
   suggestions, onConfirmSuggestion, onDismissSuggestion, onDismissAllForTx,
+  onRefresh,
 }: {
   detail: FetchResult; myUserId: string;
   onAddExpense: () => void;
@@ -1779,6 +1932,7 @@ function FriendsMainTab({
   onConfirmSuggestion: (s: any) => void;
   onDismissSuggestion: (s: any) => void;
   onDismissAllForTx: (pendingTxId: string) => void;
+  onRefresh: () => void;
 }) {
   const owedToMe = detail.debts.filter(d => d.toUserId === myUserId);
   const myDebts  = detail.debts.filter(d => d.fromUserId === myUserId);
@@ -1788,6 +1942,45 @@ function FriendsMainTab({
   const ranking = computeRanking(detail.rawSplits, detail.rawExpenses, detail.members);
   const myRank  = ranking.findIndex(r => r.member.isMe) + 1;
   const allSettled = detail.debts.length === 0;
+
+  // Settle requests pending my confirmation (I'm the creditor)
+  const paidByMeIds = new Set(detail.rawExpenses.filter(e => e.paid_by === myUserId).map(e => e.id));
+  const pendingSettleRequests = detail.rawSplits.filter(
+    sp => sp.settle_requested_at && !sp.settled && sp.user_id !== myUserId && paidByMeIds.has(sp.group_expense_id),
+  );
+  const [settlingRequest, setSettlingRequest] = useState<string | null>(null);
+
+  const handleConfirmRequest = async (split: typeof detail.rawSplits[0]) => {
+    setSettlingRequest(split.user_id + split.group_expense_id);
+    try {
+      const { error } = await (supabase as any)
+        .from('group_expense_splits')
+        .update({ settled: true, settled_at: new Date().toISOString(), settle_requested_at: null })
+        .eq('group_expense_id', split.group_expense_id)
+        .eq('user_id', split.user_id);
+      if (error) throw error;
+      hapticSuccess();
+      onRefresh();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'No se pudo confirmar.');
+    } finally { setSettlingRequest(null); }
+  };
+
+  const handleRejectRequest = async (split: typeof detail.rawSplits[0]) => {
+    setSettlingRequest(split.user_id + split.group_expense_id);
+    try {
+      const { error } = await (supabase as any)
+        .from('group_expense_splits')
+        .update({ settle_requested_at: null })
+        .eq('group_expense_id', split.group_expense_id)
+        .eq('user_id', split.user_id);
+      if (error) throw error;
+      hapticMedium();
+      onRefresh();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'No se pudo rechazar.');
+    } finally { setSettlingRequest(null); }
+  };
 
   const insight = (() => {
     if (allSettled && detail.expenses.length > 0)
@@ -1835,6 +2028,24 @@ function FriendsMainTab({
           <Text style={s.insightSub}>{insight.sub}</Text>
         </View>
       </View>
+
+      {/* Confirmaciones de pago pendientes (yo soy el acreedor) */}
+      {pendingSettleRequests.map(split => {
+        const debtor   = detail.members.find(m => m.userId === split.user_id);
+        const expense  = detail.expenses.find(e => e.id === split.group_expense_id);
+        const key      = split.user_id + split.group_expense_id;
+        return (
+          <SettleConfirmBanner
+            key={key}
+            debtorName={debtor?.name ?? 'Alguien'}
+            amount={split.amount}
+            expenseDesc={expense?.description ?? 'Gasto compartido'}
+            loading={settlingRequest === key}
+            onConfirm={() => handleConfirmRequest(split)}
+            onReject={() => handleRejectRequest(split)}
+          />
+        );
+      })}
 
       {/* Sugerencias de pago de deudas — agrupadas por pending_tx_id */}
       {(() => {
@@ -2508,6 +2719,7 @@ export default function GroupDetailScreen() {
                   onConfirmSuggestion={handleConfirmSuggestion}
                   onDismissSuggestion={handleDismissSuggestion}
                   onDismissAllForTx={handleDismissAllForTx}
+                  onRefresh={load}
                 />
               )}
               {activeTab === 'gastos' && (

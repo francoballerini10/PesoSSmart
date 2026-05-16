@@ -406,12 +406,15 @@ const gcS = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginTop: 12,
+    alignSelf: 'stretch',
   },
   mainValue: {
     fontFamily: 'Montserrat_700Bold',
     fontSize: 28,
     textAlign: 'center',
     marginTop: 4,
+    alignSelf: 'stretch',
+    paddingHorizontal: 8,
   },
   compRow: {
     flexDirection: 'row',
