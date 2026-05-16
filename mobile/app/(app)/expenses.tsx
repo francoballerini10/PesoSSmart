@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Svg, { Circle as SvgCircle } from 'react-native-svg';
 import { ExpensesSkeletonLoader, SmartLoadingState } from '@/components/ui/SkeletonLoader';
 import { useRouter } from 'expo-router';
@@ -15,6 +15,8 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from 'react-native';
 import { useDolarRates, fetchDolarRateNow, DOLAR_LABELS, type DolarType } from '@/hooks/useDolarRates';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -43,48 +45,139 @@ import { useSavingsStore } from '@/store/savingsStore';
 import { InflationThermometer } from '@/components/InflationThermometer';
 import { DecisionHistorySection, buildOpportunities } from '@/components/DecisionHistory';
 import {
-  MONTH_NAMES, PALETTE, type CategoryRow, type MonthSummary,
+  MONTH_NAMES, PALETTE, getCategoryColor, type CategoryRow, type MonthSummary,
   buildComparacion, buildAhorroSugerencias, buildPlanProximoMes, buildObjetivo,
   ResumenCard, CategoryBreakdown, HistoryComparisonCard,
   PlanProximoMesCard, ObjetivoCard, AdvisorCTA,
 } from '@/components/ReportCards';
 
-const DONUT_R = 34;
-const DONUT_CIRCUMF = 2 * Math.PI * DONUT_R;
+// ─── Category Donut Chart ─────────────────────────────────────────────────────
 
-const DONUT_SIZE = 96;
-const DONUT_CX   = DONUT_SIZE / 2;
+function buildSegments(rows: CategoryRow[], total: number, maxCats = 8) {
+  const top  = rows.slice(0, maxCats);
+  const rest = rows.slice(maxCats).reduce((s, r) => s + r.amount, 0);
+  return [
+    ...top,
+    ...(rest > 0 ? [{ id: 'otros', name: 'Otros', color: '#9CA3AF', amount: rest, pct: rest / total }] : []),
+  ] as CategoryRow[];
+}
 
-function DonutChart({ necessary, disposable, investable, total }: {
-  necessary: number; disposable: number; investable: number; total: number;
+function CategoryDonut({ rows, total, compact = false }: {
+  rows: CategoryRow[]; total: number; compact?: boolean;
 }) {
-  const segs = [
-    { value: necessary,  color: '#2563EB' },
-    { value: disposable, color: '#EF4444' },
-    { value: investable, color: '#2E7D32' },
-  ].filter(s => s.value > 0);
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+
+  if (rows.length === 0 || total === 0) return null;
+
+  const SIZE = compact ? 96  : 176;
+  const R    = compact ? 34  : 68;
+  const SW   = compact ? 10  : 18;
+  const CX   = SIZE / 2;
+  const CIRC = 2 * Math.PI * R;
+  const segments = buildSegments(rows, total, compact ? 6 : 8);
+  const GAP_LEN  = ((compact ? 3 : 2.5) / 360) * CIRC;
   let offset = 0;
+
+  const sel = selectedIdx !== null ? segments[selectedIdx] : null;
+
   return (
-    <Svg width={DONUT_SIZE} height={DONUT_SIZE} viewBox={`0 0 ${DONUT_SIZE} ${DONUT_SIZE}`}>
-      <SvgCircle cx={DONUT_CX} cy={DONUT_CX} r={DONUT_R} fill="none" stroke="#F0F0F0" strokeWidth={10} />
-      {segs.map((seg, i) => {
-        const len = (seg.value / total) * DONUT_CIRCUMF;
-        const dashArray = `${len} ${DONUT_CIRCUMF - len}`;
-        const dashOffset = -offset;
-        offset += len;
-        return (
-          <SvgCircle
-            key={i} cx={DONUT_CX} cy={DONUT_CX} r={DONUT_R}
-            fill="none" stroke={seg.color} strokeWidth={10}
-            strokeDasharray={dashArray}
-            strokeDashoffset={dashOffset}
-            rotation="-90" origin={`${DONUT_CX},${DONUT_CX}`}
-          />
-        );
-      })}
-    </Svg>
+    <View style={compact ? cdS.wrapCompact : cdS.wrap}>
+      {/* Donut ring */}
+      <View style={{ position: 'relative', width: SIZE, height: SIZE, alignSelf: compact ? undefined : 'center' }}>
+        <Svg width={SIZE} height={SIZE}>
+          <SvgCircle cx={CX} cy={CX} r={R} fill="none" stroke={colors.border.subtle} strokeWidth={SW} />
+          {segments.map((seg, i) => {
+            const len = Math.max(0, (seg.amount / total) * CIRC - GAP_LEN);
+            const off = -offset;
+            offset += (seg.amount / total) * CIRC;
+            const dimmed = selectedIdx !== null && selectedIdx !== i;
+            return (
+              <SvgCircle
+                key={i} cx={CX} cy={CX} r={R}
+                fill="none"
+                stroke={seg.color}
+                strokeWidth={selectedIdx === i ? SW + 3 : SW}
+                strokeDasharray={`${len} ${CIRC - len}`}
+                strokeDashoffset={off}
+                strokeLinecap="butt"
+                rotation="-90" origin={`${CX},${CX}`}
+                opacity={dimmed ? 0.3 : 1}
+              />
+            );
+          })}
+        </Svg>
+        {/* Center label */}
+        <View style={[StyleSheet.absoluteFill, cdS.center]} pointerEvents="none">
+          {compact ? (
+            <Text style={cdS.centerAmountSm} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              {formatCurrency(total).replace('$ ', '$')}
+            </Text>
+          ) : sel ? (
+            <>
+              <Text style={[cdS.centerLabel, { color: sel.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {sel.name.toUpperCase()}
+              </Text>
+              <Text style={[cdS.centerAmount, { color: sel.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {Math.round(sel.pct * 100)}%
+              </Text>
+              <Text style={cdS.centerSub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {formatCurrency(sel.amount).replace('$ ', '$')}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={cdS.centerLabel}>TOTAL</Text>
+              <Text style={cdS.centerAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {formatCurrency(total).replace('$ ', '$')}
+              </Text>
+            </>
+          )}
+        </View>
+      </View>
+
+      {/* Legend grid — only in full mode */}
+      {!compact && (
+        <View style={cdS.legend}>
+          {segments.map((seg, i) => {
+            const isSelected = selectedIdx === i;
+            const isDimmed   = selectedIdx !== null && !isSelected;
+            return (
+              <TouchableOpacity
+                key={i}
+                style={[cdS.legendItem, isSelected && { backgroundColor: seg.color + '15', borderRadius: 8 }]}
+                onPress={() => setSelectedIdx(isSelected ? null : i)}
+                activeOpacity={0.7}
+              >
+                <View style={[cdS.legendDot, { backgroundColor: seg.color, opacity: isDimmed ? 0.35 : 1 }]} />
+                <Text style={[cdS.legendName, isDimmed && { opacity: 0.4 }]} numberOfLines={1}>{seg.name}</Text>
+                <Text style={[cdS.legendPct, { color: isSelected ? seg.color : (isDimmed ? colors.text.tertiary : seg.color) }]}>
+                  {Math.round(seg.pct * 100)}%
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+    </View>
   );
 }
+
+const cdS = StyleSheet.create({
+  wrap:          { gap: 20 },
+  wrapCompact:   {},
+  center:        { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  centerLabel:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.text.tertiary, letterSpacing: 0.6 },
+  centerAmount:  { fontFamily: 'Montserrat_800ExtraBold', fontSize: 16, color: colors.text.primary, marginTop: 2 },
+  centerSub:     { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: colors.text.secondary, marginTop: 1 },
+  centerAmountSm:{ fontFamily: 'Montserrat_700Bold', fontSize: 9, color: colors.text.primary, textAlign: 'center', paddingHorizontal: 4 },
+  legend:        { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-start' },
+  legendItem:    { flexDirection: 'row', alignItems: 'center', gap: 5, width: '47%', paddingVertical: 3, paddingHorizontal: 4 },
+  legendDot:     { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  legendName:    { flex: 1, fontFamily: 'Montserrat_500Medium', fontSize: 11, color: colors.text.secondary },
+  legendPct:     { fontFamily: 'Montserrat_700Bold', fontSize: 11, flexShrink: 0 },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const PM_LABELS: Record<string, string> = {
   cash: 'Efectivo', debit: 'Débito', credit: 'Crédito',
@@ -114,43 +207,88 @@ function getCategoryEmoji(name: string, description?: string): string {
   return '🧾';
 }
 
-// ─── Keyword-based category match scoring ─────────────────────────────────────
+// ─── Category match scoring: historial primero, luego keywords ────────────────
 
-function computeCategoryMatches(description: string, categories: any[]): Array<{ category: any; score: number }> {
-  const desc = description.toLowerCase();
+function normalizeDesc(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+function descSimilarity(a: string, b: string): number {
+  const na = normalizeDesc(a);
+  const nb = normalizeDesc(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 100;
+  if (na.includes(nb) || nb.includes(na)) return 88;
+  // palabras significativas en común (4+ chars)
+  const wordsA = na.split(/\s+/).filter(w => w.length >= 4);
+  const wordsB = new Set(nb.split(/\s+/).filter(w => w.length >= 4));
+  const shared = wordsA.filter(w => wordsB.has(w)).length;
+  if (shared >= 2) return 75;
+  if (shared === 1) return 55;
+  return 0;
+}
+
+function computeCategoryMatches(
+  description: string,
+  categories: any[],
+  pastExpenses: any[] = [],
+): Array<{ category: any; score: number; fromHistory: boolean }> {
+  // ── 1. Buscar en historial clasificado ────────────────────────────────────
+  const histScores: Record<string, number> = {}; // categoryId → max score
+  for (const exp of pastExpenses) {
+    if (!exp.category_id || !exp.description) continue;
+    const sim = descSimilarity(description, exp.description);
+    if (sim > 0) {
+      histScores[exp.category_id] = Math.max(histScores[exp.category_id] ?? 0, sim);
+    }
+  }
+
+  // ── 2. Keywords como fallback ─────────────────────────────────────────────
+  const desc = normalizeDesc(description);
   const kws: Record<string, string[]> = {
     'comida y restaurantes': ['restaurante', 'comida', 'almuerzo', 'cena', 'pizza', 'sushi', 'burger', 'hambur', 'delivery', 'pedidosya', 'rappi', 'mcdonalds', 'kfc'],
     'supermercado': ['supermercado', 'mercado', 'verduleria', 'carrefour', 'jumbo', 'coto', 'changomas', 'disco '],
-    'café y bebidas': ['cafe', 'café', 'starbucks', 'cafeteria', 'coffee', 'tostado'],
+    'café y bebidas': ['cafe', 'cafe', 'starbucks', 'cafeteria', 'coffee', 'tostado'],
     'transporte': ['uber', 'taxi', 'remis', 'subte', 'colect', 'tren', 'nafta', 'combustible', 'peaje', 'cabify', 'didi'],
-    'salud': ['farmacia', 'medico', 'médico', 'doctor', 'clinica', 'hospital', 'turno', 'consulta', 'dentista', 'odontologo'],
+    'salud': ['farmacia', 'medico', 'doctor', 'clinica', 'hospital', 'turno', 'consulta', 'dentista', 'odontologo'],
     'entretenimiento': ['cine', 'teatro', 'netflix', 'spotify', 'disney', 'streaming', 'juego', 'steam', 'playstation', 'prime'],
     'ropa y moda': ['ropa', 'calzado', 'zapato', 'zapatilla', 'indumentaria', 'zara', 'moda', 'prenda'],
     'hogar y servicios': ['alquiler', 'expensa', 'inmobiliaria', 'luz ', 'gas ', 'agua ', 'internet', 'telefono', 'plomero', 'electricista', 'servicio'],
-    'educación': ['curso', 'libro', 'universidad', 'colegio', 'escuela', 'ingles', 'idioma', 'udemy', 'capacitacion'],
+    'educacion': ['curso', 'libro', 'universidad', 'colegio', 'escuela', 'ingles', 'idioma', 'udemy', 'capacitacion'],
     'deporte y gym': ['gym', 'deporte', 'fitness', 'cancha', 'natacion', 'pileta', 'yoga', 'running', 'atletismo'],
     'viajes y alojamiento': ['hotel', 'vuelo', 'airbnb', 'turismo', 'viaje', 'agencia', 'aerolinea', 'alojamiento'],
     'seguros': ['seguro', 'poliza', 'cobertura'],
-    'suscripciones': ['suscripcion', 'suscripción', 'membresia', 'membresía', 'renovacion'],
+    'suscripciones': ['suscripcion', 'membresia', 'renovacion'],
     'bancos y finanzas': ['banco', 'tarjeta', 'prestamo', 'cuota', 'credito', 'debito', 'comision'],
     'impuestos': ['impuesto', 'afip', 'arba', 'iva', 'monotributo', 'tributo'],
     'regalos': ['regalo', 'cumple', 'fiesta', 'sorpresa'],
     'cuidado personal': ['peluqueria', 'barberia', 'estetica', 'cosmetica', 'spa', 'masaje', 'peluquer'],
     'ocio y salidas': ['bar', 'boliche', 'disco', 'salida', 'cerveza', 'trago', 'pub'],
   };
-  const scored = categories.map((cat: any) => {
-    const catName = (cat.name_es ?? '').toLowerCase();
-    let score = 0;
+
+  const result: Array<{ category: any; score: number; fromHistory: boolean }> = [];
+
+  for (const cat of categories) {
+    const histScore = histScores[cat.id] ?? 0;
+    if (histScore > 0) {
+      result.push({ category: cat, score: histScore, fromHistory: true });
+      continue;
+    }
+    const catName = normalizeDesc(cat.name_es ?? '');
+    let kwScore = 0;
     const catKws = kws[catName] ?? catName.split(/[\s&\/]+/).filter((w: string) => w.length > 3);
-    for (const kw of catKws) { if (desc.includes(kw)) { score = 85; break; } }
-    if (score === 0) {
+    for (const kw of catKws) { if (desc.includes(kw)) { kwScore = 85; break; } }
+    if (kwScore === 0) {
       for (const w of catName.split(/[\s&\/]+/)) {
-        if (w.length > 3 && desc.includes(w)) { score = 60; break; }
+        if (w.length > 3 && desc.includes(w)) { kwScore = 60; break; }
       }
     }
-    return { category: cat, score };
-  }).filter((r: any) => r.score > 0).sort((a: any, b: any) => b.score - a.score);
-  return scored.map((r: any, i: number) => ({ ...r, score: Math.max(30, r.score - i * 5) }));
+    if (kwScore > 0) result.push({ category: cat, score: kwScore, fromHistory: false });
+  }
+
+  return result
+    .sort((a, b) => b.score - a.score)
+    .map((r, i) => ({ ...r, score: Math.max(30, r.score - i * 3) }));
 }
 
 const expenseSchema = z.object({
@@ -752,15 +890,21 @@ function SinClasifInbox({ expenses, pendingTxs, categories, userId, onClassify, 
   onConfirmedPending: () => void;
 }) {
   const unclassified = expenses.filter(e => e.category_id === null);
+  const totalItems   = unclassified.length + pendingTxs.length;
 
   if (unclassified.length === 0 && pendingTxs.length === 0) {
     return (
       <View style={scModalS.empty}>
-        <Ionicons name="checkmark-circle-outline" size={48} color={colors.neon} />
-        <Text variant="body" color={colors.text.secondary}>¡Todo clasificado!</Text>
+        <View style={scModalS.emptyIconCircle}>
+          <Ionicons name="checkmark-circle" size={36} color="#1F9D47" />
+        </View>
+        <Text style={scModalS.emptyTitle}>¡Todo clasificado!</Text>
+        <Text style={scModalS.emptySub}>Tus gastos están todos organizados.</Text>
       </View>
     );
   }
+
+  const progressPct = totalItems > 0 ? 0 : 100;
 
   return (
     <FlatList
@@ -768,42 +912,73 @@ function SinClasifInbox({ expenses, pendingTxs, categories, userId, onClassify, 
       data={unclassified}
       keyExtractor={(item) => item.id}
       showsVerticalScrollIndicator={false}
-      ListHeaderComponent={pendingTxs.length > 0 && userId ? (
-        <View style={{ paddingHorizontal: layout.screenPadding, paddingBottom: spacing[3] }}>
-          <PendingTransactions
-            transactions={pendingTxs}
-            userId={userId}
-            isPolling={false}
-            categories={categories}
-            confirmedExpenses={expenses.filter(e => e.category_id !== null).map(e => ({ amount: e.amount, date: e.date, description: e.description }))}
-            onConfirmed={onConfirmedPending}
-          />
+      ListHeaderComponent={
+        <View style={{ paddingHorizontal: layout.screenPadding, paddingTop: spacing[2], gap: spacing[4] }}>
+          {pendingTxs.length > 0 && userId && (
+            <PendingTransactions
+              transactions={pendingTxs}
+              userId={userId}
+              isPolling={false}
+              categories={categories}
+              confirmedExpenses={expenses.filter(e => e.category_id !== null).map(e => ({ amount: e.amount, date: e.date, description: e.description }))}
+              onConfirmed={onConfirmedPending}
+            />
+          )}
+          {unclassified.length > 0 && pendingTxs.length > 0 && (
+            <View style={scModalS.sectionHeader}>
+              <Text style={scModalS.sectionTitle}>Gastos manuales sin clasificar ({unclassified.length})</Text>
+            </View>
+          )}
         </View>
-      ) : null}
+      }
       renderItem={({ item }) => (
         <TouchableOpacity
-          style={scModalS.item}
+          style={scModalS.card}
           onPress={() => onClassify(item)}
-          activeOpacity={0.75}
+          activeOpacity={0.92}
         >
-          <CategoryIcon description={item.description} size={34} />
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text style={scModalS.name} numberOfLines={1}>{item.description}</Text>
-            <Text style={scModalS.meta}>
-              {item.payment_method ? PM_LABELS[item.payment_method] ?? item.payment_method : 'Sin categoría'}
-            </Text>
-          </View>
-          <View style={{ alignItems: 'flex-end', gap: 3 }}>
-            <Text style={scModalS.amount}>-{formatCurrency(item.amount)}</Text>
-            <View style={sinClasifS.badge}>
-              <Text style={sinClasifS.label}>CLASIFICAR</Text>
+          <View style={scModalS.cardBody}>
+            <View style={scModalS.cardMain}>
+              <View style={scModalS.iconCircle}>
+                <CategoryIcon description={item.description} size={28} />
+              </View>
+              <View style={scModalS.cardInfo}>
+                <Text style={scModalS.merchantName} numberOfLines={1}>{item.description || 'Sin descripción'}</Text>
+                <Text style={scModalS.dateLbl}>
+                  {item.payment_method ? (PM_LABELS[item.payment_method] ?? item.payment_method) : formatDate(item.date)}
+                </Text>
+              </View>
+              <View style={scModalS.cardRight}>
+                <Text style={scModalS.amount}>-{formatCurrency(item.amount)}</Text>
+                <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+              </View>
+            </View>
+            <View style={scModalS.clasificarRow}>
+              <Ionicons name="pricetag-outline" size={14} color="#1F9D47" />
+              <Text style={scModalS.clasificarText}>Clasificar</Text>
+              <View style={{ flex: 1 }} />
+              <Text style={{ fontSize: 11, color: '#1F9D47', opacity: 0.55 }}>✦</Text>
             </View>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.text.tertiary} />
         </TouchableOpacity>
       )}
-      ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: colors.border.subtle, marginLeft: layout.screenPadding + 34 + spacing[3] }} />}
-      contentContainerStyle={{ paddingBottom: spacing[8] }}
+      contentContainerStyle={{ paddingHorizontal: layout.screenPadding, paddingBottom: spacing[8], gap: spacing[3] }}
+      ListFooterComponent={
+        <View style={scModalS.progressCard}>
+          <View style={scModalS.progressIconCircle}>
+            <Ionicons name="bar-chart-outline" size={20} color="#1F9D47" />
+          </View>
+          <View style={{ flex: 1, gap: 3 }}>
+            <Text style={scModalS.progressTitle}>Progreso de clasificación</Text>
+            <Text style={scModalS.progressSub}>
+              0 de {totalItems} gastos · {totalItems > 0 ? '¡Casi listo!' : '¡Listo!'}
+            </Text>
+          </View>
+          <View style={scModalS.progressCircle}>
+            <Text style={scModalS.progressPct}>{progressPct}%</Text>
+          </View>
+        </View>
+      }
     />
   );
 }
@@ -1037,6 +1212,27 @@ export default function ExpensesScreen() {
   const [pendingTxs,        setPendingTxs]        = useState<any[]>([]);
   const [isPolling,         setIsPolling]         = useState(false);
   const [gmailTokenExpired, setGmailTokenExpired] = useState(false);
+
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const spinLoop = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    if (isPolling) {
+      spinAnim.setValue(0);
+      spinLoop.current = Animated.loop(
+        Animated.timing(spinAnim, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      );
+      spinLoop.current.start();
+    } else {
+      spinLoop.current?.stop();
+      spinAnim.setValue(0);
+    }
+  }, [isPolling]);
   const [inCoupleMode,  setInCoupleMode]  = useState(false);
   const [showSinClasifModal, setShowSinClasifModal] = useState(false);
   const [categorySearch, setCategorySearch] = useState('');
@@ -1100,7 +1296,7 @@ export default function ExpensesScreen() {
       for (const exp of mainRes.data ?? []) {
         const cat = (exp as any).category;
         const catId = cat?.id ?? 'none';
-        if (!map[catId]) map[catId] = { id: catId, name: cat?.name_es ?? 'Sin categoría', color: cat?.color ?? PALETTE[Object.keys(map).length % PALETTE.length], amount: 0, pct: 0 };
+        if (!map[catId]) map[catId] = { id: catId, name: cat?.name_es ?? 'Sin categoría', color: getCategoryColor(cat?.name_es ?? 'otros', Object.keys(map).length), amount: 0, pct: 0 };
         map[catId].amount += (exp as any).amount;
         sum += (exp as any).amount;
       }
@@ -1322,6 +1518,36 @@ export default function ExpensesScreen() {
   const planItems        = useMemo(() => buildPlanProximoMes({ rows: reportRows, disposable: displayDisposable, total: displayTotal, estimatedIncome: displayIncome, history }), [reportRows, displayDisposable, displayTotal, displayIncome, history]);
   const objetivo         = useMemo(() => buildObjetivo({ disposable: displayDisposable, total: displayTotal }), [displayDisposable, displayTotal]);
 
+  // Category breakdown from already-fetched expenses (no extra DB call)
+  const catBreakdown = useMemo<CategoryRow[]>(() => {
+    const map: Record<string, CategoryRow> = {};
+    let total = 0; let idx = 0;
+    for (const e of expenses as any[]) {
+      const catId   = e.category_id ?? 'none';
+      const catName = e.category?.name_es ?? 'Sin categoría';
+      if (!map[catId]) map[catId] = { id: catId, name: catName, color: getCategoryColor(catName, idx++), amount: 0, pct: 0 };
+      map[catId].amount += e.amount;
+      total += e.amount;
+    }
+    return Object.values(map).map(r => ({ ...r, pct: total > 0 ? r.amount / total : 0 })).sort((a, b) => b.amount - a.amount);
+  }, [expenses]);
+
+  // Category breakdown for active classification filter
+  const catBreakdownFiltered = useMemo<CategoryRow[]>(() => {
+    if (!classificationFilter) return catBreakdown;
+    const map: Record<string, CategoryRow> = {};
+    let total = 0; let idx = 0;
+    for (const e of expenses as any[]) {
+      if (e.classification !== classificationFilter) continue;
+      const catId   = e.category_id ?? 'none';
+      const catName = e.category?.name_es ?? 'Sin categoría';
+      if (!map[catId]) map[catId] = { id: catId, name: catName, color: getCategoryColor(catName, idx++), amount: 0, pct: 0 };
+      map[catId].amount += e.amount;
+      total += e.amount;
+    }
+    return Object.values(map).map(r => ({ ...r, pct: total > 0 ? r.amount / total : 0 })).sort((a, b) => b.amount - a.amount);
+  }, [expenses, classificationFilter, catBreakdown]);
+
   const listHeader = (
     <>
       {/* Filtros de clasificación */}
@@ -1356,15 +1582,67 @@ export default function ExpensesScreen() {
       {/* Resumen del mes — diseño premium */}
       {(() => {
         const selectedMonth = filter.month ?? new Date().getMonth() + 1;
-        const selectedYear  = filter.year  ?? new Date().getFullYear();
         const monthName     = MONTH_NAMES[selectedMonth - 1].toLowerCase();
+        const prevMonthName = MONTH_NAMES[selectedMonth - 2 < 0 ? 11 : selectedMonth - 2].toLowerCase();
         const vsPrev        = comparacion?.vsPrev;
         const varPct        = vsPrev?.changePct ?? null;
-        const metricRows    = [
-          { label: 'Necesario',    amount: totalNecessary,  color: '#2563EB', pct: totalThisMonth > 0 ? Math.round((totalNecessary  / totalThisMonth) * 100) : 0 },
-          { label: 'Prescindible', amount: totalDisposable, color: '#EF4444', pct: totalThisMonth > 0 ? Math.round((totalDisposable / totalThisMonth) * 100) : 0 },
-          { label: 'Invertible',   amount: totalInvestable, color: '#2E7D32', pct: totalThisMonth > 0 ? Math.round((totalInvestable / totalThisMonth) * 100) : 0 },
-        ];
+
+        // ── Filtro activo: resumen de la clasificación con categorías ──────────
+        if (classificationFilter) {
+          const clsLabel = classificationFilter === 'necessary' ? 'necesarios'
+            : classificationFilter === 'disposable' ? 'prescindibles'
+            : 'invertibles';
+          const clsTotal = classificationFilter === 'necessary' ? totalNecessary
+            : classificationFilter === 'disposable' ? totalDisposable
+            : totalInvestable;
+          const topCatRows = catBreakdownFiltered.slice(0, 3);
+
+          return (
+            <View style={smS.card}>
+              <View style={smS.body}>
+                <View style={smS.left}>
+                  <Text style={smS.title}>Resumen de {clsLabel}</Text>
+                  <Text style={smS.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                    {formatCurrency(clsTotal)}
+                  </Text>
+                  {varPct !== null && (
+                    <View style={smS.varRow}>
+                      <Text style={[smS.varIcon, { color: varPct >= 0 ? '#FF7B7B' : '#4DC889' }]}>
+                        {varPct >= 0 ? '▲' : '▼'}
+                      </Text>
+                      <Text style={[smS.varText, { color: varPct >= 0 ? '#FF7B7B' : '#4DC889' }]}>
+                        {Math.abs(varPct)}% vs {prevMonthName}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={smS.metricList}>
+                    {topCatRows.map((cat) => (
+                      <View key={cat.id} style={smS.metricRow}>
+                        <View style={[smS.dot, { backgroundColor: cat.color }]} />
+                        <Text style={smS.metricLabel} numberOfLines={1}>{cat.name}</Text>
+                        <Text style={smS.metricAmount}>{formatCurrency(cat.amount)}</Text>
+                        <Text style={[smS.metricPct, { color: cat.color }]}>{Math.round(cat.pct * 100)}%</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+                <View style={smS.right}>
+                  {clsTotal > 0
+                    ? <CategoryDonut rows={catBreakdownFiltered} total={clsTotal} compact />
+                    : <View style={smS.donutEmpty} />
+                  }
+                </View>
+              </View>
+            </View>
+          );
+        }
+
+        // ── Sin filtro: donut de clasificaciones (Necesario/Prescindible/Invertible)
+        const clsRows: CategoryRow[] = [
+          { id: 'necessary',  name: 'Necesario',    color: '#5B9EF9', amount: totalNecessary,  pct: totalThisMonth > 0 ? totalNecessary  / totalThisMonth : 0 },
+          { id: 'disposable', name: 'Prescindible', color: '#FF7B7B', amount: totalDisposable, pct: totalThisMonth > 0 ? totalDisposable / totalThisMonth : 0 },
+          { id: 'investable', name: 'Invertible',   color: '#4DC889', amount: totalInvestable, pct: totalThisMonth > 0 ? totalInvestable / totalThisMonth : 0 },
+        ].filter(r => r.amount > 0);
         return (
           <View style={smS.card}>
             <View style={smS.body}>
@@ -1376,37 +1654,31 @@ export default function ExpensesScreen() {
                 </Text>
                 {varPct !== null && (
                   <View style={smS.varRow}>
-                    <Text style={[smS.varIcon, { color: varPct >= 0 ? '#EF4444' : '#2E7D32' }]}>
+                    <Text style={[smS.varIcon, { color: varPct >= 0 ? '#FF7B7B' : '#4DC889' }]}>
                       {varPct >= 0 ? '▲' : '▼'}
                     </Text>
-                    <Text style={[smS.varText, { color: varPct >= 0 ? '#EF4444' : '#2E7D32' }]}>
-                      {Math.abs(varPct)}% vs {MONTH_NAMES[selectedMonth - 2 < 0 ? 11 : selectedMonth - 2].toLowerCase()}
+                    <Text style={[smS.varText, { color: varPct >= 0 ? '#FF7B7B' : '#4DC889' }]}>
+                      {Math.abs(varPct)}% vs {prevMonthName}
                     </Text>
                   </View>
                 )}
                 <View style={smS.metricList}>
-                  {metricRows.map((m) => (
-                    <View key={m.label} style={smS.metricRow}>
-                      <View style={[smS.dot, { backgroundColor: m.color }]} />
-                      <Text style={smS.metricLabel} numberOfLines={1}>{m.label}</Text>
-                      <Text style={smS.metricAmount}>{formatCurrency(m.amount)}</Text>
-                      <Text style={smS.metricPct}>{m.pct}%</Text>
+                  {clsRows.map((r) => (
+                    <View key={r.id} style={smS.metricRow}>
+                      <View style={[smS.dot, { backgroundColor: r.color }]} />
+                      <Text style={smS.metricLabel} numberOfLines={1}>{r.name}</Text>
+                      <Text style={smS.metricAmount}>{formatCurrency(r.amount)}</Text>
+                      <Text style={[smS.metricPct, { color: r.color }]}>{Math.round(r.pct * 100)}%</Text>
                     </View>
                   ))}
                 </View>
               </View>
-              {/* Derecha — donut */}
+              {/* Derecha — donut de clasificaciones */}
               <View style={smS.right}>
-                {totalThisMonth > 0 ? (
-                  <DonutChart
-                    necessary={totalNecessary}
-                    disposable={totalDisposable}
-                    investable={totalInvestable}
-                    total={totalThisMonth}
-                  />
-                ) : (
-                  <View style={smS.donutEmpty} />
-                )}
+                {totalThisMonth > 0
+                  ? <CategoryDonut rows={clsRows} total={totalThisMonth} compact />
+                  : <View style={smS.donutEmpty} />
+                }
               </View>
             </View>
           </View>
@@ -1494,9 +1766,29 @@ export default function ExpensesScreen() {
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
             <TouchableOpacity
               style={styles.screenshotBtn}
-              onPress={() => { if (user?.id) { fetchExpenses(user.id); loadPendingTxs(); } }}
+              onPress={() => {
+                if (user?.id) {
+                  fetchExpenses(user.id);
+                  loadPendingTxs();
+                  pollGmail();
+                }
+              }}
+              disabled={isPolling}
             >
-              <Ionicons name="sync-outline" size={20} color={colors.text.secondary} />
+              <Animated.View style={{
+                transform: [{
+                  rotate: spinAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0deg', '360deg'],
+                  }),
+                }],
+              }}>
+                <Ionicons
+                  name="sync-outline"
+                  size={20}
+                  color={isPolling ? colors.primary : colors.text.secondary}
+                />
+              </Animated.View>
             </TouchableOpacity>
             {user?.id && (
               <BudgetRingIndicator
@@ -1538,7 +1830,7 @@ export default function ExpensesScreen() {
         style={styles.flatList}
         sections={expenseSections}
         keyExtractor={(item) => item.id}
-        renderItem={({ item, index }) => <ExpenseItem expense={item} onPress={() => openEditExpense(item)} showDivider={index > 0} />}
+        renderItem={({ item }) => <ExpenseItem expense={item} onPress={() => openEditExpense(item)} />}
         renderSectionHeader={({ section }) => <DayHeader date={section.title} total={section.total} />}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
@@ -1625,8 +1917,16 @@ export default function ExpensesScreen() {
             <>
               {reportTab === 'resumen' && (() => {
                 const DOT_COLORS = [colors.red, '#F59E0B', colors.accent, colors.primary];
+                const donutRows  = reportRows.length > 0 ? reportRows : catBreakdown;
+                const donutTotal = reportRows.length > 0 ? (reportTotal || displayTotal) : totalThisMonth;
                 return (
                   <>
+                    {donutRows.length > 0 && donutTotal > 0 && (
+                      <View style={reportS.donutCard}>
+                        <Text variant="label" color={colors.text.tertiary} style={{ marginBottom: 16 }}>DISTRIBUCIÓN POR CATEGORÍA</Text>
+                        <CategoryDonut rows={donutRows} total={donutTotal} />
+                      </View>
+                    )}
                     <View style={reportS.heroCard}>
                       <Text variant="label" color={colors.text.tertiary}>TU POTENCIAL DE INVERSIÓN</Text>
                       <Text style={reportS.heroAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>{formatCurrency(totalRecuperable)}</Text>
@@ -1656,6 +1956,12 @@ export default function ExpensesScreen() {
                     disposable={displayDisposable} investable={displayInvestable}
                     estimatedIncome={displayIncome}
                   />
+                  {reportRows.length > 0 && (
+                    <View style={reportS.donutCard}>
+                      <Text variant="label" color={colors.text.tertiary} style={{ marginBottom: 16 }}>DISTRIBUCIÓN POR CATEGORÍA</Text>
+                      <CategoryDonut rows={reportRows} total={reportTotal || displayTotal} />
+                    </View>
+                  )}
                   <CategoryBreakdown rows={reportRows} total={reportTotal || displayTotal} />
                 </>
               )}
@@ -1934,7 +2240,8 @@ export default function ExpensesScreen() {
           </View>
 
           {editExpenseValues && (() => {
-            const bestMatches = computeCategoryMatches(editingExpense?.description ?? '', categories);
+            const pastExpenses = expenses.filter(e => e.category_id && e.id !== editingExpense?.id);
+            const bestMatches = computeCategoryMatches(editingExpense?.description ?? '', categories, pastExpenses);
             const searchLow = categorySearch.toLowerCase();
             const filteredCats = categorySearch.trim()
               ? categories.filter((c: any) => c.name_es?.toLowerCase().includes(searchLow))
@@ -1978,6 +2285,20 @@ export default function ExpensesScreen() {
                       <Text style={clsModal.expenseAmount}>{formatCurrency(editingExpense?.amount ?? 0)}</Text>
                     </View>
 
+                    {/* Descripción editable */}
+                    <View style={{ gap: 8 }}>
+                      <Text style={clsModal.sectionTitle}>Descripción</Text>
+                      <TextInput
+                        style={clsModal.descInput}
+                        value={editExpenseValues.description}
+                        onChangeText={(t) => setEditExpenseValues(p => p ? { ...p, description: t } : p)}
+                        placeholder="Ej: Pelota de fútbol, Spotify, Alquiler..."
+                        placeholderTextColor="#9CA3AF"
+                        maxLength={80}
+                        returnKeyType="done"
+                      />
+                    </View>
+
                     {/* Tipo de gasto */}
                     <View style={{ gap: 12 }}>
                       <Text style={clsModal.sectionTitle}>Tipo de gasto</Text>
@@ -2006,7 +2327,9 @@ export default function ExpensesScreen() {
                     {/* Mejores coincidencias */}
                     {bestMatches.length > 0 && (
                       <View style={{ gap: 12 }}>
-                        <Text style={clsModal.sectionTitle}>Mejores coincidencias ✨</Text>
+                        <Text style={clsModal.sectionTitle}>
+                          {bestMatches[0]?.fromHistory ? 'Clasificado antes 🧠' : 'Mejores coincidencias ✨'}
+                        </Text>
                         <View style={clsModal.matchCard}>
                           {bestMatches.slice(0, 3).map((m, i) => {
                             const isActive = editExpenseValues.category_id === m.category.id;
@@ -2019,8 +2342,15 @@ export default function ExpensesScreen() {
                               >
                                 <Text style={clsModal.matchRank}>{i + 1}</Text>
                                 <CategoryIcon categoryName={m.category.name_es} size={30} />
-                                <Text style={clsModal.matchName} numberOfLines={1}>{m.category.name_es}</Text>
-                                <Text style={clsModal.matchPct}>{m.score}% match</Text>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={clsModal.matchName} numberOfLines={1}>{m.category.name_es}</Text>
+                                  {m.fromHistory && (
+                                    <Text style={clsModal.matchHistoryTag}>Ya usaste esta categoría</Text>
+                                  )}
+                                </View>
+                                <Text style={[clsModal.matchPct, m.fromHistory && { color: '#7C3AED' }]}>
+                                  {m.fromHistory ? '🧠 ' : ''}{m.score}%
+                                </Text>
                                 {isActive
                                   ? <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
                                   : <View style={{ width: 18 }} />
@@ -2120,12 +2450,26 @@ export default function ExpensesScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setShowSinClasifModal(false)}
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg.primary }} edges={['top']}>
-          <View style={scModalS.header}>
-            <Text variant="h4">Por clasificar</Text>
-            <TouchableOpacity onPress={() => setShowSinClasifModal(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close" size={24} color={colors.text.primary} />
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#F6F7F9' }} edges={['top']}>
+          {/* Header */}
+          <View style={scModalS.topRow}>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity onPress={() => setShowSinClasifModal(false)} style={scModalS.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="close" size={20} color="#1A1A1A" />
             </TouchableOpacity>
+          </View>
+          <View style={scModalS.titleBlock}>
+            <Text style={scModalS.titleLarge}>Por clasificar</Text>
+            <View style={scModalS.titleUnderline} />
+            <View style={scModalS.countBadge}>
+              <View style={scModalS.countDot} />
+              <Text style={scModalS.countText}>
+                {expenses.filter(e => e.category_id === null).length + pendingTxs.length} SIN CLASIFICAR
+              </Text>
+            </View>
+            <Text style={scModalS.descText}>
+              Tus gastos aún no tienen categoría.{'\n'}Clasificalos para tener todo bajo control.
+            </Text>
           </View>
 
           <SinClasifInbox
@@ -2185,39 +2529,41 @@ function DayHeader({ date, total }: { date: string; total: number }) {
   );
 }
 
-function ExpenseItem({ expense, onPress, showDivider }: { expense: Expense; onPress: () => void; showDivider?: boolean }) {
+function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => void }) {
   const isUnclassified = expense.category_id === null;
+  const catName = (expense.category as any)?.name_es ?? '';
+  const catColor = isUnclassified ? '#9CA3AF' : getCategoryColor(catName, 0);
 
   return (
-    <View>
-      <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.75}>
+    <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.75}>
+      <View style={[styles.expenseIconCircle, { backgroundColor: catColor + '20' }]}>
         <CategoryIcon
-          categoryName={(expense.category as any)?.name_es ?? ''}
+          categoryName={catName}
           description={isUnclassified ? '' : expense.description}
-          size={40}
+          size={30}
         />
-        <View style={styles.expenseLeft}>
-          <Text style={styles.expenseName} numberOfLines={1}>
-            {isUnclassified ? 'Sin clasificar' : (expense.category?.name_es ?? expense.description)}
-          </Text>
-          <Text style={styles.expenseMetaText} numberOfLines={1}>
-            {expense.description}
-          </Text>
-        </View>
-        <View style={styles.expenseRight}>
-          <Text style={styles.expenseAmount}>
-            -{formatCurrency(expense.amount)}
-          </Text>
-          {isUnclassified ? (
-            <View style={sinClasifS.badge}>
-              <Text style={sinClasifS.label}>SIN CLASIFICAR</Text>
-            </View>
-          ) : expense.classification ? (
-            <Badge classification={expense.classification} label={expense.classification} small animated />
-          ) : null}
-        </View>
-      </TouchableOpacity>
-    </View>
+      </View>
+      <View style={styles.expenseLeft}>
+        <Text style={styles.expenseName} numberOfLines={1}>
+          {isUnclassified ? 'Sin clasificar' : (expense.category?.name_es ?? expense.description)}
+        </Text>
+        <Text style={styles.expenseMetaText} numberOfLines={1}>
+          {expense.description}
+        </Text>
+      </View>
+      <View style={styles.expenseRight}>
+        <Text style={styles.expenseAmount}>
+          -{formatCurrency(expense.amount)}
+        </Text>
+        {isUnclassified ? (
+          <View style={sinClasifS.badge}>
+            <Text style={sinClasifS.label}>SIN CLASIFICAR</Text>
+          </View>
+        ) : expense.classification ? (
+          <Badge classification={expense.classification} label={expense.classification} small animated />
+        ) : null}
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -2415,7 +2761,7 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom: layout.tabBarHeight + spacing[6],
-    gap: 0,
+    gap: spacing[2],
   },
   empty: {
     paddingVertical: spacing[16],
@@ -2442,19 +2788,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.text.tertiary,
   },
-  // Expense item — lista plana estilo Revolut/Copilot
+  // Expense item — card con bordes redondeados
   expenseItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
     backgroundColor: colors.bg.card,
-    paddingVertical: 13,
+    paddingVertical: 12,
     paddingHorizontal: spacing[4],
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  itemDivider: {
-    height: 1,
-    backgroundColor: colors.border.subtle,
-    marginLeft: spacing[4] + 40 + spacing[3],
+  expenseIconCircle: {
+    width: 46, height: 46, borderRadius: 23,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   expenseLeft:      { flex: 1, gap: 3 },
   expenseMeta:      { flexDirection: 'row', alignItems: 'center' },
@@ -2810,23 +3163,73 @@ const reportS = StyleSheet.create({
     borderTopColor: colors.border.subtle,
   },
   investDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  donutCard: {
+    backgroundColor: colors.bg.card,
+    borderWidth:     1,
+    borderColor:     colors.border.default,
+    borderRadius:    16,
+    padding:         spacing[5],
+    shadowColor:     '#000',
+    shadowOffset:    { width: 0, height: 2 },
+    shadowOpacity:   0.06,
+    shadowRadius:    8,
+    elevation:       3,
+  },
 });
 
 const scModalS = StyleSheet.create({
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: layout.screenPadding, paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+  // Modal header
+  topRow:         { flexDirection: 'row', alignItems: 'center', paddingHorizontal: layout.screenPadding, paddingTop: spacing[3], paddingBottom: spacing[1] },
+  closeBtn:       { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3 },
+  titleBlock:     { paddingHorizontal: layout.screenPadding, paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2] },
+  titleLarge:     { fontFamily: 'Montserrat_800ExtraBold', fontSize: 30, color: '#111827', letterSpacing: -0.8 },
+  titleUnderline: { width: 40, height: 3, borderRadius: 2, backgroundColor: '#1F9D47', marginTop: -2 },
+  countBadge:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEF3C7', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#FDE68A' },
+  countDot:       { width: 7, height: 7, borderRadius: 4, backgroundColor: '#F59E0B' },
+  countText:      { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#92400E', letterSpacing: 0.4 },
+  descText:       { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#6B7280', lineHeight: 22 },
+
+  // Section header (for manual unclassified, if both types exist)
+  sectionHeader: { paddingTop: spacing[2] },
+  sectionTitle:  { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#111827' },
+
+  // Cards (manually-added unclassified expenses)
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: '#1F2937',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#EDEEF0',
   },
-  item: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    paddingVertical: 10, paddingHorizontal: layout.screenPadding,
-    backgroundColor: colors.bg.card,
-  },
-  name:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: colors.text.primary, lineHeight: 17 },
-  meta:   { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: colors.text.tertiary, lineHeight: 15 },
-  amount: { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.text.primary, lineHeight: 17 },
-  empty:  { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
+  cardBody:     { padding: 14, gap: 10 },
+  cardMain:     { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  iconCircle:   { width: 54, height: 54, borderRadius: 27, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 },
+  cardInfo:     { flex: 1, gap: 3 },
+  merchantName: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#111827', letterSpacing: -0.2 },
+  dateLbl:      { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#9CA3AF' },
+  cardRight:    { alignItems: 'flex-end', gap: 3, flexShrink: 0 },
+  amount:       { fontFamily: 'Montserrat_800ExtraBold', fontSize: 16, color: '#111827', letterSpacing: -0.4 },
+  clasificarRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#F0FDF4', borderWidth: 1.5, borderColor: '#22C55E', borderRadius: 12 },
+  clasificarText:{ fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#1F9D47' },
+
+  // Progress footer
+  progressCard:      { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, shadowColor: '#1F9D47', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 2, borderWidth: 1, borderColor: '#D1FAE5', marginTop: spacing[2] },
+  progressIconCircle:{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#F0FDF4', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  progressTitle:     { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#111827' },
+  progressSub:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#6B7280', lineHeight: 17 },
+  progressCircle:    { width: 48, height: 48, borderRadius: 24, backgroundColor: '#F0FDF4', borderWidth: 2, borderColor: '#BBF7D0', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  progressPct:       { fontFamily: 'Montserrat_800ExtraBold', fontSize: 13, color: '#1F9D47' },
+
+  // Empty state
+  empty:          { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
+  emptyIconCircle:{ width: 72, height: 72, borderRadius: 36, backgroundColor: '#1F9D47' + '14', alignItems: 'center', justifyContent: 'center' },
+  emptyTitle:     { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: '#111827' },
+  emptySub:       { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#9CA3AF', textAlign: 'center' },
 });
 
 // ─── Summary card styles ────────────────────────────────────────────────────────
@@ -2925,9 +3328,9 @@ const smS = StyleSheet.create({
     textAlign:  'right',
   },
   donutEmpty: {
-    width:        DONUT_SIZE,
-    height:       DONUT_SIZE,
-    borderRadius: DONUT_SIZE / 2,
+    width:        96,
+    height:       96,
+    borderRadius: 48,
     backgroundColor: '#F0F0F0',
   },
 });
@@ -2983,6 +3386,17 @@ const clsModal = StyleSheet.create({
   expenseAmount: { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: '#111827', flexShrink: 0 },
 
   sectionTitle: { fontFamily: 'Montserrat_600SemiBold', fontSize: 15, color: '#111827' },
+  descInput: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontFamily: 'Montserrat_400Regular',
+    fontSize: 14,
+    color: '#111827',
+  },
 
   // Type buttons
   typeRow: { flexDirection: 'row', gap: 8 },

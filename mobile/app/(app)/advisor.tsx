@@ -118,6 +118,31 @@ const BOTS: Record<BotId, {
 
 const BOT_IDS: BotId[] = ['general', 'ahorro', 'gastos'];
 
+const QUICK_GOALS = [
+  { id: 'ahorrar',  label: 'Ahorrar más',     icon: '🐷', color: '#7C3AED', msg: '¿Cómo puedo ahorrar más este mes?' },
+  { id: 'gastar',   label: 'Gastar mejor',    icon: '💸', color: '#16A34A', msg: '¿En qué estoy gastando de más?' },
+  { id: 'deudas',   label: 'Salir de deudas', icon: '🔓', color: '#EA580C', msg: '¿Cómo salgo de mis deudas?' },
+  { id: 'invertir', label: 'Invertir',         icon: '📈', color: '#2563EB', msg: '¿Cómo empiezo a invertir?' },
+] as const;
+
+// Colores premium para la vista bots (light theme propio)
+const B = {
+  bg:       '#F6F7F9',
+  card:     '#FFFFFF',
+  violet:   '#7C3AED',
+  violetLt: '#EDE9FE',
+  text:     '#0F172A',
+  sub:      '#64748B',
+  muted:    '#94A3B8',
+  border:   '#E8EAF0',
+  yellow:   '#D97706',
+  yellowLt: '#FEF3C7',
+  pink:     '#DB2777',
+  pinkLt:   '#FCE7F3',
+  green:    '#16A34A',
+  greenLt:  '#DCFCE7',
+} as const;
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildClientContext(
@@ -638,44 +663,160 @@ export default function AdvisorScreen() {
   // ════════════════════════════════════════════════════════════════
 
   if (view === 'bots') {
-    return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.header}>
-          <View>
-            <Text variant="h4">Asesores IA</Text>
-            <Text variant="caption" color={colors.text.tertiary}>Elegí con quién hablar</Text>
-          </View>
-        </View>
+    const BOT_META: Record<BotId, { accentColor: string; bgColor: string; cardEmoji: string }> = {
+      general: { accentColor: B.violet,  bgColor: B.violetLt, cardEmoji: '🧠' },
+      ahorro:  { accentColor: B.yellow,  bgColor: B.yellowLt, cardEmoji: '💰' },
+      gastos:  { accentColor: B.pink,    bgColor: B.pinkLt,   cardEmoji: '💳' },
+    };
 
-        <ScrollView contentContainerStyle={styles.botsScroll} showsVerticalScrollIndicator={false}>
-{BOT_IDS.map(botId => {
+    return (
+      <SafeAreaView style={bs.safe} edges={['top']}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={bs.scroll}
+        >
+          {/* ── Header ── */}
+          <View style={bs.header}>
+            <View style={{ flex: 1 }}>
+              <Text style={bs.headerTitle}>Asesores IA</Text>
+              <Text style={bs.headerSub}>Charlá con tu asesor financiero personal</Text>
+            </View>
+            <TouchableOpacity style={bs.sparkleBtn} activeOpacity={0.8}>
+              <Ionicons name="sparkles" size={18} color={B.violet} />
+            </TouchableOpacity>
+          </View>
+
+          {/* ── Hero Card ── */}
+          <View style={bs.heroCard}>
+            {/* Fondo glow */}
+            <View style={bs.heroGlow} pointerEvents="none" />
+
+            {/* Contenido izquierdo */}
+            <View style={bs.heroLeft}>
+              <View style={bs.newBadge}>
+                <Text style={bs.newBadgeText}>✦  NUEVO</Text>
+              </View>
+              <Text style={bs.heroTitle}>
+                {'Tu aliado para\n'}
+                <Text style={bs.heroAccent}>mejores decisiones</Text>
+              </Text>
+              <Text style={bs.heroDesc}>
+                Nuestros asesores IA analizan tu información y te dan consejos hechos para vos.
+              </Text>
+              <TouchableOpacity
+                style={bs.heroCta}
+                onPress={() => handleOpenBot('general', true)}
+                activeOpacity={0.88}
+              >
+                <Ionicons name="chatbubble-outline" size={15} color="#fff" />
+                <Text style={bs.heroCtaText}>Iniciar conversación</Text>
+                <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.7)" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Robot + sparkles */}
+            <View style={bs.heroRight} pointerEvents="none">
+              <Text style={bs.spark1}>✦</Text>
+              <Text style={bs.spark2}>✧</Text>
+              <Text style={bs.spark3}>✦</Text>
+              <Text style={bs.spark4}>✧</Text>
+              <Text style={bs.robotEmoji}>🤖</Text>
+            </View>
+          </View>
+
+          {/* ── Quick goals ── */}
+          <Text style={bs.sectionTitle}>¿Qué te gustaría mejorar?</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={bs.chipsRow}
+          >
+            {QUICK_GOALS.map(g => (
+              <TouchableOpacity
+                key={g.id}
+                style={[bs.chip, { backgroundColor: g.color + '14', borderColor: g.color + '28' }]}
+                onPress={() => handleOpenBot('general', true)}
+                activeOpacity={0.78}
+              >
+                <Text style={bs.chipIcon}>{g.icon}</Text>
+                <Text style={[bs.chipText, { color: g.color }]}>{g.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {/* ── Asesores ── */}
+          <View style={bs.sectionRow}>
+            <Text style={bs.sectionTitle}>Tus asesores</Text>
+            <Text style={{ fontSize: 17 }}>✨</Text>
+          </View>
+
+          {BOT_IDS.map((botId, idx) => {
             const b   = BOTS[botId];
             const sum = botSummaries[botId];
+            const m   = BOT_META[botId];
+            const hasActivity = sum.thread_count > 0;
+
             return (
               <TouchableOpacity
                 key={botId}
-                style={styles.botCard}
+                style={bs.botCard}
                 onPress={() => handleOpenBot(botId)}
-                activeOpacity={0.8}
+                activeOpacity={0.82}
               >
-                <View style={[styles.botCardIcon, { backgroundColor: b.color + '18' }]}>
-                  <Text style={{ fontSize: 30 }}>{b.emoji}</Text>
+                {/* Mini sparkle decorativo */}
+                <Text style={[bs.cardSpark, { color: m.accentColor, right: 14, top: 10 }]}>✦</Text>
+
+                <View style={[bs.botIcon, { backgroundColor: m.bgColor }]}>
+                  <Text style={{ fontSize: 34 }}>{m.cardEmoji}</Text>
                 </View>
-                <View style={{ flex: 1, gap: 3 }}>
-                  <Text variant="subtitle">{b.name}</Text>
-                  <Text variant="caption" color={colors.text.secondary} numberOfLines={1}>
-                    {b.description}
-                  </Text>
-                  <Text variant="caption" color={colors.text.tertiary}>
-                    {sum.thread_count === 0
-                      ? 'Sin conversaciones'
-                      : `${sum.thread_count} conversación${sum.thread_count !== 1 ? 'es' : ''}${sum.last_active ? ' · ' + timeAgo(sum.last_active) : ''}`}
-                  </Text>
+
+                <View style={{ flex: 1, gap: 4 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={bs.botName}>{b.name}</Text>
+                    {idx === 0 && (
+                      <View style={bs.recBadge}>
+                        <Ionicons name="star-outline" size={9} color={B.violet} />
+                        <Text style={bs.recText}>Recomendado</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={bs.botDesc} numberOfLines={1}>{b.description}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                    <Ionicons name="chatbubble-outline" size={11} color={B.muted} />
+                    <Text style={bs.botMeta}>
+                      {hasActivity
+                        ? `${sum.thread_count} conversacion${sum.thread_count !== 1 ? 'es' : ''}${sum.last_active ? ' · ' + timeAgo(sum.last_active) : ''}`
+                        : 'Sin conversaciones'}
+                    </Text>
+                  </View>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.text.tertiary} />
+
+                <View style={[bs.botArrow, { backgroundColor: m.bgColor }]}>
+                  <Ionicons name="chevron-forward" size={16} color={m.accentColor} />
+                </View>
               </TouchableOpacity>
             );
           })}
+
+          {/* ── Insight card ── */}
+          <View style={bs.insightCard}>
+            <View style={[bs.insightIcon, { backgroundColor: '#BBF7D0' }]}>
+              <Ionicons name="trending-up" size={22} color={B.green} />
+            </View>
+            <View style={{ flex: 1, gap: 3 }}>
+              <Text style={bs.insightTitle}>Impacto real</Text>
+              <Text style={bs.insightText}>
+                Los usuarios que consultan a su asesor IA ahorran un{' '}
+                <Text style={[bs.insightText, { color: B.green, fontFamily: 'Montserrat_700Bold' }]}>18% más.</Text>
+              </Text>
+            </View>
+            {/* Mini gráfico decorativo */}
+            <View style={bs.insightChart}>
+              <Text style={{ fontSize: 28 }}>📈</Text>
+              <Text style={bs.insightHeart}>❤️</Text>
+            </View>
+          </View>
+
         </ScrollView>
       </SafeAreaView>
     );
@@ -686,105 +827,123 @@ export default function AdvisorScreen() {
   // ════════════════════════════════════════════════════════════════
 
   if (view === 'threads') {
+    const tMeta = {
+      general: { accentColor: B.violet,  bgColor: B.violetLt },
+      ahorro:  { accentColor: B.yellow,  bgColor: B.yellowLt },
+      gastos:  { accentColor: B.pink,    bgColor: B.pinkLt   },
+    }[activeBot];
+
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={handleBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
-          </TouchableOpacity>
-          <View style={{ flex: 1, marginLeft: spacing[3] }}>
-            <Text variant="h4">{bot.emoji} {bot.name}</Text>
-            <Text variant="caption" color={colors.text.tertiary}>Tus conversaciones</Text>
-          </View>
+      <SafeAreaView style={bs.safe} edges={['top']}>
+
+        {/* ── Header ── */}
+        <View style={ts.header}>
           <TouchableOpacity
-            style={[styles.newThreadBtn, { borderColor: bot.color }, creatingThread && { opacity: 0.6 }]}
+            style={ts.backBtn}
+            onPress={handleBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="arrow-back" size={20} color={B.text} />
+          </TouchableOpacity>
+
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ fontSize: 22 }}>{bot.emoji}</Text>
+              <Text style={ts.headerTitle}>{bot.name}</Text>
+            </View>
+            <Text style={ts.headerSub}>Tus conversaciones</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[ts.newBtn, { backgroundColor: tMeta.bgColor, borderColor: tMeta.accentColor + '40' }, creatingThread && { opacity: 0.6 }]}
             onPress={handleNewThread}
             disabled={creatingThread}
             activeOpacity={0.8}
           >
             {creatingThread
-              ? <ActivityIndicator size="small" color={bot.color} />
-              : <Ionicons name="add" size={18} color={bot.color} />
+              ? <ActivityIndicator size="small" color={tMeta.accentColor} />
+              : <Ionicons name="add" size={16} color={tMeta.accentColor} />
             }
-            <Text variant="caption" color={bot.color} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-              Nuevo chat
-            </Text>
+            <Text style={[ts.newBtnText, { color: tMeta.accentColor }]}>Nuevo chat</Text>
           </TouchableOpacity>
         </View>
 
         {loadingThreads ? (
           <View style={styles.centered}>
-            <ActivityIndicator color={bot.color} />
+            <ActivityIndicator color={tMeta.accentColor} size="large" />
           </View>
+
         ) : threads.length === 0 ? (
-          <View style={styles.centered}>
-            <Text style={{ fontSize: 40 }}>{bot.emoji}</Text>
-            <Text variant="subtitle" align="center">{bot.name}</Text>
-            <Text variant="body" color={colors.text.secondary} align="center" style={{ paddingHorizontal: spacing[6] }}>
-              {bot.description}
-            </Text>
+          <View style={ts.emptyWrap}>
+            <View style={[ts.emptyIconBox, { backgroundColor: tMeta.bgColor }]}>
+              <Text style={{ fontSize: 44 }}>{bot.emoji}</Text>
+            </View>
+            <Text style={ts.emptyTitle}>{bot.name}</Text>
+            <Text style={ts.emptySub}>{bot.description}</Text>
             <TouchableOpacity
-              style={[styles.startChatBtn, { backgroundColor: bot.color }, creatingThread && { opacity: 0.7 }]}
+              style={[ts.startBtn, { backgroundColor: tMeta.accentColor }, creatingThread && { opacity: 0.7 }]}
               onPress={handleNewThread}
               disabled={creatingThread}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
               {creatingThread
-                ? <ActivityIndicator size="small" color={colors.white} />
-                : <Ionicons name="chatbubble-outline" size={16} color={colors.white} />
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Ionicons name="chatbubble-outline" size={16} color="#fff" />
               }
-              <Text style={[styles.startChatText, { color: colors.white }]}>
-                {creatingThread ? 'Creando...' : 'Empezar conversación'}
-              </Text>
+              <Text style={ts.startBtnText}>{creatingThread ? 'Creando...' : 'Empezar conversación'}</Text>
             </TouchableOpacity>
           </View>
+
         ) : (
           <FlatList
             data={threads}
             keyExtractor={t => t.id}
-            contentContainerStyle={styles.threadsList}
+            contentContainerStyle={ts.list}
             showsVerticalScrollIndicator={false}
-            renderItem={({ item }) => (
-              <View style={styles.threadRow}>
-                {/* Tap en el cuerpo → abrir chat */}
-                <TouchableOpacity
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3], flex: 1 }}
-                  onPress={() => handleOpenThread(item)}
-                  activeOpacity={0.75}
-                >
-                  <View style={[styles.threadIcon, { backgroundColor: bot.color + '18' }]}>
-                    <Ionicons name="chatbubble-outline" size={16} color={bot.color} />
-                  </View>
-                  <View style={{ flex: 1, gap: 3 }}>
-                    <Text variant="bodySmall" numberOfLines={1} style={{ fontFamily: 'Montserrat_600SemiBold' }}>
-                      {item.title ?? 'Nueva conversación'}
-                    </Text>
-                    <Text variant="caption" color={colors.text.tertiary}>
-                      {timeAgo(item.last_message_at)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
+            renderItem={({ item, index }) => (
+              <TouchableOpacity
+                style={ts.threadCard}
+                onPress={() => handleOpenThread(item)}
+                activeOpacity={0.82}
+              >
+                {/* Ícono con número de orden */}
+                <View style={[ts.threadIconBox, { backgroundColor: tMeta.bgColor }]}>
+                  <Ionicons name="chatbubble-outline" size={18} color={tMeta.accentColor} />
+                </View>
 
-                {/* Botones de acción */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
+                {/* Info */}
+                <View style={{ flex: 1, gap: 3 }}>
+                  <Text style={ts.threadTitle} numberOfLines={1}>
+                    {item.title ?? 'Nueva conversación'}
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                    <Ionicons name="time-outline" size={11} color={B.muted} />
+                    <Text style={ts.threadTime}>{timeAgo(item.last_message_at)}</Text>
+                  </View>
+                </View>
+
+                {/* Acciones */}
+                <View style={ts.actions}>
                   <TouchableOpacity
+                    style={ts.actionBtn}
                     onPress={() => openEditModal(item)}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    style={styles.threadActionBtn}
                   >
-                    <Ionicons name="pencil-outline" size={15} color={colors.text.tertiary} />
+                    <Ionicons name="pencil-outline" size={15} color={B.muted} />
                   </TouchableOpacity>
                   <TouchableOpacity
+                    style={ts.actionBtn}
                     onPress={() => handleLongPressThread(item)}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    style={styles.threadActionBtn}
                   >
-                    <Ionicons name="trash-outline" size={15} color={colors.text.tertiary} />
+                    <Ionicons name="trash-outline" size={15} color={B.muted} />
                   </TouchableOpacity>
+                  <View style={[ts.arrowBox, { backgroundColor: tMeta.bgColor }]}>
+                    <Ionicons name="chevron-forward" size={14} color={tMeta.accentColor} />
+                  </View>
                 </View>
-              </View>
+              </TouchableOpacity>
             )}
-            ListFooterComponent={null}
           />
         )}
       </SafeAreaView>
@@ -1038,6 +1197,247 @@ export default function AdvisorScreen() {
     </SafeAreaView>
   );
 }
+
+// ─── Estilos — vista Bots (light premium) ─────────────────────────────────────
+
+const bs = StyleSheet.create({
+  safe:   { flex: 1, backgroundColor: B.bg },
+  scroll: { paddingBottom: layout.tabBarHeight + spacing[8], gap: spacing[4] },
+
+  // Header
+  header: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    paddingHorizontal: layout.screenPadding,
+    paddingTop: spacing[3], paddingBottom: spacing[1],
+  },
+  headerTitle: {
+    fontFamily: 'Montserrat_800ExtraBold', fontSize: 30,
+    color: B.text, letterSpacing: -0.5,
+  },
+  headerSub: {
+    fontFamily: 'Montserrat_400Regular', fontSize: 13,
+    color: B.sub, marginTop: 3,
+  },
+  sparkleBtn: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: B.violetLt,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: B.violet, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25, shadowRadius: 12, elevation: 4,
+  },
+
+  // Hero card
+  heroCard: {
+    marginHorizontal: layout.screenPadding,
+    backgroundColor: B.card,
+    borderRadius: 28,
+    padding: spacing[5],
+    paddingTop: spacing[6],
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    overflow: 'hidden',
+    shadowColor: B.violet, shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.10, shadowRadius: 20, elevation: 5,
+    borderWidth: 1, borderColor: B.violetLt,
+    minHeight: 220,
+  },
+  heroGlow: {
+    position: 'absolute', right: -30, top: -30,
+    width: 180, height: 180, borderRadius: 90,
+    backgroundColor: B.violetLt, opacity: 0.6,
+  },
+  heroLeft:  { flex: 1, gap: spacing[3], paddingRight: spacing[2] },
+  newBadge:  {
+    flexDirection: 'row', alignSelf: 'flex-start',
+    backgroundColor: B.violetLt, borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  newBadgeText: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 10,
+    color: B.violet, letterSpacing: 0.8,
+  },
+  heroTitle: {
+    fontFamily: 'Montserrat_800ExtraBold', fontSize: 20,
+    color: B.text, lineHeight: 28,
+  },
+  heroAccent: {
+    fontFamily: 'Montserrat_800ExtraBold', fontSize: 20,
+    color: B.violet, lineHeight: 28,
+    textDecorationLine: 'underline',
+  },
+  heroDesc: {
+    fontFamily: 'Montserrat_400Regular', fontSize: 12,
+    color: B.sub, lineHeight: 18,
+  },
+  heroCta: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    backgroundColor: B.violet, borderRadius: 14,
+    paddingVertical: 11, paddingHorizontal: 16, alignSelf: 'flex-start',
+    shadowColor: B.violet, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35, shadowRadius: 12, elevation: 5,
+    marginTop: 2,
+  },
+  heroCtaText: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 13, color: '#fff',
+  },
+  heroRight: {
+    width: 90, alignItems: 'center', justifyContent: 'center',
+    position: 'relative',
+  },
+  robotEmoji: { fontSize: 72, lineHeight: 84 },
+  spark1: { position: 'absolute', top: 2,  left: 2,  fontSize: 12, color: B.violet, opacity: 0.7 },
+  spark2: { position: 'absolute', top: 18, right: 0, fontSize: 9,  color: B.violet, opacity: 0.5 },
+  spark3: { position: 'absolute', bottom: 22, left: 6, fontSize: 10, color: B.violet, opacity: 0.6 },
+  spark4: { position: 'absolute', bottom: 8, right: 4, fontSize: 7,  color: B.violet, opacity: 0.4 },
+
+  // Quick chips
+  sectionTitle: {
+    fontFamily: 'Montserrat_700Bold', fontSize: 17,
+    color: B.text, paddingHorizontal: layout.screenPadding,
+  },
+  sectionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: layout.screenPadding,
+  },
+  chipsRow: {
+    paddingHorizontal: layout.screenPadding, gap: spacing[2],
+    paddingBottom: 2,
+  },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: 22, borderWidth: 1,
+  },
+  chipIcon: { fontSize: 17 },
+  chipText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13 },
+
+  // Bot cards
+  botCard: {
+    marginHorizontal: layout.screenPadding,
+    backgroundColor: B.card, borderRadius: 22,
+    padding: spacing[5], flexDirection: 'row',
+    alignItems: 'center', gap: spacing[4],
+    borderWidth: 1, borderColor: B.border,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
+    overflow: 'hidden',
+  },
+  botIcon: {
+    width: 64, height: 64, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  botName: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: B.text },
+  botDesc: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: B.sub, lineHeight: 17 },
+  botMeta: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: B.muted },
+  botArrow: {
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  recBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: B.violetLt, borderRadius: 20,
+    paddingHorizontal: 7, paddingVertical: 3,
+  },
+  recText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 9, color: B.violet },
+  cardSpark: { position: 'absolute', fontSize: 10, opacity: 0.5 },
+
+  // Insight card
+  insightCard: {
+    marginHorizontal: layout.screenPadding,
+    backgroundColor: '#F0FDF4', borderRadius: 22,
+    padding: spacing[5], flexDirection: 'row',
+    alignItems: 'center', gap: spacing[4],
+    borderWidth: 1, borderColor: '#BBF7D0',
+    overflow: 'hidden',
+  },
+  insightIcon: {
+    width: 48, height: 48, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  insightTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: B.text },
+  insightText:  { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: B.sub, lineHeight: 18 },
+  insightChart: { alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  insightHeart: { position: 'absolute', top: -8, right: -6, fontSize: 13 },
+});
+
+// ─── Estilos — vista Threads ──────────────────────────────────────────────────
+
+const ts = StyleSheet.create({
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    paddingHorizontal: layout.screenPadding,
+    paddingTop: spacing[3], paddingBottom: spacing[4],
+    backgroundColor: B.bg,
+  },
+  backBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: B.card, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: B.border,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+  },
+  headerTitle: { fontFamily: 'Montserrat_800ExtraBold', fontSize: 22, color: B.text },
+  headerSub:   { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: B.muted, marginTop: 1 },
+  newBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    borderWidth: 1, borderRadius: 20,
+    paddingVertical: 8, paddingHorizontal: 13,
+  },
+  newBtnText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 13 },
+
+  list: {
+    paddingHorizontal: layout.screenPadding,
+    paddingTop: spacing[3],
+    paddingBottom: layout.tabBarHeight + spacing[6],
+    gap: spacing[3],
+  },
+
+  threadCard: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: B.card, borderRadius: 20,
+    padding: spacing[4], paddingRight: spacing[3],
+    borderWidth: 1, borderColor: B.border,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
+  },
+  threadIconBox: {
+    width: 46, height: 46, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  threadTitle: { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: B.text },
+  threadTime:  { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: B.muted },
+
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 },
+  actionBtn: {
+    width: 32, height: 32, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F1F3F6',
+  },
+  arrowBox: {
+    width: 32, height: 32, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Estado vacío
+  emptyWrap: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    gap: spacing[3], paddingHorizontal: layout.screenPadding,
+  },
+  emptyIconBox: {
+    width: 88, height: 88, borderRadius: 28,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: spacing[2],
+  },
+  emptyTitle: { fontFamily: 'Montserrat_800ExtraBold', fontSize: 22, color: B.text, textAlign: 'center' },
+  emptySub:   { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: B.sub, textAlign: 'center', lineHeight: 21 },
+  startBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderRadius: 16, paddingVertical: 13, paddingHorizontal: 22,
+    marginTop: spacing[2],
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 12, elevation: 5,
+  },
+  startBtnText: { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#fff' },
+});
 
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 

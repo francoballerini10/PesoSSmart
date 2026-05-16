@@ -24,6 +24,7 @@ import { useGoalsStore, type SavingsGoal } from '@/store/goalsStore';
 import { fetchDolarRateNow } from '@/hooks/useDolarRates';
 import { formatCurrency } from '@/utils/format';
 import { fetchBudgetPlan, type BudgetPlan } from '@/lib/budgetPlan';
+import { checkAndNotifyBudgetLimits } from '@/lib/budgetNotifications';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
@@ -110,8 +111,8 @@ function SmartPlanCard({ amount, onPress }: { amount: number; onPress: () => voi
 }
 
 const spc = StyleSheet.create({
-  card:        { backgroundColor: C.card, borderRadius: 20, borderWidth: 1.5, borderColor: C.violet + '35', overflow: 'hidden', ...shadow },
-  badge:       { position: 'absolute', top: 14, right: 14, backgroundColor: C.violet, borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: 3, zIndex: 1 },
+  card:        { backgroundColor: C.card, borderRadius: 20, borderWidth: 1.5, borderColor: C.violet + '35', ...shadow },
+  badge:       { position: 'absolute', top: 14, right: 14, backgroundColor: C.violet, borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: 3, zIndex: 2 },
   badgeText:   { fontFamily: 'Montserrat_700Bold', fontSize: 9, color: '#FFF', letterSpacing: 0.6 },
   inner:       { flexDirection: 'row', padding: spacing[5], paddingBottom: spacing[3], gap: spacing[3] },
   titleRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
@@ -120,7 +121,7 @@ const spc = StyleSheet.create({
   desc:        { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.sub, lineHeight: 18 },
   amount:      { fontFamily: 'Montserrat_800ExtraBold', fontSize: 28, color: C.green, lineHeight: 34 },
   amountLabel: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.sub },
-  rightCol:    { alignItems: 'flex-end', justifyContent: 'space-between', paddingTop: spacing[2], paddingBottom: spacing[1] },
+  rightCol:    { alignItems: 'flex-end', justifyContent: 'space-between', paddingTop: spacing[6], paddingBottom: spacing[1] },
   aiCircle:    { width: 38, height: 38, borderRadius: 19, backgroundColor: C.violet + '14', alignItems: 'center', justifyContent: 'center' },
   footer:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingBottom: spacing[5], paddingTop: spacing[1] },
   ctaBtn:      { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2], borderWidth: 1.5, borderColor: C.violet + '50', borderRadius: 12, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
@@ -461,7 +462,10 @@ export default function SavingsScreen() {
       fetchBudgetPlan(user.id),
     ]);
     if (rate.status === 'fulfilled') setUsdRate(rate.value);
-    if (plan.status === 'fulfilled') setBudgetPlan(plan.value);
+    if (plan.status === 'fulfilled') {
+      setBudgetPlan(plan.value);
+      if (plan.value) checkAndNotifyBudgetLimits(plan.value); // fire & forget
+    }
   }, [user?.id]);
 
   useEffect(() => { load(); }, [load]);

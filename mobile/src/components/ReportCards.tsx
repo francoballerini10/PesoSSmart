@@ -17,10 +17,136 @@ export const MONTH_NAMES = [
   'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre',
 ];
 
+// Paleta de fallback — 12 colores bien espaciados en el círculo cromático
 export const PALETTE = [
-  '#00C853','#1978E5','#E53935','#FFB300',
-  '#7B61FF','#FF6D00','#00BCD4','#E91E63','#4CAF50','#795548',
+  '#FF6B6B', // rojo
+  '#FF9F43', // naranja
+  '#FECA57', // amarillo
+  '#1DD1A1', // verde esmeralda
+  '#00D2D3', // teal
+  '#54A0FF', // azul cielo
+  '#5F27CD', // índigo
+  '#A29BFE', // violeta suave
+  '#FD79A8', // rosa
+  '#E84393', // fucsia
+  '#0ABDE3', // azul eléctrico
+  '#B2BEC3', // gris
 ];
+
+// ─── Semantic category color map ──────────────────────────────────────────────
+// Regla: cada grupo semántico usa un color claramente distinto del siguiente.
+// Spread aproximado: rojo 0° → naranja 30° → verde 150° → teal 180° →
+//   celeste 210° → azul 240° → violeta 270° → rosa 320° → fucsia 340°
+
+const CATEGORY_KEYWORD_COLORS: Array<[string, string]> = [
+  // Comida / restaurantes — ROJO cálido
+  ['comida',          '#FF6B6B'],
+  ['restaur',         '#FF6B6B'],
+  ['supermercado',    '#FF6B6B'],
+  ['almuerzo',        '#FF6B6B'],
+  ['delivery',        '#FF6B6B'],
+  ['cafe',            '#FF6B6B'],
+  ['verduleria',      '#FF6B6B'],
+
+  // Transporte — NARANJA
+  ['transporte',      '#FF9F43'],
+  ['uber',            '#FF9F43'],
+  ['nafta',           '#FF9F43'],
+  ['combustible',     '#FF9F43'],
+  ['subte',           '#FF9F43'],
+  ['colect',          '#FF9F43'],
+  ['taxi',            '#FF9F43'],
+
+  // Mascotas / veterinaria — AMARILLO dorado
+  ['mascota',         '#FECA57'],
+  ['veterinar',       '#FECA57'],
+  ['perro',           '#FECA57'],
+  ['gato',            '#FECA57'],
+
+  // Salud / gym — VERDE ESMERALDA
+  ['salud',           '#1DD1A1'],
+  ['farmacia',        '#1DD1A1'],
+  ['medic',           '#1DD1A1'],
+  ['gym',             '#1DD1A1'],
+  ['deporte',         '#1DD1A1'],
+  ['fitness',         '#1DD1A1'],
+  ['hospital',        '#1DD1A1'],
+  ['clinica',         '#1DD1A1'],
+
+  // Hogar / alquiler — TEAL
+  ['hogar',           '#00D2D3'],
+  ['alquiler',        '#00D2D3'],
+  ['expensa',         '#00D2D3'],
+  ['vivienda',        '#00D2D3'],
+  ['luz',             '#00D2D3'],
+  ['gas',             '#00D2D3'],
+  ['internet',        '#00D2D3'],
+  ['servicio',        '#00D2D3'],
+
+  // Viajes / turismo — AZUL CIELO
+  ['viaje',           '#54A0FF'],
+  ['hotel',           '#54A0FF'],
+  ['turismo',         '#54A0FF'],
+  ['vuelo',           '#54A0FF'],
+  ['airbnb',          '#54A0FF'],
+
+  // Suscripciones — ÍNDIGO oscuro
+  ['suscripci',       '#5F27CD'],
+  ['netflix',         '#5F27CD'],
+  ['spotify',         '#5F27CD'],
+  ['disney',          '#5F27CD'],
+  ['adobe',           '#5F27CD'],
+
+  // Educación — VIOLETA suave
+  ['educaci',         '#A29BFE'],
+  ['curso',           '#A29BFE'],
+  ['libro',           '#A29BFE'],
+  ['universidad',     '#A29BFE'],
+  ['colegio',         '#A29BFE'],
+  ['capacitaci',      '#A29BFE'],
+
+  // Entretenimiento — ROSA
+  ['entretenimiento', '#FD79A8'],
+  ['cine',            '#FD79A8'],
+  ['teatro',          '#FD79A8'],
+  ['streaming',       '#FD79A8'],
+  ['juego',           '#FD79A8'],
+  ['boliche',         '#FD79A8'],
+  ['bar',             '#FD79A8'],
+
+  // Ropa / indumentaria — FUCSIA
+  ['ropa',            '#E84393'],
+  ['indumentaria',    '#E84393'],
+  ['calzado',         '#E84393'],
+  ['zapatilla',       '#E84393'],
+
+  // Tecnología / electrónica — AZUL ELÉCTRICO
+  ['tecnolog',        '#0ABDE3'],
+  ['celular',         '#0ABDE3'],
+  ['computador',      '#0ABDE3'],
+  ['electronica',     '#0ABDE3'],
+  ['software',        '#0ABDE3'],
+
+  // Clasificaciones (para uso en mapas de clasificación)
+  ['necesario',       '#5B9EF9'],
+  ['prescindible',    '#FF7B7B'],
+  ['invertible',      '#4DC889'],
+
+  // Catch-all
+  ['otros',           '#B2BEC3'],
+  ['sin categ',       '#B2BEC3'],
+];
+
+export function getCategoryColor(name: string, index: number): string {
+  const normalized = name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+  for (const [keyword, color] of CATEGORY_KEYWORD_COLORS) {
+    if (normalized.includes(keyword)) return color;
+  }
+  return PALETTE[index % PALETTE.length];
+}
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -359,9 +485,9 @@ export function ResumenCard({ total, necessary, disposable, investable, estimate
       )}
       <View style={resStyles.breakdown}>
         {[
-          { label: 'Necesario',    amount: necessary,  color: colors.primary },
-          { label: 'Prescindible', amount: disposable, color: colors.red },
-          { label: 'Invertible',   amount: investable, color: '#66bb6a' },
+          { label: 'Necesario',    amount: necessary,  color: '#5B9EF9' },
+          { label: 'Prescindible', amount: disposable, color: '#FF7B7B' },
+          { label: 'Invertible',   amount: investable, color: '#4DC889' },
         ].filter(i => i.amount > 0).map(({ label, amount, color }) => (
           <View key={label} style={resStyles.breakdownItem}>
             <Text variant="caption" color={colors.text.tertiary}>{label.toUpperCase()}</Text>
@@ -391,29 +517,51 @@ export function CategoryBreakdown({ rows, total }: { rows: CategoryRow[]; total:
         <Text variant="caption" color={colors.text.tertiary}>{formatCurrency(total)}</Text>
       </View>
 
+      {/* Stacked pill bar */}
       <View style={cbStyles.stackBar}>
         {rows.map((row, i) => (
-          <View key={i} style={[cbStyles.stackSlice, { flex: row.amount, backgroundColor: row.color }]} />
+          <View
+            key={i}
+            style={[
+              cbStyles.stackSlice,
+              { flex: row.amount, backgroundColor: row.color },
+              i === 0 && cbStyles.stackFirst,
+              i === rows.length - 1 && cbStyles.stackLast,
+            ]}
+          />
         ))}
       </View>
 
+      {/* Category rows */}
       <View style={cbStyles.barList}>
         {rows.map((row, i) => (
           <View key={i} style={cbStyles.barRow}>
             <View style={cbStyles.barMeta}>
-              <View style={[cbStyles.dot, { backgroundColor: row.color }]} />
-              <Text variant="caption" color={colors.text.secondary} style={{ flex: 1 }} numberOfLines={2} ellipsizeMode="tail">
+              <View style={[cbStyles.dot, { backgroundColor: row.color + '28' }]}>
+                <View style={[cbStyles.dotInner, { backgroundColor: row.color }]} />
+              </View>
+              <Text
+                variant="caption"
+                color={colors.text.primary}
+                style={{ flex: 1, fontFamily: 'Montserrat_500Medium' }}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
                 {row.name}
               </Text>
-              <Text variant="caption" color={row.color} style={{ fontFamily: 'Montserrat_600SemiBold', flexShrink: 0 }}>
-                {Math.round(row.pct * 100)}%
-              </Text>
-              <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_500Medium', textAlign: 'right', flexShrink: 0 }}>
+              <View style={[cbStyles.pctPill, { backgroundColor: row.color + '1A' }]}>
+                <Text style={[cbStyles.pctText, { color: row.color }]}>
+                  {Math.round(row.pct * 100)}%
+                </Text>
+              </View>
+              <Text variant="caption" color={colors.text.primary} style={{ fontFamily: 'Montserrat_700Bold', minWidth: 72, textAlign: 'right', flexShrink: 0 }}>
                 {formatCurrency(row.amount)}
               </Text>
             </View>
-            <View style={cbStyles.track}>
-              <View style={[cbStyles.fill, { width: `${(row.amount / maxAmount) * 100}%`, backgroundColor: row.color }]} />
+            <View style={cbStyles.trackWrap}>
+              <View style={cbStyles.track}>
+                <View style={[cbStyles.fill, { width: `${(row.amount / maxAmount) * 100}%`, backgroundColor: row.color }]} />
+              </View>
             </View>
           </View>
         ))}
@@ -424,12 +572,18 @@ export function CategoryBreakdown({ rows, total }: { rows: CategoryRow[]; total:
 const cbStyles = StyleSheet.create({
   card:       { padding: spacing[5], gap: spacing[4] },
   header:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  stackBar:   { flexDirection: 'row', height: 8, borderRadius: 4, overflow: 'hidden', gap: 1 },
-  stackSlice: { borderRadius: 2 },
+  stackBar:   { flexDirection: 'row', height: 12, borderRadius: 6, overflow: 'hidden', gap: 2, backgroundColor: colors.border.subtle },
+  stackSlice: {},
+  stackFirst: { borderTopLeftRadius: 6, borderBottomLeftRadius: 6 },
+  stackLast:  { borderTopRightRadius: 6, borderBottomRightRadius: 6 },
   barList:    { gap: spacing[3] },
   barRow:     { gap: spacing[1] },
   barMeta:    { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  dot:        { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  dot:        { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  dotInner:   { width: 9, height: 9, borderRadius: 5 },
+  pctPill:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 20, flexShrink: 0 },
+  pctText:    { fontFamily: 'Montserrat_700Bold', fontSize: 10 },
+  trackWrap:  { paddingLeft: 30 },
   track:      { height: 4, backgroundColor: colors.border.subtle, borderRadius: 2, overflow: 'hidden' },
   fill:       { height: '100%', borderRadius: 2 },
 });

@@ -1289,9 +1289,11 @@ const gpStyles = StyleSheet.create({
 function MonthSpendingMini({
   totalThisMonth,
   estimatedIncome,
+  hideAmounts,
 }: {
   totalThisMonth:  number;
   estimatedIncome: number | null;
+  hideAmounts?:    boolean;
 }) {
   const barAnim   = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -1329,12 +1331,12 @@ function MonthSpendingMini({
       {/* Left: amount spent */}
       <View style={msmStyles.left}>
         <Text style={msmStyles.label}>Gastaste en el mes</Text>
-        <Text style={msmStyles.amount}>{formatCurrency(totalThisMonth)}</Text>
+        <Text style={msmStyles.amount}>{hideAmounts ? '••••••' : formatCurrency(totalThisMonth)}</Text>
       </View>
 
       {/* Right: income ref + bar + pct */}
       <View style={msmStyles.right}>
-        <Text style={msmStyles.incomeRef}>de {formatCurrency(estimatedIncome)}</Text>
+        <Text style={msmStyles.incomeRef}>{hideAmounts ? 'de ••••••' : `de ${formatCurrency(estimatedIncome)}`}</Text>
         <View style={msmStyles.barTrack}>
           <Animated.View
             style={[
@@ -2080,6 +2082,7 @@ export default function HomeScreen() {
   const [mpSyncing,      setMpSyncing]      = useState(false);
   const [mpSyncMsg,      setMpSyncMsg]      = useState<string | null>(null);
   const [inflationData,  setInflationData]  = useState<{ personal: number; official: number } | null>(null);
+  const [hideAmounts,    setHideAmounts]    = useState(false);
 
   const { isFirstVisit, markVisited } = useFirstVisit('home');
 
@@ -2407,15 +2410,14 @@ export default function HomeScreen() {
               <Text style={{ fontSize: 22 }}>👋</Text>
               <Text style={styles.greetingName}>Buen día, {firstName}</Text>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Text style={styles.eyeLabel}>Eyé</Text>
-              <Text style={styles.eyeSub}>Este es tu resumen de hoy</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <TouchableOpacity onPress={() => setHideAmounts(v => !v)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name={hideAmounts ? 'eye-off-outline' : 'eye-outline'} size={15} color="#7C3AED" />
+              </TouchableOpacity>
+              <Text style={styles.eyeSub}>Este es tu resumen del mes</Text>
             </View>
           </View>
           <View style={styles.headerRight}>
-            <TouchableOpacity style={styles.syncBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/expenses' as any)}>
-              <Ionicons name="image-outline" size={20} color="#212121" />
-            </TouchableOpacity>
             <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/advisor' as any)}>
               <Ionicons name="chatbubble-ellipses-outline" size={22} color="#212121" />
             </TouchableOpacity>
@@ -2443,6 +2445,7 @@ export default function HomeScreen() {
         <MonthSpendingMini
           totalThisMonth={totalThisMonth}
           estimatedIncome={estimatedIncome}
+          hideAmounts={hideAmounts}
         />
         )}
 

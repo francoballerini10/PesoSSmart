@@ -15,6 +15,7 @@ import { Text } from '@/components/ui/Text';
 import { useAuthStore } from '@/store/authStore';
 import { fetchBudgetPlan, type BudgetPlan, type CategoryBudget } from '@/lib/budgetPlan';
 import { formatCurrency } from '@/utils/format';
+import { checkAndNotifyBudgetLimits } from '@/lib/budgetNotifications';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ const C = {
   card:   '#FFFFFF',
   blue:   '#2563EB',
   green:  '#16A34A',
-  violet: '#8B5CF6',
+  violet: '#7C3AED',
   red:    '#EF4444',
   amber:  '#F59E0B',
   text:   '#111827',
@@ -42,209 +43,242 @@ const shadow = {
 } as const;
 
 // ─── Category Icon helper ─────────────────────────────────────────────────────
-// DB stores Ionicons names (e.g. "musical-notes-outline"), not emojis.
 
 function CategoryIcon({ icon, color, size = 20 }: {
   icon: string | null; color: string; size?: number;
 }) {
   if (!icon) return <Ionicons name="pricetag-outline" size={size} color={color} />;
-  // Ionicons names contain hyphens or are lowercase ASCII
   if (icon.includes('-') || /^[a-z]/.test(icon)) {
     return <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={size} color={color} />;
   }
-  return <Text style={{ fontSize: size - 2, lineHeight: size + 4 }}>{icon}</Text>;
+  return <Text style={{ fontSize: size - 2, lineHeight: size + 12 }}>{icon}</Text>;
 }
 
-// ─── Hero Card ────────────────────────────────────────────────────────────────
+// ─── Hero card ────────────────────────────────────────────────────────────────
 
 function HeroCard({ plan }: { plan: BudgetPlan }) {
-  const dayPct = plan.dayOfMonth / plan.daysInMonth;
+  const spendPct  = Math.min(plan.totalCurrentSpend / (plan.totalAvg || 1), 1);
+  const dayPct    = plan.dayOfMonth / plan.daysInMonth;
+  const available = plan.totalAvg - plan.totalCurrentSpend;
+  const isOver    = available < 0;
 
   return (
     <View style={hc.card}>
-      {/* Glow circles for depth */}
       <View style={hc.glow1} />
       <View style={hc.glow2} />
 
-      {/* Top row */}
+      {/* Clipboard illustration */}
+      <Text style={hc.illustration}>📋</Text>
+
+      {/* Title */}
       <View style={hc.topRow}>
-        <Ionicons name="sparkles" size={22} color="#E9D5FF" />
-        <View style={hc.iaBadge}>
-          <Text style={hc.iaBadgeText}>PLAN IA</Text>
+        <Ionicons name="sparkles" size={14} color="#E9D5FF" />
+        <Text style={hc.eyebrow}>Tus límites sugeridos para este mes</Text>
+      </View>
+      <Text style={hc.subtitle}>Calculados según tu promedio de los últimos 3 meses</Text>
+
+      {/* Three labeled numbers */}
+      <View style={hc.threeCol}>
+        <View style={{ gap: 3, alignItems: 'center', flex: 1 }}>
+          <Text style={hc.colLabel}>Presupuesto{'\n'}recomendado</Text>
+          <Text style={hc.colValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+            {formatCurrency(plan.totalAvg)}
+          </Text>
+        </View>
+        <View style={hc.dividerV} />
+        <View style={{ gap: 3, alignItems: 'center', flex: 1 }}>
+          <Text style={hc.colLabel}>Gastado{'\n'}hasta hoy</Text>
+          <Text style={hc.colValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+            {formatCurrency(plan.totalCurrentSpend)}
+          </Text>
+        </View>
+        <View style={hc.dividerV} />
+        <View style={{ gap: 3, alignItems: 'center', flex: 1 }}>
+          <Text style={hc.colLabel}>Disponible{'\n'}restante</Text>
+          <Text style={[hc.colValue, { color: isOver ? '#FCA5A5' : '#BBF7D0' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+            {isOver ? '-' : ''}{formatCurrency(Math.abs(available))}
+          </Text>
         </View>
       </View>
 
-      {/* Main content */}
-      <View style={{ gap: spacing[1] }}>
-        <Text style={hc.eyebrow}>Podrías ahorrar este mes</Text>
-        <Text style={hc.amount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-          {formatCurrency(plan.potentialSavings)}
-        </Text>
-        <Text style={hc.sub}>Si mantenés tus hábitos actuales.</Text>
-      </View>
-
-      {/* Month progress */}
+      {/* Progress bar */}
       <View style={{ gap: spacing[2] }}>
-        <View style={hc.progressTrack}>
-          <View style={[hc.progressFill, { width: `${Math.round(dayPct * 100)}%` as any }]} />
+        <View style={hc.track}>
+          <View style={[hc.fill, {
+            width: `${Math.round(spendPct * 100)}%` as any,
+            backgroundColor: isOver ? '#FCA5A5' : '#FFFFFF',
+          }]} />
+          <View style={[hc.dayMark, { left: `${Math.round(dayPct * 100)}%` as any }]} />
         </View>
-        <Text style={hc.progressLabel}>
-          Día {plan.dayOfMonth} de {plan.daysInMonth} · {plan.monthLabel}
-        </Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={hc.trackLabel}>{Math.round(spendPct * 100)}% usado</Text>
+          <Text style={hc.trackLabel}>Día {plan.dayOfMonth} de {plan.daysInMonth}</Text>
+        </View>
       </View>
     </View>
   );
 }
 
 const hc = StyleSheet.create({
-  card:          { backgroundColor: '#7C3AED', borderRadius: 24, padding: spacing[6], gap: spacing[4], overflow: 'hidden', position: 'relative' },
-  glow1:         { position: 'absolute', top: -50, right: -50, width: 180, height: 180, borderRadius: 90, backgroundColor: '#A78BFA30' },
-  glow2:         { position: 'absolute', bottom: -40, left: -40, width: 130, height: 130, borderRadius: 65, backgroundColor: '#60A5FA18' },
-  topRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  iaBadge:       { backgroundColor: '#FFFFFF22', borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: spacing[1] },
-  iaBadgeText:   { fontFamily: 'Montserrat_700Bold', fontSize: 10, color: '#EDE9FE', letterSpacing: 1.2 },
-  eyebrow:       { fontFamily: 'Montserrat_500Medium', fontSize: 13, color: '#DDD6FE' },
-  amount:        { fontFamily: 'Montserrat_800ExtraBold', fontSize: 48, color: '#FFFFFF', lineHeight: 58 },
-  sub:           { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#C4B5FD' },
-  progressTrack: { height: 4, backgroundColor: '#FFFFFF22', borderRadius: 2, overflow: 'hidden' },
-  progressFill:  { height: '100%', backgroundColor: '#FFFFFF', borderRadius: 2 },
-  progressLabel: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#A78BFA', textAlign: 'right' },
+  card:         { backgroundColor: C.violet, borderRadius: 24, padding: spacing[6], gap: spacing[3], overflow: 'hidden', position: 'relative' },
+  glow1:        { position: 'absolute', top: -50, right: -50, width: 180, height: 180, borderRadius: 90, backgroundColor: '#A78BFA30' },
+  glow2:        { position: 'absolute', bottom: -40, left: -40, width: 130, height: 130, borderRadius: 65, backgroundColor: '#60A5FA18' },
+  illustration: { position: 'absolute', top: -4, right: 12, fontSize: 70, opacity: 0.25 },
+  topRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  eyebrow:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: '#EDE9FE', flex: 1 },
+  subtitle:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#A78BFA', marginTop: -spacing[1] },
+  threeCol:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF18', borderRadius: 14, padding: spacing[4] },
+  dividerV:     { width: 1, height: 36, backgroundColor: '#FFFFFF30', marginHorizontal: spacing[2] },
+  colLabel:     { fontFamily: 'Montserrat_400Regular', fontSize: 10, color: '#C4B5FD', textAlign: 'center', lineHeight: 14 },
+  colValue:     { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#FFFFFF', textAlign: 'center' },
+  track:        { height: 6, backgroundColor: '#FFFFFF22', borderRadius: 3, overflow: 'visible', position: 'relative' },
+  fill:         { height: '100%', borderRadius: 3 },
+  dayMark:      { position: 'absolute', top: -3, width: 2, height: 12, backgroundColor: '#FFFFFF80', borderRadius: 1 },
+  trackLabel:   { fontFamily: 'Montserrat_400Regular', fontSize: 10, color: '#A78BFA' },
 });
 
-// ─── Excess Summary ───────────────────────────────────────────────────────────
+// ─── IA Insight card ──────────────────────────────────────────────────────────
 
-function ExcessSummary({ plan, onCategoryPress }: {
-  plan: BudgetPlan; onCategoryPress: (cat: CategoryBudget) => void;
-}) {
-  const topOver = plan.categories.filter(c => c.status === 'over').slice(0, 3);
-  if (topOver.length === 0) return null;
-
+function InsightCard({ savings, onPress }: { savings: number; onPress: () => void }) {
   return (
-    <View style={ex.card}>
-      <View style={ex.titleRow}>
-        <Ionicons name="search-outline" size={15} color={C.red} />
-        <Text style={ex.title}>Detectamos exceso en:</Text>
+    <View style={ic.card}>
+      <View style={ic.iaBadge}>
+        <Text style={ic.iaText}>IA</Text>
       </View>
-      {topOver.map(c => {
-        const excess = Math.max(0, c.projected - c.avgMonthly);
-        return (
-          <TouchableOpacity key={c.categoryId} style={ex.row} onPress={() => onCategoryPress(c)} activeOpacity={0.75}>
-            <View style={ex.iconBox}>
-              <CategoryIcon icon={c.icon} color={C.red} size={16} />
-            </View>
-            <Text style={ex.catName} numberOfLines={1}>{c.name}</Text>
-            <Text style={ex.excess}>+{formatCurrency(excess)}</Text>
-            <Ionicons name="chevron-forward" size={12} color={C.muted} />
-          </TouchableOpacity>
-        );
-      })}
+      <Text style={ic.body} numberOfLines={2}>
+        Si ajustás las categorías excedidas,{'\n'}podrías ahorrar hasta{' '}
+        <Text style={ic.amount}>{formatCurrency(savings)}</Text>
+      </Text>
+      <TouchableOpacity style={ic.btn} onPress={onPress} activeOpacity={0.8}>
+        <Text style={ic.btnText}>Ver oportunidades</Text>
+        <Ionicons name="chevron-forward" size={13} color={C.violet} />
+      </TouchableOpacity>
     </View>
   );
 }
 
-const ex = StyleSheet.create({
-  card:     { backgroundColor: C.red + '08', borderWidth: 1, borderColor: C.red + '22', borderRadius: 16, padding: spacing[4], gap: spacing[3] },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  title:    { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.text },
-  row:      { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  iconBox:  { width: 28, height: 28, borderRadius: 14, backgroundColor: C.red + '12', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  catName:  { flex: 1, fontFamily: 'Montserrat_400Regular', fontSize: 13, color: C.sub },
-  excess:   { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: C.red },
+const ic = StyleSheet.create({
+  card:    { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.card, borderRadius: 16, padding: spacing[4], ...shadow },
+  iaBadge: { width: 40, height: 40, borderRadius: 12, backgroundColor: C.violet, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  iaText:  { fontFamily: 'Montserrat_800ExtraBold', fontSize: 11, color: '#FFF', letterSpacing: 0.5 },
+  body:    { flex: 1, fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.sub, lineHeight: 18 },
+  amount:  { fontFamily: 'Montserrat_700Bold', color: C.violet },
+  btn:     { flexDirection: 'row', alignItems: 'center', gap: 3, borderWidth: 1.5, borderColor: C.violet + '40', borderRadius: 20, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
+  btnText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 11, color: C.violet },
 });
 
-// ─── Stat Mini Card ───────────────────────────────────────────────────────────
+// ─── Category budget card ─────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, accent }: {
-  label: string; value: string; sub?: string; accent?: string;
-}) {
-  return (
-    <View style={sc.card}>
-      <Text style={sc.label}>{label}</Text>
-      <Text style={[sc.value, accent ? { color: accent } : {}]}>{value}</Text>
-      {sub ? <Text style={sc.sub}>{sub}</Text> : null}
-    </View>
-  );
-}
+function CategoryBudgetCard({ cat, onPress }: { cat: CategoryBudget; onPress: () => void }) {
+  const available  = cat.avgMonthly - cat.currentSpend;
+  const isOver     = available < 0;
+  const isExact    = !isOver && available < 1;
+  const isWarning  = !isOver && !isExact && cat.pct >= 0.8;
+  const isGreen    = !isOver && !isExact && !isWarning;
+  const fillPct    = Math.min(cat.pct * 100, 100);
 
-const sc = StyleSheet.create({
-  card:  { flex: 1, backgroundColor: C.card, borderRadius: 16, padding: spacing[4], gap: spacing[1], ...shadow },
-  label: { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: C.muted, lineHeight: 14 },
-  value: { fontFamily: 'Montserrat_800ExtraBold', fontSize: 15, color: C.text, lineHeight: 20 },
-  sub:   { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: C.sub },
-});
+  const accentColor = isOver ? C.red : (isExact || isWarning) ? C.amber : C.green;
 
-// ─── Category Progress Row ────────────────────────────────────────────────────
-
-function CategoryRow({ cat, onPress }: { cat: CategoryBudget; onPress: () => void }) {
-  const barColor =
-    cat.status === 'over'    ? C.red   :
-    cat.status === 'warning' ? C.amber :
-    C.green;
-
-  const fillPct = Math.min((cat.pct / 1.2) * 100, 100);
+  // Right-side label & amount logic
+  let rightAmount: string | null = null;
+  let rightLabel: string;
+  if (isOver) {
+    rightLabel = `Excedido por\n${formatCurrency(Math.abs(available))}`;
+  } else if (isExact) {
+    rightLabel = 'Límite\nalcanzado';
+  } else if (isWarning) {
+    rightAmount = formatCurrency(available);
+    rightLabel  = 'Te quedan';
+  } else {
+    rightLabel = 'Dentro del\nlímite';
+  }
 
   return (
-    <TouchableOpacity style={cr.row} onPress={onPress} activeOpacity={0.8}>
-      <View style={[cr.iconBox, { backgroundColor: barColor + '14' }]}>
-        <CategoryIcon icon={cat.icon} color={barColor} size={18} />
+    <TouchableOpacity style={cb.card} onPress={onPress} activeOpacity={0.82}>
+      <View style={cb.topRow}>
+        <View style={[cb.iconBox, { backgroundColor: accentColor + '12' }]}>
+          <CategoryIcon icon={cat.icon} color={accentColor} size={18} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={cb.name} numberOfLines={1}>{cat.name}</Text>
+          <Text style={cb.spent}>
+            Gastaste {formatCurrency(cat.currentSpend)} de {formatCurrency(cat.avgMonthly)}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end', gap: 1, maxWidth: 120 }}>
+          {rightAmount && (
+            <Text style={[cb.available, { color: accentColor }]}>{rightAmount}</Text>
+          )}
+          <Text style={[cb.availLabel, { color: accentColor }]}>{rightLabel}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={14} color={C.muted} style={{ marginLeft: spacing[1] }} />
       </View>
-      <View style={{ flex: 1, gap: 6 }}>
-        <View style={cr.nameRow}>
-          <Text style={cr.name} numberOfLines={1}>{cat.name}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Text style={[cr.amounts, cat.status === 'over' && { color: C.red }]}>
-              {formatCurrency(cat.currentSpend)}
-            </Text>
-            <Text style={cr.limit}>/ {formatCurrency(cat.avgMonthly)}</Text>
-          </View>
-        </View>
-        <View style={cr.track}>
-          <View style={[cr.fill, { width: `${fillPct}%` as any, backgroundColor: barColor }]} />
-        </View>
-        <View style={cr.bottomRow}>
-          <View style={[cr.statusPill, { backgroundColor: barColor + '14', borderColor: barColor + '40' }]}>
-            <Text style={[cr.statusText, { color: barColor }]}>
-              {cat.status === 'over' ? 'Excedido' : cat.status === 'warning' ? 'Atención' : 'En límite'}
-              {' '}{Math.round(cat.pct * 100)}%
-            </Text>
-          </View>
-          <Text style={cr.proj}>Proyectado: {formatCurrency(cat.projected)}</Text>
-        </View>
+
+      <View style={cb.track}>
+        <View style={[cb.fill, { width: `${fillPct}%` as any, backgroundColor: accentColor }]} />
       </View>
-      <Ionicons name="chevron-forward" size={14} color={C.muted} />
     </TouchableOpacity>
   );
 }
 
-const cr = StyleSheet.create({
-  row:        { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.card, borderRadius: 16, padding: spacing[4], ...shadow },
-  iconBox:    { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  nameRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  name:       { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.text, flex: 1, marginRight: spacing[2] },
-  amounts:    { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: C.text },
-  limit:      { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
-  track:      { height: 6, backgroundColor: C.light, borderRadius: 3, overflow: 'hidden' },
-  fill:       { height: '100%', borderRadius: 3 },
-  bottomRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  statusPill: { borderWidth: 1, borderRadius: 20, paddingHorizontal: spacing[2], paddingVertical: 2 },
-  statusText: { fontFamily: 'Montserrat_700Bold', fontSize: 10 },
-  proj:       { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted },
+const cb = StyleSheet.create({
+  card:      { backgroundColor: C.card, borderRadius: 16, padding: spacing[4], gap: spacing[3], ...shadow },
+  topRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  iconBox:   { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  name:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 14, color: C.text, marginBottom: 2 },
+  spent:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted },
+  available: { fontFamily: 'Montserrat_800ExtraBold', fontSize: 16, lineHeight: 20 },
+  availLabel:{ fontFamily: 'Montserrat_600SemiBold', fontSize: 10, lineHeight: 14, textAlign: 'right' },
+  track:     { height: 5, backgroundColor: C.light, borderRadius: 3, overflow: 'hidden' },
+  fill:      { height: '100%', borderRadius: 3 },
+});
+
+// ─── Consejo inteligente card ─────────────────────────────────────────────────
+
+function ConsejoCard({ categories }: { categories: CategoryBudget[] }) {
+  const over = categories.filter(c => c.status === 'over').slice(0, 2);
+  if (over.length === 0) return null;
+
+  const names = over.map(c => c.name).join(' y ');
+
+  return (
+    <View style={cc.card}>
+      <View style={cc.header}>
+        <View style={cc.iconBox}>
+          <Ionicons name="bulb-outline" size={18} color={C.violet} />
+        </View>
+        <Text style={cc.title}>Consejo inteligente</Text>
+      </View>
+      <Text style={cc.body}>
+        Reduciendo gastos en {names} podrías mejorar tu presupuesto este mes.
+      </Text>
+    </View>
+  );
+}
+
+const cc = StyleSheet.create({
+  card:    { backgroundColor: C.violet + '0D', borderWidth: 1, borderColor: C.violet + '25', borderRadius: 18, padding: spacing[5], gap: spacing[3] },
+  header:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  iconBox: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.violet + '18', alignItems: 'center', justifyContent: 'center' },
+  title:   { fontFamily: 'Montserrat_700Bold', fontSize: 14, color: C.violet },
+  body:    { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: C.sub, lineHeight: 20 },
 });
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function SavingsPlanScreen() {
-  const { user }    = useAuthStore();
-  const [plan,        setPlan]         = useState<BudgetPlan | null>(null);
-  const [loading,     setLoading]      = useState(true);
+  const { user }       = useAuthStore();
+  const [plan,         setPlan]        = useState<BudgetPlan | null>(null);
+  const [loading,      setLoading]     = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [showAll,     setShowAll]      = useState(false);
+  const [showAll,      setShowAll]     = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
     const data = await fetchBudgetPlan(user.id);
     setPlan(data);
     setLoading(false);
+    if (data) checkAndNotifyBudgetLimits(data);
   }, [user?.id]);
 
   useEffect(() => { load(); }, [load]);
@@ -264,17 +298,17 @@ export default function SavingsPlanScreen() {
 
   const visibleCategories = showAll
     ? (plan?.categories ?? [])
-    : (plan?.categories ?? []).slice(0, 5);
+    : (plan?.categories ?? []).slice(0, 6);
 
   return (
     <SafeAreaView style={st.safe} edges={['top']}>
       {/* Header */}
       <View style={st.header}>
-        <TouchableOpacity style={st.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity style={st.circleBtn} onPress={() => router.back()} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={20} color={C.text} />
         </TouchableOpacity>
         <Text style={st.headerTitle}>Plan Inteligente</Text>
-        <TouchableOpacity style={st.backBtn}>
+        <TouchableOpacity style={st.circleBtn} activeOpacity={0.7}>
           <Ionicons name="information-circle-outline" size={20} color={C.sub} />
         </TouchableOpacity>
       </View>
@@ -282,7 +316,7 @@ export default function SavingsPlanScreen() {
       {loading ? (
         <View style={st.centered}>
           <ActivityIndicator size="large" color={C.violet} />
-          <Text style={st.loadingText}>Analizando tus hábitos...</Text>
+          <Text style={st.loadingText}>Calculando tu presupuesto...</Text>
         </View>
       ) : !plan ? (
         <View style={st.centered}>
@@ -296,80 +330,43 @@ export default function SavingsPlanScreen() {
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={C.violet} />}
         >
-          {/* Hero card */}
+          {/* Hero */}
           <HeroCard plan={plan} />
 
-          {/* Why section: excess categories */}
-          <ExcessSummary plan={plan} onCategoryPress={handleCategoryPress} />
+          {/* IA insight card */}
+          {plan.potentialSavings > 500 && (
+            <InsightCard
+              savings={plan.potentialSavings}
+              onPress={() => router.push('/(app)/savings-opportunities' as any)}
+            />
+          )}
 
-          {/* 3 stat mini-cards */}
-          <View style={st.statsRow}>
-            <StatCard
-              label="Gastaste"
-              value={formatCurrency(plan.totalCurrentSpend)}
-              sub={`${Math.round((plan.totalCurrentSpend / (plan.totalAvg || 1)) * 100)}% del prom.`}
-              accent={plan.totalCurrentSpend > plan.totalAvg ? C.red : C.text}
-            />
-            <StatCard
-              label={'Promedio\núltimos 3 meses'}
-              value={formatCurrency(plan.totalAvg)}
-            />
-            <StatCard
-              label={'Disponible para\nahorrar'}
-              value={formatCurrency(plan.potentialSavings)}
-              accent={C.green}
-            />
-          </View>
-
-          {/* Category list */}
-          <View style={st.sectionRow}>
-            <Text style={st.sectionTitle}>Límites sugeridos por categoría</Text>
+          {/* Por categoría */}
+          <View style={st.sectionHeader}>
+            <Text style={st.sectionTitle}>Por categoría</Text>
+            <Text style={st.sectionSub}>Tocá para ver el detalle</Text>
           </View>
 
           {visibleCategories.map(cat => (
-            <CategoryRow key={cat.categoryId} cat={cat} onPress={() => handleCategoryPress(cat)} />
+            <CategoryBudgetCard
+              key={cat.categoryId}
+              cat={cat}
+              onPress={() => handleCategoryPress(cat)}
+            />
           ))}
 
-          {!showAll && plan.categories.length > 5 && (
+          {!showAll && plan.categories.length > 6 && (
             <TouchableOpacity style={st.showAllBtn} onPress={() => setShowAll(true)} activeOpacity={0.8}>
-              <Text style={st.showAllText}>Mostrar todas ({plan.categories.length})</Text>
+              <Text style={st.showAllText}>Ver todas las categorías ({plan.categories.length})</Text>
               <Ionicons name="chevron-down" size={14} color={C.blue} />
             </TouchableOpacity>
           )}
 
-          {/* Oportunidades CTA */}
-          <TouchableOpacity
-            style={st.opportunitiesBtn}
-            onPress={() => router.push('/(app)/savings-opportunities' as any)}
-            activeOpacity={0.85}
-          >
-            <View style={st.opportunitiesBtnIcon}>
-              <Ionicons name="trending-down-outline" size={18} color={C.green} />
-            </View>
-            <Text style={st.opportunitiesBtnText}>Ver oportunidades de ahorro</Text>
-            <Ionicons name="chevron-forward" size={14} color={C.green} />
-          </TouchableOpacity>
-
-          {/* Meta sugerida CTA */}
-          {plan.potentialSavings > 500 && (
-            <TouchableOpacity
-              style={st.goalCta}
-              onPress={() => router.push('/(app)/savings-goal' as any)}
-              activeOpacity={0.85}
-            >
-              <View style={st.goalCtaIcon}>
-                <Ionicons name="flag-outline" size={20} color={C.blue} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={st.goalCtaTitle}>Crear meta automática</Text>
-                <Text style={st.goalCtaSub}>Ahorrá {formatCurrency(plan.potentialSavings)} este mes</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={C.blue} />
-            </TouchableOpacity>
-          )}
+          {/* Consejo inteligente */}
+          <ConsejoCard categories={plan.categories} />
 
           <Text style={st.footnote}>
-            Basado en tus últimos 3 meses de gastos. Proyección estimada al día de hoy.
+            Límites calculados con tu promedio de los últimos 3 meses.
           </Text>
         </ScrollView>
       )}
@@ -378,26 +375,19 @@ export default function SavingsPlanScreen() {
 }
 
 const st = StyleSheet.create({
-  safe:                { flex: 1, backgroundColor: C.bg },
-  header:              { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: layout.screenPadding, paddingTop: spacing[2], paddingBottom: spacing[4] },
-  headerTitle:         { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: C.text },
-  backBtn:             { width: 38, height: 38, borderRadius: 19, backgroundColor: C.card, alignItems: 'center', justifyContent: 'center', ...shadow },
-  centered:            { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3], paddingHorizontal: layout.screenPadding },
-  loadingText:         { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: C.sub, marginTop: spacing[3] },
-  emptyTitle:          { fontFamily: 'Montserrat_700Bold', fontSize: 17, color: C.text, textAlign: 'center' },
-  emptySub:            { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: C.sub, textAlign: 'center', lineHeight: 20 },
-  scroll:              { paddingHorizontal: layout.screenPadding, paddingBottom: layout.tabBarHeight + spacing[6], gap: spacing[4] },
-  statsRow:            { flexDirection: 'row', gap: spacing[3] },
-  sectionRow:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing[2] },
-  sectionTitle:        { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: C.text },
-  showAllBtn:          { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: C.blue + '0D', borderWidth: 1, borderColor: C.blue + '30', borderRadius: 14, padding: spacing[4] },
-  showAllText:         { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.blue },
-  opportunitiesBtn:    { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.green + '0D', borderWidth: 1, borderColor: C.green + '30', borderRadius: 16, padding: spacing[4] },
-  opportunitiesBtnIcon:{ width: 36, height: 36, borderRadius: 18, backgroundColor: C.green + '14', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  opportunitiesBtnText:{ flex: 1, fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.green },
-  goalCta:             { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: C.card, borderWidth: 1.5, borderColor: C.blue + '30', borderRadius: 18, padding: spacing[4], ...shadow },
-  goalCtaIcon:         { width: 44, height: 44, borderRadius: 22, backgroundColor: C.blue + '12', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  goalCtaTitle:        { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: C.text, marginBottom: 2 },
-  goalCtaSub:          { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.sub },
-  footnote:            { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted, textAlign: 'center', lineHeight: 16, paddingHorizontal: spacing[4] },
+  safe:         { flex: 1, backgroundColor: C.bg },
+  header:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: layout.screenPadding, paddingTop: spacing[2], paddingBottom: spacing[4] },
+  headerTitle:  { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: C.text },
+  circleBtn:    { width: 38, height: 38, borderRadius: 19, backgroundColor: C.card, alignItems: 'center', justifyContent: 'center', ...shadow },
+  centered:     { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3], paddingHorizontal: layout.screenPadding },
+  loadingText:  { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: C.sub, marginTop: spacing[3] },
+  emptyTitle:   { fontFamily: 'Montserrat_700Bold', fontSize: 17, color: C.text, textAlign: 'center' },
+  emptySub:     { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: C.sub, textAlign: 'center', lineHeight: 20 },
+  scroll:       { paddingHorizontal: layout.screenPadding, paddingBottom: layout.tabBarHeight + spacing[6], gap: spacing[4] },
+  sectionHeader:{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  sectionTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: C.text },
+  sectionSub:   { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: C.muted },
+  showAllBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: C.blue + '0D', borderWidth: 1, borderColor: C.blue + '25', borderRadius: 14, padding: spacing[4] },
+  showAllText:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 13, color: C.blue },
+  footnote:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: C.muted, textAlign: 'center', lineHeight: 16 },
 });

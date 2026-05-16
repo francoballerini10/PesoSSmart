@@ -38,6 +38,7 @@ import { FirstVisitSheet } from '@/components/FirstVisitSheet';
 import {
   MONTH_NAMES,
   PALETTE,
+  getCategoryColor,
   type CategoryRow,
   type MonthSummary,
   computeMonthStatus,
@@ -267,7 +268,7 @@ export default function ReportsScreen() {
         const cat   = (exp as any).category;
         const catId = cat?.id ?? 'none';
         if (!map[catId]) {
-          map[catId] = { id: catId, name: cat?.name_es ?? 'Sin categoría', color: cat?.color ?? PALETTE[Object.keys(map).length % PALETTE.length], amount: 0, pct: 0 };
+          map[catId] = { id: catId, name: cat?.name_es ?? 'Sin categoría', color: getCategoryColor(cat?.name_es ?? 'otros', Object.keys(map).length), amount: 0, pct: 0 };
         }
         map[catId].amount += (exp as any).amount;
         sum += (exp as any).amount;

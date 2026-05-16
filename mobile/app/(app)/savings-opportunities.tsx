@@ -50,7 +50,7 @@ function CategoryIcon({ icon, color, size = 20 }: {
   if (icon.includes('-') || /^[a-z]/.test(icon)) {
     return <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={size} color={color} />;
   }
-  return <Text style={{ fontSize: size - 2, lineHeight: size + 4 }}>{icon}</Text>;
+  return <Text style={{ fontSize: size - 2, lineHeight: size + 12 }}>{icon}</Text>;
 }
 
 // ─── Hero Card ────────────────────────────────────────────────────────────────
