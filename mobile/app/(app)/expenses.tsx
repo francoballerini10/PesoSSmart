@@ -76,19 +76,61 @@ function CategoryDonut({ rows, total, compact = false }: {
   const CIRC = 2 * Math.PI * R;
   const segments = buildSegments(rows, total, compact ? 6 : 8);
   const GAP_LEN  = ((compact ? 3 : 2.5) / 360) * CIRC;
-  let offset = 0;
 
   const sel = selectedIdx !== null ? segments[selectedIdx] : null;
 
+  // Detecta qué segmento corresponde al punto tocado en el donut
+  const hitTest = (locationX: number, locationY: number) => {
+    const dx = locationX - CX;
+    const dy = locationY - CX;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const innerR = R - SW / 2 - 4;
+    const outerR = R + SW / 2 + 4;
+    if (dist < innerR || dist > outerR) return null; // fuera del anillo
+
+    // Ángulo desde la parte superior (12 o'clock), en sentido horario
+    let angle = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+    if (angle < 0) angle += 360;
+
+    let cumulative = 0;
+    for (let i = 0; i < segments.length; i++) {
+      const segDeg = (segments[i].amount / total) * 360;
+      if (angle >= cumulative && angle < cumulative + segDeg) return i;
+      cumulative += segDeg;
+    }
+    return null;
+  };
+
+  const touchHandlers = compact ? {} : {
+    onStartShouldSetResponder: () => true,
+    onMoveShouldSetResponder:  () => true,
+    onResponderGrant: (e: any) => {
+      const idx = hitTest(e.nativeEvent.locationX, e.nativeEvent.locationY);
+      setSelectedIdx(idx);
+    },
+    onResponderMove: (e: any) => {
+      const idx = hitTest(e.nativeEvent.locationX, e.nativeEvent.locationY);
+      if (idx !== null) setSelectedIdx(idx);
+    },
+    onResponderRelease: () => {
+      // mantiene la selección visible para leer; se limpia con tap en leyenda
+    },
+  };
+
+  let offset = 0;
+
   return (
     <View style={compact ? cdS.wrapCompact : cdS.wrap}>
-      {/* Donut ring */}
-      <View style={{ position: 'relative', width: SIZE, height: SIZE, alignSelf: compact ? undefined : 'center' }}>
+      {/* Donut ring + overlay táctil */}
+      <View
+        style={{ position: 'relative', width: SIZE, height: SIZE, alignSelf: compact ? undefined : 'center' }}
+        {...touchHandlers}
+      >
         <Svg width={SIZE} height={SIZE}>
           <SvgCircle cx={CX} cy={CX} r={R} fill="none" stroke={colors.border.subtle} strokeWidth={SW} />
           {segments.map((seg, i) => {
-            const len = Math.max(0, (seg.amount / total) * CIRC - GAP_LEN);
-            const off = -offset;
+            const len    = Math.max(0, (seg.amount / total) * CIRC - GAP_LEN);
+            const off    = -offset;
             offset += (seg.amount / total) * CIRC;
             const dimmed = selectedIdx !== null && selectedIdx !== i;
             return (
@@ -96,17 +138,18 @@ function CategoryDonut({ rows, total, compact = false }: {
                 key={i} cx={CX} cy={CX} r={R}
                 fill="none"
                 stroke={seg.color}
-                strokeWidth={selectedIdx === i ? SW + 3 : SW}
+                strokeWidth={selectedIdx === i ? SW + 4 : SW}
                 strokeDasharray={`${len} ${CIRC - len}`}
                 strokeDashoffset={off}
                 strokeLinecap="butt"
                 rotation="-90" origin={`${CX},${CX}`}
-                opacity={dimmed ? 0.3 : 1}
+                opacity={dimmed ? 0.25 : 1}
               />
             );
           })}
         </Svg>
-        {/* Center label */}
+
+        {/* Centro: info del segmento seleccionado o total */}
         <View style={[StyleSheet.absoluteFill, cdS.center]} pointerEvents="none">
           {compact ? (
             <Text style={cdS.centerAmountSm} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
@@ -117,10 +160,10 @@ function CategoryDonut({ rows, total, compact = false }: {
               <Text style={[cdS.centerLabel, { color: sel.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                 {sel.name.toUpperCase()}
               </Text>
-              <Text style={[cdS.centerAmount, { color: sel.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              <Text style={[cdS.centerPct, { color: sel.color }]}>
                 {Math.round(sel.pct * 100)}%
               </Text>
-              <Text style={cdS.centerSub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              <Text style={cdS.centerSub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                 {formatCurrency(sel.amount).replace('$ ', '$')}
               </Text>
             </>
@@ -130,12 +173,15 @@ function CategoryDonut({ rows, total, compact = false }: {
               <Text style={cdS.centerAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                 {formatCurrency(total).replace('$ ', '$')}
               </Text>
+              {!compact && (
+                <Text style={cdS.centerHint}>toca el gráfico</Text>
+              )}
             </>
           )}
         </View>
       </View>
 
-      {/* Legend grid — only in full mode */}
+      {/* Leyenda — solo en modo full; tap para seleccionar / deseleccionar */}
       {!compact && (
         <View style={cdS.legend}>
           {segments.map((seg, i) => {
@@ -144,12 +190,12 @@ function CategoryDonut({ rows, total, compact = false }: {
             return (
               <TouchableOpacity
                 key={i}
-                style={[cdS.legendItem, isSelected && { backgroundColor: seg.color + '15', borderRadius: 8 }]}
+                style={[cdS.legendItem, isSelected && { backgroundColor: seg.color + '18', borderRadius: 8 }]}
                 onPress={() => setSelectedIdx(isSelected ? null : i)}
                 activeOpacity={0.7}
               >
-                <View style={[cdS.legendDot, { backgroundColor: seg.color, opacity: isDimmed ? 0.35 : 1 }]} />
-                <Text style={[cdS.legendName, isDimmed && { opacity: 0.4 }]} numberOfLines={1}>{seg.name}</Text>
+                <View style={[cdS.legendDot, { backgroundColor: seg.color, opacity: isDimmed ? 0.3 : 1 }]} />
+                <Text style={[cdS.legendName, isDimmed && { opacity: 0.35 }]} numberOfLines={1}>{seg.name}</Text>
                 <Text style={[cdS.legendPct, { color: isSelected ? seg.color : (isDimmed ? colors.text.tertiary : seg.color) }]}>
                   {Math.round(seg.pct * 100)}%
                 </Text>
@@ -166,9 +212,11 @@ const cdS = StyleSheet.create({
   wrap:          { gap: 20 },
   wrapCompact:   {},
   center:        { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  centerLabel:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.text.tertiary, letterSpacing: 0.6 },
+  centerLabel:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 10, color: colors.text.tertiary, letterSpacing: 0.6, textAlign: 'center' },
+  centerPct:     { fontFamily: 'Montserrat_800ExtraBold', fontSize: 26, lineHeight: 32, marginTop: 1 },
   centerAmount:  { fontFamily: 'Montserrat_800ExtraBold', fontSize: 16, color: colors.text.primary, marginTop: 2 },
-  centerSub:     { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: colors.text.secondary, marginTop: 1 },
+  centerSub:     { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: colors.text.secondary, marginTop: 2, textAlign: 'center' },
+  centerHint:    { fontFamily: 'Montserrat_400Regular', fontSize: 9, color: colors.text.tertiary, marginTop: 3, letterSpacing: 0.3 },
   centerAmountSm:{ fontFamily: 'Montserrat_700Bold', fontSize: 9, color: colors.text.primary, textAlign: 'center', paddingHorizontal: 4 },
   legend:        { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-start' },
   legendItem:    { flexDirection: 'row', alignItems: 'center', gap: 5, width: '47%', paddingVertical: 3, paddingHorizontal: 4 },
@@ -420,22 +468,8 @@ const detStyles = StyleSheet.create({
 
 // ─── MonthSelector ────────────────────────────────────────────────────────────
 
-function buildMonthList(): { month: number; year: number; label: string }[] {
-  const result = [];
-  const now = new Date();
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    result.push({
-      month: d.getMonth() + 1,
-      year:  d.getFullYear(),
-      label: d.toLocaleDateString('es-AR', { month: 'short', year: '2-digit' })
-               .replace('.', '').replace(' ', " '"),
-    });
-  }
-  return result;
-}
-
-const MONTH_LIST = buildMonthList();
+const MONTH_NAMES_SHORT = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const MAX_MONTHS_BACK   = 11;
 
 function MonthSelector({
   selected,
@@ -444,45 +478,57 @@ function MonthSelector({
   selected: { month: number; year: number };
   onSelect: (month: number, year: number) => void;
 }) {
+  const now   = new Date();
+  const isNow = selected.month === now.getMonth() + 1 && selected.year === now.getFullYear();
+
+  // how many months back from today is this selection?
+  const monthsBack = (now.getFullYear() - selected.year) * 12 + (now.getMonth() + 1 - selected.month);
+  const canGoBack  = monthsBack < MAX_MONTHS_BACK;
+
+  const goBack = () => {
+    if (!canGoBack) return;
+    if (selected.month === 1) onSelect(12, selected.year - 1);
+    else onSelect(selected.month - 1, selected.year);
+  };
+
+  const goForward = () => {
+    if (isNow) return;
+    if (selected.month === 12) onSelect(1, selected.year + 1);
+    else onSelect(selected.month + 1, selected.year);
+  };
+
+  const label = `${MONTH_NAMES_SHORT[selected.month - 1]} ${selected.year}`;
+
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={msStyles.row}
-      style={msStyles.container}
-    >
-      {MONTH_LIST.map((m) => {
-        const isActive = m.month === selected.month && m.year === selected.year;
-        return (
-          <TouchableOpacity
-            key={`${m.year}-${m.month}`}
-            style={[msStyles.chip, isActive && msStyles.chipActive]}
-            onPress={() => onSelect(m.month, m.year)}
-          >
-            <Text
-              variant="label"
-              style={{ fontSize: 10, color: isActive ? colors.white : colors.text.secondary }}
-            >
-              {m.label.toUpperCase()}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
+    <View style={msStyles.row}>
+      <TouchableOpacity
+        style={[msStyles.arrow, !canGoBack && msStyles.arrowDisabled]}
+        onPress={goBack}
+        disabled={!canGoBack}
+        hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+      >
+        <Ionicons name="chevron-back" size={20} color={canGoBack ? colors.text.primary : colors.text.tertiary} />
+      </TouchableOpacity>
+
+      <Text style={msStyles.label}>{label}</Text>
+
+      <TouchableOpacity
+        style={[msStyles.arrow, isNow && msStyles.arrowDisabled]}
+        onPress={goForward}
+        disabled={isNow}
+        hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+      >
+        <Ionicons name="chevron-forward" size={20} color={isNow ? colors.text.tertiary : colors.text.primary} />
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const msStyles = StyleSheet.create({
-  container: { marginHorizontal: -layout.screenPadding },
-  row:       { paddingHorizontal: layout.screenPadding, gap: spacing[2], paddingVertical: spacing[2] },
-  chip:      {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-    borderRadius: 20, borderWidth: 1, borderColor: colors.border.default,
-    backgroundColor: colors.bg.card,
-  },
-  chipActive: {
-    backgroundColor: colors.primary, borderColor: colors.primary,
-  },
+  row:          { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[4], paddingVertical: spacing[2] },
+  label:        { fontFamily: 'Montserrat_700Bold', fontSize: 16, color: colors.text.primary, minWidth: 160, textAlign: 'center' },
+  arrow:        { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.default, alignItems: 'center', justifyContent: 'center' },
+  arrowDisabled:{ opacity: 0.35 },
 });
 
 // ─── AnalysisTeaser ────────────────────────────────────────────────────────────
@@ -1638,10 +1684,11 @@ export default function ExpensesScreen() {
         }
 
         // ── Sin filtro: donut de clasificaciones (Necesario/Prescindible/Invertible)
+        const classifiedTotal = totalNecessary + totalDisposable + totalInvestable;
         const clsRows: CategoryRow[] = [
-          { id: 'necessary',  name: 'Necesario',    color: '#5B9EF9', amount: totalNecessary,  pct: totalThisMonth > 0 ? totalNecessary  / totalThisMonth : 0 },
-          { id: 'disposable', name: 'Prescindible', color: '#FF7B7B', amount: totalDisposable, pct: totalThisMonth > 0 ? totalDisposable / totalThisMonth : 0 },
-          { id: 'investable', name: 'Invertible',   color: '#4DC889', amount: totalInvestable, pct: totalThisMonth > 0 ? totalInvestable / totalThisMonth : 0 },
+          { id: 'necessary',  name: 'Necesario',    color: '#5B9EF9', amount: totalNecessary,  pct: classifiedTotal > 0 ? totalNecessary  / classifiedTotal : 0 },
+          { id: 'disposable', name: 'Prescindible', color: '#FF7B7B', amount: totalDisposable, pct: classifiedTotal > 0 ? totalDisposable / classifiedTotal : 0 },
+          { id: 'investable', name: 'Invertible',   color: '#4DC889', amount: totalInvestable, pct: classifiedTotal > 0 ? totalInvestable / classifiedTotal : 0 },
         ].filter(r => r.amount > 0);
         return (
           <View style={smS.card}>
@@ -1675,8 +1722,8 @@ export default function ExpensesScreen() {
               </View>
               {/* Derecha — donut de clasificaciones */}
               <View style={smS.right}>
-                {totalThisMonth > 0
-                  ? <CategoryDonut rows={clsRows} total={totalThisMonth} compact />
+                {classifiedTotal > 0
+                  ? <CategoryDonut rows={clsRows} total={classifiedTotal} compact />
                   : <View style={smS.donutEmpty} />
                 }
               </View>
@@ -2536,13 +2583,11 @@ function ExpenseItem({ expense, onPress }: { expense: Expense; onPress: () => vo
 
   return (
     <TouchableOpacity style={styles.expenseItem} onPress={onPress} activeOpacity={0.75}>
-      <View style={[styles.expenseIconCircle, { backgroundColor: catColor + '20' }]}>
-        <CategoryIcon
-          categoryName={catName}
-          description={isUnclassified ? '' : expense.description}
-          size={30}
-        />
-      </View>
+      <CategoryIcon
+        categoryName={catName}
+        description={isUnclassified ? '' : expense.description}
+        size={40}
+      />
       <View style={styles.expenseLeft}>
         <Text style={styles.expenseName} numberOfLines={1}>
           {isUnclassified ? 'Sin clasificar' : (expense.category?.name_es ?? expense.description)}
@@ -2761,7 +2806,7 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom: layout.tabBarHeight + spacing[6],
-    gap: spacing[2],
+    gap: spacing[1],
   },
   empty: {
     paddingVertical: spacing[16],
@@ -2774,8 +2819,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: spacing[1],
-    paddingTop: spacing[5],
-    paddingBottom: spacing[2],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[1],
   },
   dayLabel: {
     fontFamily: 'Montserrat_500Medium',
@@ -2806,7 +2851,7 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   expenseIconCircle: {
-    width: 46, height: 46, borderRadius: 23,
+    width: 40, height: 40, borderRadius: 20,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   expenseLeft:      { flex: 1, gap: 3 },
