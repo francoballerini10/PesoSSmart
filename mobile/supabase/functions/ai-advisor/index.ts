@@ -151,6 +151,7 @@ CRÉDITOS HIPOTECARIOS UVA:
 function buildSystemPrompt(
   ctx: Record<string, any>,
   macro: Record<string, any> = {},
+  rates: Record<string, { rate: number; label: string }> = {},
 ): string {
   const lines: string[] = [BASE_KNOWLEDGE];
 
@@ -173,6 +174,38 @@ function buildSystemPrompt(
     lines.push(`  → Brecha cambiaria: ${brecha}%`);
   }
   lines.push(`Usá estos datos cuando el usuario pregunte por inflación, dólar, o rendimiento real de inversiones.`);
+
+  // Tasas de inversión e inflación por rubro desde DB
+  if (Object.keys(rates).length > 0) {
+    const ipcMonthly = macro.ipc_ultimo != null ? +(macro.ipc_ultimo * 100).toFixed(2) : null;
+    lines.push(`\n=== TASAS E INFLACIÓN POR RUBRO (datos actualizados en app) ===`);
+
+    const investKeys = ['fci_mm', 'pf_30d', 'caucion_1d', 'cuenta_remunerada', 'lecap_monthly'];
+    const investLines = investKeys
+      .filter(k => rates[k])
+      .map(k => {
+        const { rate, label } = rates[k];
+        const vs = ipcMonthly != null ? (rate >= ipcMonthly ? '✓ supera inflación' : '✗ no cubre inflación') : '';
+        return `  · ${label}: ${rate}%/mes${vs ? ' — ' + vs : ''}`;
+      });
+    if (investLines.length) {
+      lines.push(`Instrumentos de inversión (rendimiento mensual):`);
+      investLines.forEach(l => lines.push(l));
+    }
+
+    const catKeys = Object.keys(rates).filter(k => k.startsWith('inflation_'));
+    if (catKeys.length) {
+      lines.push(`\nInflación por rubro INDEC (mensual):`);
+      catKeys.forEach(k => {
+        const { rate, label } = rates[k];
+        lines.push(`  · ${label}: ${rate}%`);
+      });
+    }
+
+    if (ipcMonthly != null && investLines.length) {
+      lines.push(`\nCuando el usuario pregunte dónde poner su dinero, usá estas tasas reales. Ej: "El plazo fijo rinde ${rates['pf_30d']?.rate ?? '?'}%/mes vs inflación de ${ipcMonthly}% — ${(rates['pf_30d']?.rate ?? 0) >= ipcMonthly ? 'cubrís la inflación' : 'perdés poder adquisitivo igual'}".`);
+    }
+  }
 
   // Datos del usuario
   lines.push(`\n=== PERFIL FINANCIERO DEL USUARIO ===`);
@@ -272,16 +305,77 @@ serve(async (req) => {
       history,
       user_id,
       generate_welcome = false,
+      generate_report  = false,
+      report_context   = null,
       client_context   = null,
       initial_context  = null,
       savings_context  = null,
       bot_focus        = 'general', // 'general' | 'inversiones' | 'ahorro' | 'gastos'
     } = body;
 
-    if (!generate_welcome && !message) {
+    if (!generate_welcome && !generate_report && !message) {
       return new Response(JSON.stringify({ error: 'Mensaje requerido' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+    }
+
+    // ── Modo: Reporte de salud financiera (sin límite de mensajes) ───────────
+    if (generate_report && report_context) {
+      const fmt = (n: number) => '$' + Math.round(n).toLocaleString('es-AR');
+      const rc  = report_context;
+
+      const reportSystemPrompt = `${BASE_KNOWLEDGE}
+
+=== MODO: GENERACIÓN DE REPORTE FINANCIERO ===
+Sos SmartPesos. Tu tarea es generar un análisis narrativo conciso del estado financiero del usuario basado en los datos calculados que te envían. Respondé ÚNICAMENTE con un JSON válido con esta estructura exacta:
+{
+  "narrative": "2-3 oraciones que resumen el estado financiero del mes de forma honesta, con datos concretos, en tono humano e inteligente. Sin moralizar.",
+  "key_finding": "Una oración que identifica el hallazgo más relevante del mes, con dato concreto.",
+  "next_step": "Una acción concreta y específica que el usuario puede hacer YA para mejorar su situación."
+}
+Reglas:
+- Usá montos en formato argentino ($1.200.000).
+- No uses frases como "vas excelente" sin respaldarlo con datos.
+- Nunca culpes al usuario.
+- Si el puntaje es alto, celebrá con datos. Si es bajo, explicá qué lo genera.
+- Solo respondé el JSON, sin texto adicional antes ni después.`;
+
+      const reportUserMsg = `Datos del mes del usuario:
+- Puntaje de salud financiera: ${rc.health_score}/100 (${rc.health_label})
+- Total gastado: ${fmt(rc.total)}${rc.income ? ` de ${fmt(rc.income)} de ingreso (${rc.income_pct}%)` : ''}
+- Necesarios: ${fmt(rc.necessary)} · Prescindibles: ${fmt(rc.disposable)} · Invertibles: ${fmt(rc.investable)}
+- Prescindibles sobre lo clasificado: ${rc.disposable_pct ?? 'N/A'}%
+- Capacidad de ahorro: ${rc.savings_capacity != null ? fmt(rc.savings_capacity) : 'N/A'}
+- Categoría principal: ${rc.top_category ? `${rc.top_category.name} (${fmt(rc.top_category.amount)}, ${rc.top_category.pct}% del gasto)` : 'N/A'}
+- Variación vs mes anterior: ${rc.history_trend_pct != null ? `${rc.history_trend_pct > 0 ? '+' : ''}${rc.history_trend_pct}% nominal, ${rc.real_trend_pct > 0 ? '+' : ''}${rc.real_trend_pct}% real` : 'sin historial suficiente'}
+- Inflación del mes: ${rc.inflation_rate}%
+- Tasa FCI MM: ${rc.fci_rate}%/mes
+Componentes del puntaje: ${(rc.components ?? []).map((c: any) => `${c.label} ${c.score}/${c.max} — ${c.note}`).join('; ')}
+Generá el reporte en JSON.`;
+
+      const groqResReport = await fetchWithTimeout(GROQ_API_URL, 20000, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${groqApiKey}` },
+        body: JSON.stringify({
+          model:       'llama-3.3-70b-versatile',
+          messages:    [{ role: 'system', content: reportSystemPrompt }, { role: 'user', content: reportUserMsg }],
+          max_tokens:  400,
+          temperature: 0.5,
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      if (!groqResReport.ok) throw new Error(`Groq report: ${await groqResReport.text()}`);
+      const reportGroqData = await groqResReport.json();
+      const rawText        = reportGroqData.choices?.[0]?.message?.content ?? '{}';
+      let parsed: Record<string, string> = {};
+      try { parsed = JSON.parse(rawText); } catch { parsed = { narrative: rawText }; }
+
+      return new Response(JSON.stringify({
+        narrative:    parsed.narrative    ?? '',
+        key_finding:  parsed.key_finding  ?? '',
+        next_step:    parsed.next_step    ?? '',
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // ── Datos macroeconómicos en paralelo (con timeout de 4s cada uno) ──────────
@@ -332,13 +426,14 @@ serve(async (req) => {
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
         const since90    = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
 
-        const [profileRes, financialRes, riskRes, expensesRes, expCatRes, sub90Res] = await Promise.all([
+        const [profileRes, financialRes, riskRes, expensesRes, expCatRes, sub90Res, ratesRes] = await Promise.all([
           sb.from('profiles').select('full_name').eq('id', user_id).single(),
           sb.from('financial_profiles').select('income_range').eq('user_id', user_id).single(),
           sb.from('risk_profiles').select('risk_level').eq('user_id', user_id).maybeSingle(),
           sb.from('expenses').select('amount, classification').eq('user_id', user_id).is('deleted_at', null).gte('date', monthStart),
           sb.from('expenses').select('amount, category:expense_categories(name_es)').eq('user_id', user_id).is('deleted_at', null).gte('date', monthStart),
           sb.from('expenses').select('description, amount, date').eq('user_id', user_id).is('deleted_at', null).gte('date', since90),
+          (sb as any).from('market_rates').select('instrument, rate_monthly, label'),
         ]);
 
         const expenses   = expensesRes.data ?? [];
@@ -371,6 +466,11 @@ serve(async (req) => {
         const income   = financialRes.data?.income_range ? (INCOME_RANGE_MAP[financialRes.data.income_range] ?? null) : null;
         const subTotal = subscriptions.reduce((s, x) => s + x.avg, 0);
 
+        const ratesMap: Record<string, { rate: number; label: string }> = {};
+        for (const r of (ratesRes.data ?? []) as Array<{ instrument: string; rate_monthly: number; label: string }>) {
+          ratesMap[r.instrument] = { rate: r.rate_monthly, label: r.label ?? r.instrument };
+        }
+
         ctx = {
           has_data:     totalSpent > 0 || income != null,
           name:         profileRes.data?.full_name,
@@ -383,6 +483,7 @@ serve(async (req) => {
           top_cats,
           subscriptions,
           subTotal,
+          rates:        ratesMap,
         };
       } catch { /* contexto DB no crítico */ }
     }
@@ -456,7 +557,7 @@ serve(async (req) => {
     const focusAddition = BOT_FOCUS_PROMPTS[bot_focus] ?? '';
 
     // ── Llamar a Groq ─────────────────────────────────────────────────────────
-    const systemPrompt = buildSystemPrompt(ctx, macro) + focusAddition;
+    const systemPrompt = buildSystemPrompt(ctx, macro, ctx.rates ?? {}) + focusAddition;
     const chatHistory  = Array.isArray(history) ? history.slice(-10) : [];
 
     let userContent: string;
