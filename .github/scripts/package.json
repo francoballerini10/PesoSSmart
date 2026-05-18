@@ -1,0 +1,9 @@
+{
+  "name": "indec-sync",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "xlsx": "^0.18.5",
+    "node-fetch": "^3.3.2"
+  }
+}
