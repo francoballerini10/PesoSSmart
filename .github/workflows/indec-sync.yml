@@ -1,0 +1,27 @@
+name: INDEC Monthly Sync
+
+on:
+  schedule:
+    # Día 16 de cada mes a las 14:00 UTC (INDEC publica el 14-15)
+    - cron: '0 14 16 * *'
+  workflow_dispatch:  # permite ejecución manual desde GitHub Actions
+
+jobs:
+  sync-indec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install xlsx node-fetch
+        working-directory: .github/scripts
+
+      - name: Run INDEC sync
+        env:
+          SUPABASE_URL: https://gqflukmlaonkgxfdbedq.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node .github/scripts/sync-indec.js

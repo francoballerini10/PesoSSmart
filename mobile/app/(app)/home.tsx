@@ -662,16 +662,20 @@ interface DataInsight {
 function buildKeyInsights({
   expenses, totalThisMonth, totalDisposable,
   totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
+  threeMonthAvgCats, fciRate, weekStreak,
 }: {
-  expenses:        Expense[];
-  totalThisMonth:  number;
-  totalDisposable: number;
-  totalInvestable: number;
-  estimatedIncome: number | null;
-  goals:           SavingsGoal[];
-  prevMonthCats:   Record<string, { name: string; amount: number }>;
-  prevMonthTotal:  number;
-  inflationRate:   number;
+  expenses:           Expense[];
+  totalThisMonth:     number;
+  totalDisposable:    number;
+  totalInvestable:    number;
+  estimatedIncome:    number | null;
+  goals:              SavingsGoal[];
+  prevMonthCats:      Record<string, { name: string; amount: number }>;
+  prevMonthTotal:     number;
+  inflationRate:      number;
+  threeMonthAvgCats:  Record<string, number>;
+  fciRate:            number;
+  weekStreak:         number;
 }): DataInsight[] {
   const items: DataInsight[] = [];
   const now         = new Date();
@@ -770,6 +774,104 @@ function buildKeyInsights({
         iconColor: colors.primary,
         title: `${count} veces en "${display}" esta semana`,
         body: `Sin juzgarte, pero esos ${formatCurrency(Math.round(total))} en FCI este mes te darían ${formatCurrency(Math.round(total + fciGain))}. Vos decidís.`,
+      });
+    }
+  }
+
+  // ── 5a. CATEGORÍA POR ENCIMA DEL PROMEDIO 3 MESES ─────────────────────────
+  if (Object.keys(threeMonthAvgCats).length > 0 && dayOfMonth >= 12) {
+    const aboveAvg = Object.entries(currCats)
+      .map(([name, { amount }]) => ({
+        name, current: amount, avg: threeMonthAvgCats[name] ?? 0,
+        pct: threeMonthAvgCats[name] ? ((amount - threeMonthAvgCats[name]) / threeMonthAvgCats[name]) * 100 : 0,
+      }))
+      .filter(x => x.avg > 0 && x.pct > 35)
+      .sort((a, b) => b.pct - a.pct);
+    if (aboveAvg.length > 0) {
+      const top = aboveAvg[0];
+      items.push({
+        id: 'above_3m_avg',
+        icon: 'trending-up-outline',
+        iconColor: colors.red,
+        title: `${top.name}: +${Math.round(top.pct)}% vs tu promedio`,
+        body: `Este mes gastaste ${formatCurrency(Math.round(top.current))} en ${top.name} — un ${Math.round(top.pct)}% más que tu promedio de los últimos 3 meses (${formatCurrency(Math.round(top.avg))}). ¿Fue algo puntual o se está instalando como hábito?`,
+        cta: { label: 'Ver análisis', route: '/(app)/expenses?tab=analisis' },
+      });
+    }
+  }
+
+  // ── 5b. DELIVERY Y RESTAURANTES ────────────────────────────────────────────
+  {
+    const foodTotal = sortedCats
+      .filter(c => ['comida', 'restaurante', 'delivery', 'gastronomía'].some(k => c.name.toLowerCase().includes(k)))
+      .reduce((s, c) => s + c.amount, 0);
+    if (foodTotal > 0 && estimatedIncome && estimatedIncome > 0) {
+      const pct = Math.round((foodTotal / estimatedIncome) * 100);
+      const streaming = Math.round(foodTotal / 4500);
+      if (pct >= 10) {
+        items.push({
+          id: 'food_delivery',
+          icon: 'bicycle-outline',
+          iconColor: '#EA580C',
+          title: `${pct}% del ingreso en comida y delivery`,
+          body: `Gastaste ${formatCurrency(Math.round(foodTotal))} en comida y delivery. Con ese dinero podrías pagar ${streaming} meses de suscripciones de streaming o arrancar un plazo fijo. ¿Cuánto cocinaste en casa este mes?`,
+        });
+      }
+    }
+  }
+
+  // ── 5c. SUSCRIPCIONES DETECTADAS ──────────────────────────────────────────
+  {
+    const subsKW = ['netflix', 'spotify', 'disney', 'hbo', 'amazon', 'apple', 'youtube', 'flow', 'paramount', 'deezer', 'mubi'];
+    const subsExps = expenses.filter(e => subsKW.some(k => e.description.toLowerCase().includes(k)));
+    if (subsExps.length >= 3 && dayOfMonth >= 10) {
+      const subsTotal = subsExps.reduce((s, e) => s + e.amount, 0);
+      items.push({
+        id: 'subs_check',
+        icon: 'play-circle-outline',
+        iconColor: '#7C3AED',
+        title: `${subsExps.length} suscripciones activas: ${formatCurrency(Math.round(subsTotal))}`,
+        body: `¿Usás todas? El 40% de las personas paga suscripciones que no usa. Una que canceles son ~${formatCurrency(Math.round(subsTotal / subsExps.length))}/mes de vuelta en el bolsillo. Revisalas 5 minutos este fin de semana.`,
+      });
+    }
+  }
+
+  // ── 5d. PLAZO FIJO / FCI VS INFLACIÓN ─────────────────────────────────────
+  if (totalInvestable >= 20000 && fciRate > 0 && dayOfMonth > 5) {
+    const monthly = Math.round(totalInvestable * (fciRate / 100));
+    items.push({
+      id: 'fci_hint',
+      icon: 'cash-outline',
+      iconColor: '#10B981',
+      title: 'Tus pesos pierden contra la inflación',
+      body: `Tenés ${formatCurrency(totalInvestable)} que podrían estar en un FCI Money Market (~${fciRate}% mensual) — generando ${formatCurrency(monthly)}/mes sin hacer nada más. En pesos parados, la inflación te los come semana a semana.`,
+      cta: { label: 'Ver simulador', route: '/(app)/simulator' },
+    });
+  }
+
+  // ── 5e. RACHA MOTIVADORA ─────────────────────────────────────────────────
+  if (weekStreak >= 7 && totalDisposable < (estimatedIncome ?? Infinity) * 0.20 && estimatedIncome) {
+    items.push({
+      id: 'streak_motivator',
+      icon: 'flame-outline',
+      iconColor: colors.neon,
+      title: `${weekStreak} días con hábito activo — y se nota`,
+      body: `Llevas ${weekStreak} días seguidos registrando. Tus prescindibles están por debajo del 20% del ingreso este mes. Eso no pasa solo — es el efecto de mirar los números de frente.`,
+    });
+  }
+
+  // ── 5f. DÍAS SIN REGISTRAR ────────────────────────────────────────────────
+  if (expenses.length > 0) {
+    const lastDate = expenses[0].date;
+    const daysSince = Math.round((Date.now() - new Date(lastDate + 'T12:00:00').getTime()) / 86400000);
+    if (daysSince >= 4) {
+      items.push({
+        id: 'no_register',
+        icon: 'calendar-outline',
+        iconColor: colors.yellow,
+        title: `Hace ${daysSince} días que no registrás gastos`,
+        body: `Sin registros se pierde el control — el gasto pasa sin que lo notes. ¿Tuviste compras estos días? Cargarlas tarda 30 segundos y te va a dar un panorama mucho más preciso del mes.`,
+        cta: { label: 'Agregar gasto', route: '/(app)/expenses' },
       });
     }
   }
@@ -890,7 +992,48 @@ function buildKeyInsights({
     });
   }
 
-  return items.slice(0, 6);
+  // ── 14. PROYECCIÓN ANUAL ──────────────────────────────────────────────────
+  if (estimatedIncome && estimatedIncome > 0 && totalThisMonth > 0 && dayOfMonth >= 18) {
+    const saving = estimatedIncome - totalThisMonth;
+    if (saving > 5000) {
+      const annual     = Math.round(saving * 12);
+      const fciAnnual  = Math.round(annual * (1 + fciRate / 100) * 12 * 0.08); // rough FCI gain
+      items.push({
+        id: 'annual_projection',
+        icon: 'calendar-number-outline',
+        iconColor: colors.neon,
+        title: `A este ritmo ahorrás ${formatCurrency(annual)}/año`,
+        body: `Con ${formatCurrency(saving)}/mes de margen, en 12 meses acumulás ${formatCurrency(annual)}. En FCI Money Market (~${fciRate.toFixed(1)}%/mes), sumaría ~${formatCurrency(fciAnnual)} de rendimiento extra.`,
+        cta: { label: 'Ver simulador', route: '/(app)/simulator' },
+      });
+    } else if (saving < 0) {
+      const deficit = Math.abs(saving);
+      items.push({
+        id: 'annual_deficit_warning',
+        icon: 'alert-circle-outline',
+        iconColor: colors.red,
+        title: `A este ritmo, déficit anual de ${formatCurrency(deficit * 12)}`,
+        body: `Estás gastando ${formatCurrency(deficit)}/mes por encima del ingreso. En 12 meses eso suma ${formatCurrency(deficit * 12)} de deuda acumulada. Cada mes que no se corrige, el problema crece.`,
+        cta: { label: 'Ver análisis', route: '/(app)/reports' },
+      });
+    }
+  }
+
+  // ── 15. SIMULACIÓN: reducir prescindibles ─────────────────────────────────
+  if (totalDisposable >= 15000 && dayOfMonth >= 10) {
+    const cut20  = Math.round(totalDisposable * 0.2);
+    const annual = cut20 * 12;
+    items.push({
+      id: 'sim_reduce_disposable',
+      icon: 'calculator-outline',
+      iconColor: colors.primary,
+      title: `Recortá prescindibles 20% = ${formatCurrency(annual)}/año`,
+      body: `${formatCurrency(cut20)}/mes menos en gastos no esenciales × 12 meses = ${formatCurrency(annual)}. Suficiente para empezar un fondo de emergencia o invertir en FCI.`,
+      cta: { label: 'Ver informe', route: '/(app)/reports' },
+    });
+  }
+
+  return items.slice(0, 9);
 }
 
 function DatosClaveCard({ insights, open, onOpen, onClose }: { insights: DataInsight[]; open: boolean; onOpen: () => void; onClose: () => void }) {
@@ -1002,13 +1145,15 @@ function buildHomeHighlights({
   estimatedIncome,
   expenses,
   goals,
+  threeMonthAvgCats,
 }: {
-  totalThisMonth:  number;
-  totalDisposable: number;
-  totalInvestable: number;
-  estimatedIncome: number | null;
-  expenses:        Expense[];
-  goals:           SavingsGoal[];
+  totalThisMonth:    number;
+  totalDisposable:   number;
+  totalInvestable:   number;
+  estimatedIncome:   number | null;
+  expenses:          Expense[];
+  goals:             SavingsGoal[];
+  threeMonthAvgCats: Record<string, number>;
 }): HomeHighlight[] {
   const items: HomeHighlight[] = [];
 
@@ -1100,6 +1245,30 @@ function buildHomeHighlights({
     });
   }
 
+  // 6. Above-average category (3-month comparison)
+  if (expenses.length > 0 && Object.keys(threeMonthAvgCats).length > 0) {
+    const catMap: Record<string, number> = {};
+    expenses.forEach(e => {
+      const name = (e as any).category?.name_es ?? 'Sin clasificar';
+      catMap[name] = (catMap[name] ?? 0) + e.amount;
+    });
+    const spikes = Object.entries(catMap)
+      .filter(([name, amt]) => threeMonthAvgCats[name] && amt > threeMonthAvgCats[name] * 1.35)
+      .sort((a, b) => (b[1] / threeMonthAvgCats[b[0]]) - (a[1] / threeMonthAvgCats[a[0]]));
+    if (spikes.length > 0) {
+      const [name, amt] = spikes[0];
+      const avg    = threeMonthAvgCats[name];
+      const pctAbv = Math.round(((amt - avg) / avg) * 100);
+      items.push({
+        id: 'above_avg_banner', tag: 'GASTO INUSUAL', tagColor: colors.red,
+        title: `+${pctAbv}% en ${name}`,
+        subtitle: `Gastaste ${formatCurrency(Math.round(amt))} — un ${pctAbv}% más que tu promedio de 3 meses (${formatCurrency(Math.round(avg))}).`,
+        icon: 'alert-circle-outline', iconColor: colors.red,
+        cta: { label: 'Ver desglose', route: '/(app)/expenses?tab=analisis' },
+      });
+    }
+  }
+
   // Fallback (no data yet)
   if (items.length === 0) {
     items.push({
@@ -1111,7 +1280,7 @@ function buildHomeHighlights({
     });
   }
 
-  return items.slice(0, 4);
+  return items.slice(0, 5);
 }
 
 function HighlightSlide({ highlight, width }: { highlight: HomeHighlight; width: number }) {
@@ -1359,19 +1528,19 @@ const msmStyles = StyleSheet.create({
   card: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16, borderWidth: 1, borderColor: '#EEEEEE',
-    paddingHorizontal: 16, paddingVertical: 14,
+    borderRadius: 20, borderWidth: 1, borderColor: '#EEEEEE',
+    paddingHorizontal: 20, paddingVertical: 20,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
-  left:      { flex: 1, gap: 3, paddingRight: 16 },
-  right:     { flex: 1, gap: 5, alignItems: 'flex-start' },
-  label:     { fontFamily: 'Montserrat_500Medium', fontSize: 11, color: '#9E9E9E', letterSpacing: 0.3 },
-  amount:    { fontFamily: 'Montserrat_700Bold', fontSize: 20, color: '#212121', letterSpacing: -0.5 },
-  incomeRef: { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#BDBDBD' },
-  barTrack:  { height: 6, width: '100%', backgroundColor: '#F0F0F0', borderRadius: 3, overflow: 'hidden' },
-  barFill:   { height: '100%', borderRadius: 3 },
-  pctText:   { fontFamily: 'Montserrat_700Bold', fontSize: 12 },
+  left:      { flex: 1, gap: 5, paddingRight: 20 },
+  right:     { flex: 1, gap: 7, alignItems: 'flex-start' },
+  label:     { fontFamily: 'Montserrat_500Medium', fontSize: 12, color: '#9E9E9E', letterSpacing: 0.3 },
+  amount:    { fontFamily: 'Montserrat_700Bold', fontSize: 26, color: '#212121', letterSpacing: -0.5 },
+  incomeRef: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#BDBDBD' },
+  barTrack:  { height: 8, width: '100%', backgroundColor: '#F0F0F0', borderRadius: 4, overflow: 'hidden' },
+  barFill:   { height: '100%', borderRadius: 4 },
+  pctText:   { fontFamily: 'Montserrat_700Bold', fontSize: 13 },
 });
 
 // ─── CompactWidgetsRow ────────────────────────────────────────────────────────
@@ -2086,9 +2255,11 @@ export default function HomeScreen() {
 
   const { isFirstVisit, markVisited } = useFirstVisit('home');
 
-  const [prevMonthCats,  setPrevMonthCats]  = useState<Record<string, { name: string; amount: number }>>({});
-  const [prevMonthTotal, setPrevMonthTotal] = useState(0);
-  const [homeBudgets,    setHomeBudgets]    = useState<Array<{ id: string; category_id: string; monthly_limit: number }> | null>(null);
+  const [prevMonthCats,     setPrevMonthCats]     = useState<Record<string, { name: string; amount: number }>>({});
+  const [prevMonthTotal,    setPrevMonthTotal]    = useState(0);
+  const [threeMonthAvgCats, setThreeMonthAvgCats] = useState<Record<string, number>>({});
+  const [fciRate,           setFciRate]           = useState(3.2);
+  const [homeBudgets,       setHomeBudgets]       = useState<Array<{ id: string; category_id: string; monthly_limit: number }> | null>(null);
 
   const _now         = new Date();
   const _dayOfMonth  = _now.getDate();
@@ -2116,12 +2287,20 @@ export default function HomeScreen() {
     roundUpStore.checkReset();
 
     // Inflación del mes desde DB (para insights)
-    supabase
+    (supabase as any)
       .from('market_rates')
       .select('rate_monthly')
       .eq('instrument', 'inflation')
       .single()
-      .then(({ data }) => { if (data) setInflationRate(Number(data.rate_monthly)); });
+      .then(({ data }: { data: { rate_monthly: number } | null }) => { if (data) setInflationRate(Number(data.rate_monthly)); });
+
+    // FCI Money Market rate
+    (supabase as any)
+      .from('market_rates')
+      .select('rate_monthly')
+      .eq('instrument', 'fci_mm')
+      .single()
+      .then(({ data }: { data: { rate_monthly: number } | null }) => { if (data) setFciRate(Number(data.rate_monthly)); });
 
     // Gmail connection check + pending transaction count
     if (user?.id) {
@@ -2191,6 +2370,33 @@ export default function HomeScreen() {
       });
   }, [user?.id]);
 
+  // 3-month category averages (for above-average detection)
+  useEffect(() => {
+    if (!user?.id) return;
+    const now   = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString().slice(0, 10);
+    const end   = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    supabase
+      .from('expenses')
+      .select('amount, category:expense_categories(name_es)')
+      .eq('user_id', user.id)
+      .is('deleted_at', null)
+      .gte('date', start)
+      .lt('date', end)
+      .then(({ data }) => {
+        const sums: Record<string, number> = {};
+        for (const exp of data ?? []) {
+          const name = (exp as any).category?.name_es ?? 'Sin categoría';
+          sums[name] = (sums[name] ?? 0) + (exp as any).amount;
+        }
+        const avgs: Record<string, number> = {};
+        for (const [name, total] of Object.entries(sums)) {
+          avgs[name] = total / 3;
+        }
+        setThreeMonthAvgCats(avgs);
+      });
+  }, [user?.id]);
+
   // Notificaciones
   useEffect(() => {
     if (!estimatedIncome || estimatedIncome <= 0) return;
@@ -2230,12 +2436,14 @@ export default function HomeScreen() {
     estimatedIncome,
     expenses,
     goals,
+    threeMonthAvgCats,
   });
 
   const keyInsights = buildKeyInsights({
     expenses: expenses.filter(e => e.category_id !== null),
     totalThisMonth, totalDisposable,
     totalInvestable, estimatedIncome, goals, prevMonthCats, prevMonthTotal, inflationRate,
+    threeMonthAvgCats, fciRate, weekStreak: streakStore.weekStreak,
   });
 
   // ── Datos clave del mes ─────────────────────────────────────────────────────
