@@ -12,13 +12,14 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
 }
 
 // Ponderaciones regionales INDEC para calcular promedio nacional
+// Claves = fragmentos que aparecen en la celda "Región XXX" del XLS
 const REGIONAL_WEIGHTS = {
-  'Gran Buenos Aires': 0.422,
-  'Pampeana':          0.253,
-  'Noroeste':          0.110,
-  'Noreste':           0.071,
-  'Cuyo':              0.091,
-  'Patagónica':        0.053,
+  'GBA':       0.422,
+  'Pampeana':  0.253,
+  'Noroeste':  0.110,
+  'Noreste':   0.071,
+  'Cuyo':      0.091,
+  'Patagónica':0.053,
 };
 
 // Mapeo de categorías INDEC → instrument en market_rates
@@ -72,44 +73,34 @@ function parseXls(buffer) {
 
   console.log(`Hoja: "${sheetName}" — ${rows.length} filas`);
 
-  // Imprimir primeras 6 filas para debug
-  for (let i = 0; i < Math.min(6, rows.length); i++) {
-    console.log(`  fila[${i}]:`, JSON.stringify(rows[i]).slice(0, 200));
-  }
-
-  // Buscar columna de fecha reciente en las primeras 10 filas
-  // Acepta: número serial Excel > 40500 (post-2010), o Date object, o string con año >= 2020
+  // Buscar la fila de fechas: es la primera fila que tiene >= 5 números consecutivos > 40500
+  // (son los seriales Excel de cada mes desde ene-2017 en adelante)
   let lastDateCol = -1;
   let headerRowIdx = -1;
 
-  for (let r = 0; r < Math.min(10, rows.length); r++) {
+  for (let r = 0; r < Math.min(20, rows.length); r++) {
     const row = rows[r];
-    for (let c = row.length - 1; c >= 0; c--) {
+    let count = 0;
+    let lastCol = -1;
+    for (let c = 0; c < row.length; c++) {
       const v = row[c];
-      if (typeof v === 'number' && v > 40500) {
-        lastDateCol = c; headerRowIdx = r; break;
-      }
-      if (v instanceof Date && v.getFullYear() >= 2020) {
-        lastDateCol = c; headerRowIdx = r; break;
-      }
-      if (typeof v === 'string' && /20(2[0-9])/.test(v)) {
-        lastDateCol = c; headerRowIdx = r; break;
+      if (typeof v === 'number' && v > 40500 && v < 60000) {
+        count++;
+        lastCol = c;
       }
     }
-    if (lastDateCol !== -1) break;
+    if (count >= 5) {
+      lastDateCol = lastCol;
+      headerRowIdx = r;
+      break;
+    }
   }
 
-  if (lastDateCol === -1) throw new Error('No se encontró columna de fecha reciente');
+  if (lastDateCol === -1) throw new Error('No se encontró fila de fechas en el XLS');
 
   const rawDate = rows[headerRowIdx][lastDateCol];
-  let periodoStr = String(rawDate);
-  if (typeof rawDate === 'number') {
-    const d = XLSX.SSF.parse_date_code(rawDate);
-    periodoStr = `${d.m}/${d.y}`;
-  } else if (rawDate instanceof Date) {
-    periodoStr = `${rawDate.getMonth() + 1}/${rawDate.getFullYear()}`;
-  }
-  console.log(`Período detectado: ${periodoStr} (fila ${headerRowIdx}, columna ${lastDateCol})`);
+  const d = XLSX.SSF.parse_date_code(rawDate);
+  console.log(`Período detectado: ${d.m}/${d.y} (fila ${headerRowIdx}, columna ${lastDateCol})`);
 
   // Acumular variaciones por categoría y región
   // Estructura: categoryData[instrument][region] = variación mensual %
@@ -121,13 +112,11 @@ function parseXls(buffer) {
     if (typeof firstCell !== 'string') continue;
     const trimmed = firstCell.trim();
 
-    // Detectar si es fila de región
-    if (Object.keys(REGIONAL_WEIGHTS).some(r => trimmed.toLowerCase().includes(r.toLowerCase().split(' ')[0]))) {
-      const matched = Object.keys(REGIONAL_WEIGHTS).find(r =>
-        trimmed.toLowerCase().includes(r.toLowerCase().split(' ')[0])
-      );
-      if (matched) { currentRegion = matched; continue; }
-    }
+    // Detectar si es fila de región (ej: "Región GBA", "Región Pampeana", etc.)
+    const matchedRegion = Object.keys(REGIONAL_WEIGHTS).find(r =>
+      trimmed.toLowerCase().includes(r.toLowerCase())
+    );
+    if (matchedRegion) { currentRegion = matchedRegion; continue; }
 
     if (!currentRegion) continue;
 
