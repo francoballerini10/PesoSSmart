@@ -61,7 +61,8 @@ async function downloadXls() {
 }
 
 function parseXls(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+  // cellDates:false para recibir serial numérico de Excel en vez de Date objects
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false });
 
   // La hoja que necesitamos se llama "Variación mensual aperturas"
   const sheetName = wb.SheetNames.find(n => n.toLowerCase().includes('variaci'));
@@ -72,25 +73,51 @@ function parseXls(buffer) {
 
   console.log(`Hoja: "${sheetName}" — ${rows.length} filas`);
 
-  // Encontrar la columna con los datos del último mes (última columna numérica > 40500 = fecha Excel post-2010)
-  const headerRow = rows[0];
-  let lastDateCol = -1;
-  for (let c = headerRow.length - 1; c >= 0; c--) {
-    const v = headerRow[c];
-    if (typeof v === 'number' && v > 40500) { lastDateCol = c; break; }
+  // Imprimir primeras 6 filas para debug
+  for (let i = 0; i < Math.min(6, rows.length); i++) {
+    console.log(`  fila[${i}]:`, JSON.stringify(rows[i]).slice(0, 200));
   }
+
+  // Buscar columna de fecha reciente en las primeras 10 filas
+  // Acepta: número serial Excel > 40500 (post-2010), o Date object, o string con año >= 2020
+  let lastDateCol = -1;
+  let headerRowIdx = -1;
+
+  for (let r = 0; r < Math.min(10, rows.length); r++) {
+    const row = rows[r];
+    for (let c = row.length - 1; c >= 0; c--) {
+      const v = row[c];
+      if (typeof v === 'number' && v > 40500) {
+        lastDateCol = c; headerRowIdx = r; break;
+      }
+      if (v instanceof Date && v.getFullYear() >= 2020) {
+        lastDateCol = c; headerRowIdx = r; break;
+      }
+      if (typeof v === 'string' && /20(2[0-9])/.test(v)) {
+        lastDateCol = c; headerRowIdx = r; break;
+      }
+    }
+    if (lastDateCol !== -1) break;
+  }
+
   if (lastDateCol === -1) throw new Error('No se encontró columna de fecha reciente');
 
-  const excelDate = headerRow[lastDateCol];
-  const jsDate = XLSX.SSF.parse_date_code(excelDate);
-  console.log(`Período detectado: ${jsDate.m}/${jsDate.y} (columna ${lastDateCol})`);
+  const rawDate = rows[headerRowIdx][lastDateCol];
+  let periodoStr = String(rawDate);
+  if (typeof rawDate === 'number') {
+    const d = XLSX.SSF.parse_date_code(rawDate);
+    periodoStr = `${d.m}/${d.y}`;
+  } else if (rawDate instanceof Date) {
+    periodoStr = `${rawDate.getMonth() + 1}/${rawDate.getFullYear()}`;
+  }
+  console.log(`Período detectado: ${periodoStr} (fila ${headerRowIdx}, columna ${lastDateCol})`);
 
   // Acumular variaciones por categoría y región
   // Estructura: categoryData[instrument][region] = variación mensual %
   const categoryData = {};
 
   let currentRegion = null;
-  for (const row of rows.slice(1)) {
+  for (const row of rows.slice(headerRowIdx + 1)) {
     const firstCell = row[0];
     if (typeof firstCell !== 'string') continue;
     const trimmed = firstCell.trim();
