@@ -1,7 +1,6 @@
 // sync-indec.js — descarga XLS de INDEC y actualiza market_rates en Supabase
 // Corre mensualmente vía GitHub Actions (día 16, INDEC publica el 14-15)
 
-import fetch from 'node-fetch';
 import XLSX from 'xlsx';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
