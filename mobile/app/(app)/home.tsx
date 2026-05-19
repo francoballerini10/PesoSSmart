@@ -2597,79 +2597,280 @@ export default function HomeScreen() {
   const firstName  = profile?.full_name?.split(' ')[0] ?? 'Ahí vamos';
   const mainScroll = useRef<import('react-native').ScrollView>(null);
 
+  // ── Top category computation ─────────────────────────────────────────────────
+  const topCatData = useMemo(() => {
+    if (expenses.length === 0 || totalThisMonth === 0) return null;
+    const catMap: Record<string, { name: string; amount: number; color: string }> = {};
+    expenses.forEach(e => {
+      const name  = (e as any).category?.name_es ?? 'Sin clasificar';
+      const color = (e as any).category?.color   ?? '#7C3AED';
+      if (!catMap[name]) catMap[name] = { name, amount: 0, color };
+      catMap[name].amount += e.amount;
+    });
+    const sorted = Object.values(catMap).sort((a, b) => b.amount - a.amount);
+    if (!sorted[0]) return null;
+    const top = sorted[0];
+    const pct = Math.round((top.amount / totalThisMonth) * 100);
+    return { name: top.name, pct, color: top.color };
+  }, [expenses, totalThisMonth]);
+
+  // ── Active goal ──────────────────────────────────────────────────────────────
+  const activeGoal = goals.find(g => g.current_amount < g.target_amount);
+  const goalPct    = activeGoal ? Math.round((activeGoal.current_amount / activeGoal.target_amount) * 100) : null;
+
+  // ── Savings potential (recoverable) ─────────────────────────────────────────
+  const savingsPotential = Math.round(totalDisposable * 0.5);
+  const investedIn12m    = totalDisposable > 0
+    ? Math.round(totalDisposable * 12 * 1.03)
+    : 0;
+
+  // ── Health score ─────────────────────────────────────────────────────────────
+  const totalInvested   = investments.reduce((sum, inv) => sum + inv.amount, 0);
+  const investmentTypes = new Set(investments.map(inv => inv.instrument_type)).size;
+  const healthScore = computeHealthScore({
+    totalThisMonth, totalDisposable, totalInvested, investmentTypes,
+    hasSavings: totalInvested > 0,
+    weekStreak: streakStore.weekStreak,
+    noDisposableStreak: streakStore.noDisposableStreak,
+    goals,
+  });
+  const healthLabel  = healthScore >= 85 ? 'Excelente' : healthScore >= 70 ? 'Estable' : healthScore >= 50 ? 'Mejorable' : 'Atención';
+  const healthColor  = healthScore >= 85 ? '#22C55E' : healthScore >= 70 ? '#22C55E' : healthScore >= 50 ? '#F59E0B' : '#EF4444';
+  const prevPct      = prevMonthTotal > 0 && totalThisMonth > 0
+    ? Math.round(((totalThisMonth - prevMonthTotal) / prevMonthTotal) * 100)
+    : null;
+
+  // ── Highlights for banner ────────────────────────────────────────────────────
+  const highlights = buildHomeHighlights({
+    totalThisMonth, totalDisposable, totalInvestable, estimatedIncome, expenses, goals, threeMonthAvgCats,
+  });
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={nStyles.safe} edges={['top']}>
       <ScrollView
         ref={mainScroll}
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={nStyles.scroll}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={isLoading}
             onRefresh={() => user?.id && fetchExpenses(user.id)}
-            tintColor={colors.primary}
+            tintColor="#22C55E"
           />
         }
       >
-        {/* ── Header ─────────────────────────────────────────────────────────── */}
-        <View style={styles.header}>
-          <View style={{ gap: 3 }}>
+
+        {/* ── HEADER ──────────────────────────────────────────────────────────── */}
+        <View style={nStyles.header}>
+          <View style={{ gap: 2 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Text style={{ fontSize: 22 }}>👋</Text>
-              <Text style={styles.greetingName}>Buen día, {firstName}</Text>
+              <Text style={nStyles.greetingName}>Buen día, {firstName}</Text>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <TouchableOpacity onPress={() => setHideAmounts(v => !v)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Ionicons name={hideAmounts ? 'eye-off-outline' : 'eye-outline'} size={15} color="#7C3AED" />
-              </TouchableOpacity>
-              <Text style={styles.eyeSub}>Este es tu resumen del mes</Text>
-            </View>
+            <Text style={nStyles.greetingSub}>Este es tu resumen del mes</Text>
           </View>
-          <View style={styles.headerRight}>
-            <TouchableOpacity style={styles.bellBtn} activeOpacity={0.7} onPress={() => router.push('/(app)/advisor' as any)}>
-              <Ionicons name="chatbubble-ellipses-outline" size={22} color="#212121" />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <TouchableOpacity
+              style={nStyles.headerIconBtn}
+              onPress={() => router.push('/(app)/advisor' as any)}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="notifications-outline" size={20} color="#1A1A1A" />
+            </TouchableOpacity>
+            <View style={nStyles.robotAvatar}>
+              <Text style={{ fontSize: 22 }}>🤖</Text>
+            </View>
+            <TouchableOpacity
+              style={nStyles.headerIconBtn}
+              onPress={() => router.push('/(app)/advisor' as any)}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={20} color="#1A1A1A" />
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* ── Skeleton while loading ──────────────────────────────────────────── */}
+        {/* ── SKELETON ────────────────────────────────────────────────────────── */}
         {isLoading && expenses.length === 0 && <HomeSkeletonLoader />}
 
-        {/* ── Widget inteligente principal ─────────────────────────────────────── */}
-        {expenses.length > 0 && (
-          <SmartWidget
-            widgets={allWidgets}
-            onPress={(type) => router.push({
-              pathname: '/(app)/insight',
-              params:   { type },
-            } as any)}
-            onSwipeStart={() => mainScroll.current?.setNativeProps({ scrollEnabled: false })}
-            onSwipeEnd={()   => mainScroll.current?.setNativeProps({ scrollEnabled: true  })}
-          />
+        {/* ── PENDING BANNER ──────────────────────────────────────────────────── */}
+        {pendingCount > 0 && (
+          <GmailPendingBanner count={pendingCount} onPress={() => router.push('/(app)/expenses' as any)} />
         )}
 
-        {/* ── Resumen de gasto mensual ─────────────────────────────────────────── */}
-        {!isLoading && (
-        <MonthSpendingMini
-          totalThisMonth={totalThisMonth}
-          estimatedIncome={estimatedIncome}
-          hideAmounts={hideAmounts}
-        />
+        {/* ── AI BANNER CAROUSEL ──────────────────────────────────────────────── */}
+        <PremiumBannerCarousel highlights={highlights} />
+
+        {/* ── 4-COLUMN FINANCIAL SUMMARY ──────────────────────────────────────── */}
+        <View style={nStyles.summaryCard}>
+          {/* Ahorro posible */}
+          <TouchableOpacity style={nStyles.summaryBlock} onPress={() => router.push('/(app)/advisor' as any)} activeOpacity={0.8}>
+            <View style={[nStyles.summaryIcon, { backgroundColor: '#DCFCE7' }]}>
+              <Ionicons name="wallet-outline" size={16} color="#22C55E" />
+            </View>
+            <Text style={nStyles.summaryLabel}>Ahorro posible</Text>
+            <Text style={[nStyles.summaryValue, { color: '#22C55E' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              {formatCurrency(savingsPotential)}
+            </Text>
+            <Text style={[nStyles.summaryCta, { color: '#22C55E' }]}>Ver cómo lograrlo →</Text>
+          </TouchableOpacity>
+
+          <View style={nStyles.summaryDivider} />
+
+          {/* Gastado */}
+          <TouchableOpacity style={nStyles.summaryBlock} onPress={() => router.push('/(app)/expenses' as any)} activeOpacity={0.8}>
+            <View style={[nStyles.summaryIcon, { backgroundColor: '#F3F4F6' }]}>
+              <Ionicons name="trending-up-outline" size={16} color="#374151" />
+            </View>
+            <Text style={nStyles.summaryLabel}>Gastado</Text>
+            <Text style={[nStyles.summaryValue, { color: '#1A1A1A' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              {formatCurrency(totalThisMonth)}
+            </Text>
+            <Text style={[nStyles.summaryCta, { color: '#6B7280' }]}>Ver análisis →</Text>
+          </TouchableOpacity>
+
+          <View style={nStyles.summaryDivider} />
+
+          {/* Prescindible */}
+          <TouchableOpacity style={nStyles.summaryBlock} onPress={() => router.push('/(app)/reports' as any)} activeOpacity={0.8}>
+            <View style={[nStyles.summaryIcon, { backgroundColor: '#FEE2E2' }]}>
+              <Ionicons name="bag-outline" size={16} color="#EF4444" />
+            </View>
+            <Text style={nStyles.summaryLabel}>Prescindible</Text>
+            <Text style={[nStyles.summaryValue, { color: '#EF4444' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              {formatCurrency(totalDisposable)}
+            </Text>
+            <Text style={[nStyles.summaryCta, { color: '#EF4444' }]}>Ver para reducir →</Text>
+          </TouchableOpacity>
+
+          <View style={nStyles.summaryDivider} />
+
+          {/* Meta principal */}
+          <TouchableOpacity style={nStyles.summaryBlock} onPress={() => router.push('/(app)/savings' as any)} activeOpacity={0.8}>
+            <View style={[nStyles.summaryIcon, { backgroundColor: '#EDE9FE' }]}>
+              <Ionicons name="flag-outline" size={16} color="#7C3AED" />
+            </View>
+            <Text style={nStyles.summaryLabel}>Meta principal</Text>
+            <Text style={[nStyles.summaryValue, { color: '#7C3AED' }]}>
+              {goalPct !== null ? `${goalPct}%` : '--'}
+            </Text>
+            <Text style={[nStyles.summaryCta, { color: '#7C3AED' }]} numberOfLines={1}>
+              {activeGoal ? `${activeGoal.title} →` : 'Crear meta →'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── DÓNDE MÁS GASTASTE ──────────────────────────────────────────────── */}
+        {topCatData && (
+          <TouchableOpacity
+            style={nStyles.topCatCard}
+            onPress={() => router.push('/(app)/reports' as any)}
+            activeOpacity={0.88}
+          >
+            <View style={{ flex: 1, gap: 6 }}>
+              <Text style={nStyles.topCatMeta}>Dónde más gastaste</Text>
+              <Text style={nStyles.topCatName} numberOfLines={2}>{topCatData.name}</Text>
+              <Text style={nStyles.topCatSub}>Concentra el {topCatData.pct}% de tus gastos</Text>
+              <Text style={nStyles.topCatCta}>Ver gastos por categoría →</Text>
+            </View>
+            {/* Donut chart */}
+            <View style={nStyles.donutWrap}>
+              <Svg width={80} height={80}>
+                {/* Background circle */}
+                <SvgPath
+                  d={`M 40 40 m -32 0 a 32 32 0 1 1 64 0 a 32 32 0 1 1 -64 0`}
+                  stroke="#E9D5FF"
+                  strokeWidth={9}
+                  fill="none"
+                />
+                {/* Progress arc */}
+                <SvgPath
+                  d={`M 40 40 m -32 0 a 32 32 0 1 1 64 0 a 32 32 0 1 1 -64 0`}
+                  stroke="#7C3AED"
+                  strokeWidth={9}
+                  fill="none"
+                  strokeDasharray={`${(topCatData.pct / 100) * 201} 201`}
+                  strokeDashoffset={50}
+                  strokeLinecap="round"
+                />
+              </Svg>
+              <View style={nStyles.donutLabel}>
+                <Text style={nStyles.donutPct}>{topCatData.pct}%</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
         )}
 
+        {/* ── SALUD FINANCIERA ─────────────────────────────────────────────────── */}
+        <TouchableOpacity
+          style={nStyles.healthCard}
+          onPress={() => router.push('/(app)/reports' as any)}
+          activeOpacity={0.88}
+        >
+          {/* Score circular */}
+          <View style={nStyles.healthScoreWrap}>
+            <Svg width={80} height={80}>
+              <SvgPath
+                d={`M 40 40 m -32 0 a 32 32 0 1 1 64 0 a 32 32 0 1 1 -64 0`}
+                stroke="#E5E7EB"
+                strokeWidth={8}
+                fill="none"
+              />
+              <SvgPath
+                d={`M 40 40 m -32 0 a 32 32 0 1 1 64 0 a 32 32 0 1 1 -64 0`}
+                stroke={healthColor}
+                strokeWidth={8}
+                fill="none"
+                strokeDasharray={`${(healthScore / 100) * 201} 201`}
+                strokeDashoffset={50}
+                strokeLinecap="round"
+              />
+            </Svg>
+            <View style={nStyles.healthScoreLabel}>
+              <Text style={[nStyles.healthScoreNum, { color: healthColor }]}>{healthScore}</Text>
+              <Text style={nStyles.healthScoreTotal}>/100</Text>
+            </View>
+          </View>
 
-        {/* ── Insight del mes ──────────────────────────────────────────────────── */}
-        {!isLoading && user?.id && homeBudgets !== null && (
-          <MonthInsightCard
-            expenses={expenses.filter(e => e.category_id !== null)}
-            budgets={homeBudgets}
-            pendingCount={pendingCount}
-            prevMonthTotal={prevMonthTotal}
-            onNavigate={(route) => router.push(route as any)}
-          />
-        )}
+          {/* Text */}
+          <View style={{ flex: 1, gap: 6 }}>
+            <Text style={nStyles.healthTitle}>Tu salud financiera</Text>
+            <View style={[nStyles.healthBadge, { backgroundColor: healthColor + '18' }]}>
+              <View style={[nStyles.healthDot, { backgroundColor: healthColor }]} />
+              <Text style={[nStyles.healthBadgeText, { color: healthColor }]}>{healthLabel}</Text>
+            </View>
+            {prevPct !== null && (
+              <Text style={nStyles.healthBody}>
+                {prevPct > 0
+                  ? `Gastaste ${prevPct}% más que el mes pasado.`
+                  : prevPct < 0
+                    ? `Mejoró ${Math.abs(prevPct)}% respecto al mes pasado.`
+                    : 'Igual que el mes pasado.'}
+              </Text>
+            )}
+            <Text style={nStyles.healthSub}>
+              {healthScore >= 70
+                ? '¡Vas por buen camino! Seguí manteniendo tus gastos bajo control.'
+                : 'Hay oportunidades de mejora. Revisá tus prescindibles.'}
+            </Text>
+          </View>
 
-        {/* ── Inflación personal compacta ──────────────────────────────────────── */}
+          {/* Mini trend chart */}
+          {prevMonthTotal > 0 && totalThisMonth > 0 && (
+            <View style={{ alignItems: 'flex-end', justifyContent: 'flex-end', gap: 4 }}>
+              <MiniLineChart
+                data={[prevMonthTotal, totalThisMonth]}
+                color={totalThisMonth <= prevMonthTotal ? '#22C55E' : '#EF4444'}
+              />
+              <Text style={[nStyles.healthTrendText, { color: totalThisMonth <= prevMonthTotal ? '#22C55E' : '#EF4444' }]}>
+                {prevPct !== null ? `${prevPct > 0 ? '+' : ''}${prevPct}%` : ''}
+              </Text>
+              <Text style={{ fontFamily: 'Montserrat_400Regular', fontSize: 9, color: '#9CA3AF' }}>vs. mes pasado</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* ── INFLACIÓN PERSONAL VS OFICIAL ───────────────────────────────────── */}
         {inflationData !== null && (
           <CompactInflationRow
             personalRate={inflationData.personal}
@@ -2678,30 +2879,78 @@ export default function HomeScreen() {
           />
         )}
 
-        {/* ── Saldo proyectado ─────────────────────────────────────────────────── */}
-        <ProjectedBalanceCard
-          expenses={expenses}
-          estimatedIncome={estimatedIncome}
-          onPress={() => router.push('/(app)/reports' as any)}
-        />
+        {/* ── ACTIVIDAD RECIENTE + OPORTUNIDAD ────────────────────────────────── */}
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          {/* Actividad reciente */}
+          <View style={[nStyles.bottomCard, { flex: 1.1 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={nStyles.bottomCardTitle}>Actividad reciente</Text>
+              <TouchableOpacity onPress={() => router.push('/(app)/expenses' as any)}>
+                <Text style={nStyles.bottomCardLink}>Ver todo</Text>
+              </TouchableOpacity>
+            </View>
+            {expenses.slice(0, 3).map((exp, idx) => {
+              const catName  = (exp as any).category?.name_es ?? 'Sin categoría';
+              const isDisp   = exp.classification === 'disposable';
+              const isNecess = exp.classification === 'necessary';
+              const tagColor = isDisp ? '#EF4444' : isNecess ? '#3B82F6' : '#9CA3AF';
+              const tagLabel = isDisp ? 'Prescindible' : isNecess ? 'Necesario' : 'Sin clasificar';
+              return (
+                <View key={exp.id}>
+                  {idx > 0 && <View style={nStyles.activityDivider} />}
+                  <View style={nStyles.activityRow}>
+                    <View style={[nStyles.activityIcon, { backgroundColor: ((exp as any).category?.color ?? '#6B7280') + '18' }]}>
+                      <Ionicons name="receipt-outline" size={15} color={(exp as any).category?.color ?? '#6B7280'} />
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={nStyles.activityMerchant} numberOfLines={1}>{exp.merchant || catName}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Text style={nStyles.activityCat} numberOfLines={1}>{catName}</Text>
+                        <Text style={{ fontSize: 8, color: '#D1D5DB' }}>·</Text>
+                        <Text style={[nStyles.activityTag, { color: tagColor }]}>{tagLabel}</Text>
+                      </View>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                      <Text style={nStyles.activityAmount}>-{formatCurrency(exp.amount)}</Text>
+                      <Text style={nStyles.activityDate}>{exp.date.slice(5).replace('-', '/')}</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+            {expenses.length === 0 && (
+              <Text style={{ fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginTop: 12 }}>
+                Aún no hay gastos
+              </Text>
+            )}
+          </View>
 
-        {/* ── Mayor fuga ───────────────────────────────────────────────────────── */}
-        <TopLeakCard
-          expenses={expenses}
-          totalThisMonth={totalThisMonth}
-          onPress={() => router.push('/(app)/reports' as any)}
-        />
+          {/* Oportunidad para vos */}
+          <TouchableOpacity
+            style={[nStyles.bottomCard, { flex: 0.9, backgroundColor: '#FFF7ED' }]}
+            onPress={() => router.push('/(app)/simulator' as any)}
+            activeOpacity={0.88}
+          >
+            <View style={nStyles.oppIconWrap}>
+              <Text style={{ fontSize: 20 }}>💡</Text>
+            </View>
+            <Text style={nStyles.oppTitle}>Oportunidad para vos</Text>
+            {totalDisposable > 0 ? (
+              <Text style={nStyles.oppBody}>
+                Si invertías tus gastos prescindibles de este mes ({formatCurrency(totalDisposable)}), en 12 meses podrías tener {formatCurrency(investedIn12m)}.
+              </Text>
+            ) : (
+              <Text style={nStyles.oppBody}>
+                Registrá tus gastos para ver tu oportunidad de inversión mensual.
+              </Text>
+            )}
+            <View style={nStyles.oppBtn}>
+              <Text style={nStyles.oppBtnText}>Ver simulación →</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
 
-        {/* ── Acciones rápidas ─────────────────────────────────────────────────── */}
-        <QuickActionsSection
-          expenses={expenses}
-          onEditIncome={openIncomeModal}
-        />
-
-        {/* ── Top categorías ───────────────────────────────────────────────────── */}
-        <TopCategoriesCard expenses={expenses.filter(e => e.category_id !== null)} />
-
-        {/* ── QuickStart (sólo sin datos) ──────────────────────────────────────── */}
+        {/* ── QUICKSTART ──────────────────────────────────────────────────────── */}
         {showQuickStart && expenses.length === 0 && (
           <QuickStartCard
             hasExpenses={qsHasExpenses}
@@ -2714,7 +2963,6 @@ export default function HomeScreen() {
           />
         )}
 
-
       </ScrollView>
 
       {/* ── Tour primera visita ─────────────────────────────────────────────── */}
@@ -2722,11 +2970,11 @@ export default function HomeScreen() {
         visible={isFirstVisit}
         screenTitle="Tu dashboard financiero"
         screenIcon="home-outline"
-        iconColor={colors.neon}
+        iconColor="#22C55E"
         features={[
-          { icon: 'cash-outline', color: colors.primary, title: 'Tu oportunidad del mes', body: 'Ves cuánto podrías recuperar ajustando tus gastos prescindibles y cómo invertirlo hoy.' },
-          { icon: 'thermometer-outline', color: colors.yellow, title: 'Tu inflación real', body: 'Comparamos tu inflación personal contra el INDEC para que sepas si estás ganando o perdiendo poder adquisitivo.' },
-          { icon: 'mail-outline', color: colors.neon, title: 'Gmail detecta tus gastos', body: 'Si conectás Gmail, detectamos automáticamente las compras de tus resúmenes bancarios y billeteras.' },
+          { icon: 'cash-outline', color: '#22C55E', title: 'Tu oportunidad del mes', body: 'Ves cuánto podrías recuperar ajustando tus gastos prescindibles y cómo invertirlo hoy.' },
+          { icon: 'thermometer-outline', color: '#F59E0B', title: 'Tu inflación real', body: 'Comparamos tu inflación personal contra el INDEC para que sepas si estás ganando o perdiendo poder adquisitivo.' },
+          { icon: 'mail-outline', color: '#3B82F6', title: 'Gmail detecta tus gastos', body: 'Si conectás Gmail, detectamos automáticamente las compras de tus resúmenes bancarios y billeteras.' },
         ]}
         onDismiss={markVisited}
       />
@@ -2738,46 +2986,42 @@ export default function HomeScreen() {
         animationType="slide"
         onRequestClose={() => setShowIncomeModal(false)}
       >
-        <View style={styles.incomeOverlay}>
-          <View style={styles.incomeSheet}>
-            <View style={styles.incomeSheetHandle} />
-            <View style={styles.incomeSheetHeader}>
+        <View style={nStyles.incomeOverlay}>
+          <View style={nStyles.incomeSheet}>
+            <View style={nStyles.incomeSheetHandle} />
+            <View style={nStyles.incomeSheetHeader}>
               <Text variant="subtitle">¿Cuánto ganás por mes?</Text>
               <TouchableOpacity onPress={() => setShowIncomeModal(false)}>
-                <Ionicons name="close" size={22} color={colors.text.secondary} />
+                <Ionicons name="close" size={22} color="#6B7280" />
               </TouchableOpacity>
             </View>
-            <Text variant="caption" color={colors.text.tertiary} style={{ marginBottom: spacing[4] }}>
+            <Text style={{ fontFamily: 'Montserrat_400Regular', fontSize: 13, color: '#9CA3AF', marginBottom: 16 }}>
               Ingreso neto mensual aproximado. Se usa para calcular tu salud financiera.
             </Text>
-            <View style={styles.incomeOptions}>
+            <View style={{ gap: 8 }}>
               {INCOME_OPTIONS.map((opt) => (
                 <TouchableOpacity
                   key={opt.value}
-                  style={[styles.incomeOption, selectedRange === opt.value && styles.incomeOptionActive]}
+                  style={[nStyles.incomeOption, selectedRange === opt.value && nStyles.incomeOptionActive]}
                   onPress={() => setSelectedRange(opt.value)}
                 >
-                  <Text
-                    variant="bodySmall"
-                    color={selectedRange === opt.value ? colors.primary : colors.text.primary}
-                    style={{ fontFamily: selectedRange === opt.value ? 'Montserrat_700Bold' : 'Montserrat_400Regular' }}
-                  >
+                  <Text style={[nStyles.incomeOptionText, selectedRange === opt.value && { color: '#3B82F6', fontFamily: 'Montserrat_700Bold' }]}>
                     {opt.label}
                   </Text>
                   {selectedRange === opt.value && (
-                    <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                    <Ionicons name="checkmark-circle" size={18} color="#3B82F6" />
                   )}
                 </TouchableOpacity>
               ))}
             </View>
             <TouchableOpacity
-              style={[styles.incomeSaveBtn, (!selectedRange || savingIncome) && { opacity: 0.5 }]}
+              style={[nStyles.incomeSaveBtn, (!selectedRange || savingIncome) && { opacity: 0.5 }]}
               onPress={saveIncome}
               disabled={!selectedRange || savingIncome}
             >
               {savingIncome
-                ? <ActivityIndicator size="small" color={colors.white} />
-                : <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 14, color: colors.white }}>Guardar</Text>
+                ? <ActivityIndicator size="small" color="#FFF" />
+                : <Text style={{ fontFamily: 'Montserrat_700Bold', fontSize: 14, color: '#FFF' }}>Guardar</Text>
               }
             </TouchableOpacity>
           </View>
@@ -2787,86 +3031,250 @@ export default function HomeScreen() {
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
+// ─── PremiumBannerCarousel ─────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: colors.bg.primary },
+function PremiumBannerCarousel({ highlights }: { highlights: HomeHighlight[] }) {
+  const scrollRef   = useRef<ScrollView>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [paused,    setPaused]    = useState(false);
+  const W = Dimensions.get('window').width - 40;
+
+  const scrollTo = useCallback((i: number) => {
+    scrollRef.current?.scrollTo({ x: i * W, animated: true });
+  }, [W]);
+
+  useEffect(() => {
+    if (highlights.length <= 1 || paused) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      return;
+    }
+    intervalRef.current = setInterval(() => {
+      setActiveIdx(prev => {
+        const next = (prev + 1) % highlights.length;
+        scrollTo(next);
+        return next;
+      });
+    }, 4500);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [paused, highlights.length, scrollTo]);
+
+  if (highlights.length === 0) return null;
+
+  return (
+    <View style={{ gap: 10 }}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        decelerationRate="fast"
+        bounces={false}
+        onScrollBeginDrag={() => { setPaused(true); if (intervalRef.current) clearInterval(intervalRef.current); }}
+        onMomentumScrollEnd={e => { setActiveIdx(Math.round(e.nativeEvent.contentOffset.x / W)); setPaused(false); }}
+      >
+        {highlights.map((h, i) => (
+          <TouchableOpacity
+            key={h.id}
+            style={[bannerS.slide, { width: W }]}
+            onPress={h.cta ? () => router.push(h.cta!.route as any) : undefined}
+            activeOpacity={0.92}
+          >
+            {/* Left content */}
+            <View style={{ flex: 1, gap: 10 }}>
+              <View style={[bannerS.tag, { backgroundColor: h.tagColor + '30' }]}>
+                <Ionicons name={h.icon as any} size={11} color={h.tagColor} />
+                <Text style={[bannerS.tagText, { color: h.tagColor }]}>{h.tag}</Text>
+              </View>
+              <Text style={bannerS.title} numberOfLines={3}>{h.title}</Text>
+              <Text style={bannerS.subtitle} numberOfLines={2}>{h.subtitle}</Text>
+              {h.cta && (
+                <View style={bannerS.cta}>
+                  <Text style={bannerS.ctaText}>{h.cta.label} →</Text>
+                </View>
+              )}
+            </View>
+            {/* Right robot */}
+            <View style={bannerS.robotWrap}>
+              <Text style={{ fontSize: 56 }}>🤖</Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+      {highlights.length > 1 && (
+        <View style={bannerS.dots}>
+          {highlights.map((_, i) => (
+            <TouchableOpacity key={i} onPress={() => { setActiveIdx(i); scrollTo(i); }} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <View style={[bannerS.dot, i === activeIdx && bannerS.dotActive]} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+const bannerS = StyleSheet.create({
+  slide: {
+    backgroundColor: '#0F172A',
+    borderRadius: 24, padding: 24,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    minHeight: 180,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3, shadowRadius: 16, elevation: 8,
+  },
+  tag:     { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  tagText: { fontFamily: 'Montserrat_700Bold', fontSize: 10, letterSpacing: 0.5 },
+  title:   { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: '#FFFFFF', lineHeight: 28, letterSpacing: -0.3 },
+  subtitle:{ fontFamily: 'Montserrat_400Regular', fontSize: 13, color: 'rgba(255,255,255,0.65)', lineHeight: 18 },
+  cta:     { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8, alignSelf: 'flex-start', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  ctaText: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: '#FFFFFF' },
+  robotWrap: { width: 64, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  dots:    { flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  dot:     { width: 6, height: 6, borderRadius: 3, backgroundColor: '#D1D5DB' },
+  dotActive:{ width: 20, height: 6, borderRadius: 3, backgroundColor: '#22C55E' },
+});
+
+// ─── Estilos nuevos (light theme) ─────────────────────────────────────────────
+
+const nStyles = StyleSheet.create({
+  safe:  { flex: 1, backgroundColor: '#F6F6F8' },
   scroll: {
     flexGrow: 1,
-    paddingHorizontal: layout.screenPadding,
-    paddingTop: spacing[4],
-    paddingBottom: layout.tabBarHeight + spacing[6],
-    gap: spacing[4],
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 100,
+    gap: 14,
+    backgroundColor: '#F6F6F8',
   },
 
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingBottom: spacing[3],
+  // Header
+  header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingBottom: 4 },
+  greetingName: { fontFamily: 'Montserrat_700Bold', fontSize: 24, color: '#1A1A1A', letterSpacing: -0.4 },
+  greetingSub:  { fontFamily: 'Montserrat_400Regular', fontSize: 13, color: '#9CA3AF', marginLeft: 30 },
+  headerIconBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
   },
-  headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  headerRight:  { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  greetingName: { fontFamily: 'Montserrat_700Bold', fontSize: 22, color: '#212121', lineHeight: 26, letterSpacing: -0.3 },
-  eyeLabel:     { fontFamily: 'Montserrat_700Bold', fontSize: 11, color: '#7C3AED', letterSpacing: 0.5 },
-  eyeSub:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E' },
-  bellBtn:      { padding: spacing[2] },
-  syncBtn:      { padding: spacing[2], alignItems: 'center', justifyContent: 'center', minWidth: 32 },
-  syncMsg:      { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: colors.neon },
-  insightBtn:  { padding: spacing[1], position: 'relative' },
-  insightBadge: {
-    position: 'absolute', top: 0, right: 0,
-    width: 14, height: 14, borderRadius: 7,
-    backgroundColor: colors.neon,
+  robotAvatar: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#EDE9FE',
     alignItems: 'center', justifyContent: 'center',
   },
-  insightBadgeText: { fontFamily: 'Montserrat_700Bold', fontSize: 8, color: colors.bg.primary },
 
-  sectionHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginTop: spacing[2],
+  // 4-column summary
+  summaryCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16,
+    flexDirection: 'row', alignItems: 'flex-start',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
   },
+  summaryBlock:   { flex: 1, alignItems: 'center', gap: 6 },
+  summaryDivider: { width: 1, height: 60, backgroundColor: '#F3F4F6', alignSelf: 'center' },
+  summaryIcon:    { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  summaryLabel:   { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: '#6B7280', textAlign: 'center' },
+  summaryValue:   { fontFamily: 'Montserrat_700Bold', fontSize: 13, textAlign: 'center', letterSpacing: -0.3 },
+  summaryCta:     { fontFamily: 'Montserrat_500Medium', fontSize: 9, textAlign: 'center', lineHeight: 12 },
 
-  // Expenses
-  expenseList: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1, borderColor: colors.border.default,
-    borderRadius: 14, overflow: 'hidden',
+  // Top category card
+  topCatCard: {
+    backgroundColor: '#F5F3FF', borderRadius: 20, padding: 20,
+    flexDirection: 'row', alignItems: 'center', gap: 16,
+    shadowColor: '#7C3AED', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 3,
   },
-  expenseItem: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: colors.border.subtle,
+  topCatMeta:  { fontFamily: 'Montserrat_500Medium', fontSize: 11, color: '#8B5CF6', letterSpacing: 0.3 },
+  topCatName:  { fontFamily: 'Montserrat_700Bold', fontSize: 18, color: '#1A1A1A', lineHeight: 22, letterSpacing: -0.3 },
+  topCatSub:   { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#6B7280' },
+  topCatCta:   { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: '#7C3AED' },
+  donutWrap:   { width: 80, height: 80, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  donutLabel:  { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  donutPct:    { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#7C3AED' },
+
+  // Health card
+  healthCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20,
+    flexDirection: 'row', alignItems: 'center', gap: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
   },
-  expenseLeft: { flex: 1, marginRight: spacing[4], gap: spacing[1] },
-  expenseMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  seeAllRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2],
-    paddingVertical: spacing[4],
+  healthScoreWrap:  { width: 80, height: 80, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  healthScoreLabel: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  healthScoreNum:   { fontFamily: 'Montserrat_700Bold', fontSize: 18, lineHeight: 22, letterSpacing: -0.5 },
+  healthScoreTotal: { fontFamily: 'Montserrat_400Regular', fontSize: 9, color: '#9CA3AF', lineHeight: 12 },
+  healthTitle:      { fontFamily: 'Montserrat_700Bold', fontSize: 15, color: '#1A1A1A', letterSpacing: -0.2 },
+  healthBadge:      { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  healthDot:        { width: 7, height: 7, borderRadius: 4 },
+  healthBadgeText:  { fontFamily: 'Montserrat_700Bold', fontSize: 11 },
+  healthBody:       { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#6B7280', lineHeight: 17 },
+  healthSub:        { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#9CA3AF', lineHeight: 16 },
+  healthTrendText:  { fontFamily: 'Montserrat_700Bold', fontSize: 14 },
+
+  // Bottom cards
+  bottomCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
   },
-  emptyCard: { padding: spacing[6], alignItems: 'center', gap: spacing[4] },
+  bottomCardTitle: { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: '#1A1A1A' },
+  bottomCardLink:  { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: '#22C55E' },
+
+  // Activity rows
+  activityRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  activityDivider:  { height: 1, backgroundColor: '#F3F4F6' },
+  activityIcon:     { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  activityMerchant: { fontFamily: 'Montserrat_600SemiBold', fontSize: 12, color: '#1A1A1A' },
+  activityCat:      { fontFamily: 'Montserrat_400Regular', fontSize: 10, color: '#9CA3AF' },
+  activityTag:      { fontFamily: 'Montserrat_600SemiBold', fontSize: 10 },
+  activityAmount:   { fontFamily: 'Montserrat_700Bold', fontSize: 12, color: '#1A1A1A' },
+  activityDate:     { fontFamily: 'Montserrat_400Regular', fontSize: 10, color: '#9CA3AF' },
+
+  // Opportunity card
+  oppIconWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FEF3C7', alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  oppTitle:    { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: '#1A1A1A', marginBottom: 4 },
+  oppBody:     { fontFamily: 'Montserrat_400Regular', fontSize: 11, color: '#6B7280', lineHeight: 16, flex: 1 },
+  oppBtn:      { backgroundColor: '#F59E0B', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, alignSelf: 'flex-start', marginTop: 8 },
+  oppBtnText:  { fontFamily: 'Montserrat_700Bold', fontSize: 11, color: '#FFFFFF' },
 
   // Income modal
+  incomeOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  incomeSheet:       { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, gap: 12 },
+  incomeSheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', alignSelf: 'center', marginBottom: 8 },
+  incomeSheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  incomeOption:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' },
+  incomeOptionActive:{ borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
+  incomeOptionText:  { fontFamily: 'Montserrat_400Regular', fontSize: 14, color: '#1A1A1A' },
+  incomeSaveBtn:     { marginTop: 8, backgroundColor: '#3B82F6', borderRadius: 14, height: 52, alignItems: 'center', justifyContent: 'center' },
+
+  // legacy kept
+  styles_safe:   { flex: 1, backgroundColor: '#F6F6F8' },
+});
+
+// keep old styles ref alive for income modal (unused keys are fine)
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#F6F6F8' },
+  scroll: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 100, gap: 14 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  greetingName: { fontFamily: 'Montserrat_700Bold', fontSize: 24, color: '#1A1A1A' },
+  eyeLabel: { fontFamily: 'Montserrat_700Bold', fontSize: 11, color: '#7C3AED' },
+  eyeSub: { fontFamily: 'Montserrat_400Regular', fontSize: 12, color: '#9E9E9E' },
+  bellBtn: { padding: 8 },
+  syncBtn: { padding: 8 },
+  syncMsg: { fontFamily: 'Montserrat_700Bold', fontSize: 13, color: '#22C55E' },
+  insightBtn: { padding: 4 },
+  insightBadge: { position: 'absolute', top: 0, right: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: '#22C55E', alignItems: 'center', justifyContent: 'center' },
+  insightBadgeText: { fontFamily: 'Montserrat_700Bold', fontSize: 8, color: '#FFF' },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  expenseList: { backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden' },
+  expenseItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  expenseLeft: { flex: 1, marginRight: 16, gap: 4 },
+  expenseMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  seeAllRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14 },
+  emptyCard: { padding: 24, alignItems: 'center', gap: 16 },
   incomeOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  incomeSheet: {
-    backgroundColor: colors.bg.primary, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    padding: spacing[5], paddingBottom: spacing[10], gap: spacing[3],
-  },
-  incomeSheetHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border.default,
-    alignSelf: 'center', marginBottom: spacing[2],
-  },
-  incomeSheetHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[1],
-  },
-  incomeOptions: { gap: spacing[2] },
-  incomeOption: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: spacing[4], paddingHorizontal: spacing[4],
-    borderRadius: 10, borderWidth: 1, borderColor: colors.border.default,
-    backgroundColor: colors.bg.secondary,
-  },
-  incomeOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '0D' },
-  incomeSaveBtn: {
-    marginTop: spacing[3], backgroundColor: colors.primary,
-    borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center',
-  },
+  incomeSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, gap: 12 },
+  incomeSheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB', alignSelf: 'center', marginBottom: 8 },
+  incomeSheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  incomeOptions: { gap: 8 },
+  incomeOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' },
+  incomeOptionActive: { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
+  incomeSaveBtn: { marginTop: 8, backgroundColor: '#3B82F6', borderRadius: 14, height: 52, alignItems: 'center', justifyContent: 'center' },
 });
