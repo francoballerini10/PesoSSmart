@@ -185,7 +185,7 @@ export function MonthInsightCard({
       {/* Contenido */}
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={s.label}>{insight.label}</Text>
-        <Text style={s.title} numberOfLines={1}>{insight.title}</Text>
+        <Text style={s.title} numberOfLines={2}>{insight.title}</Text>
         <Text style={s.body} numberOfLines={2}>{insight.body}</Text>
       </View>
 
